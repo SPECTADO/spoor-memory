@@ -1,0 +1,25 @@
+{
+  "name": "spoor-memory-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "pnpm -r test",
+    "e2e": "pnpm --filter @spoor/shared --filter @spoor/server --filter @spoor/web build && pnpm --filter @spoor/web test:e2e",
+    "test:db:up": "pnpm --filter @spoor/server test:db:up",
+    "test:db:down": "pnpm --filter @spoor/server test:db:down",
+    "dev": "pnpm -r --parallel dev"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "typescript": "6.0.3"
+  }
+}

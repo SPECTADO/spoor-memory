@@ -1,0 +1,91 @@
+# Spoor Memory
+
+Spoor is a self-hosted, team-shared memory for coding agents and the people who work with them. Agents read and write it
+over MCP with very few tokens; humans browse, edit and administer it in a web UI. One Docker deployment (the app image plus
+Postgres with pgvector) serves many isolated projects and one org-wide shared space. It is single tenant by design.
+
+## Features
+
+- **Three spaces per project**: `memories` (atomic claims: decision, fact, procedure, observation), `decisions` (numbered
+  ADRs, `ADR-0001`) and `docs` (long-form pages). Every item is Markdown with YAML frontmatter, versioned in append-only
+  revisions, linked by `[[wikilinks]]` and typed edges, with backlinks in the UI.
+- **A shared space** every project token can read, written only by humans in the web UI.
+- **Cheap for agents**: a budgeted digest (about 1,500 tokens by default) at session start, hybrid search (full text plus
+  vectors, reciprocal rank fusion), handles instead of ids, one short text block per tool result. Nine MCP tools.
+- **Local embeddings**: multilingual-e5-small runs inside the app container, no API key. OpenAI or Voyage are optional.
+- **Claude Code integration**: `spoor login` (device approval in the browser), a committed `.mcp.json`, three hooks (session
+  start digest, push of edited ADR and doc files, one gentle "record your decisions" nudge), ADR drafting on your own machine.
+- **Self-cleaning**: unverified memories become stale, then archived; observations expire; humans review and hard-delete.
+- **Web UI**: dashboard, filters, search, rendered Markdown, CodeMirror editor with live preview, revision history with diff,
+  review queue, audit log, tokens, members, invites, settings, jobs.
+- **Export and import** of a project as a zip of Markdown files with full history, re-importable losslessly.
+
+## Quick start (about five minutes)
+
+You need Docker with the compose plugin.
+
+```sh
+git clone <this repository> spoor-memory && cd spoor-memory
+cp .env.example .env
+```
+
+Edit `.env` and set at least:
+
+| variable | value |
+|---|---|
+| `POSTGRES_PASSWORD`, `POSTGRES_APP_PASSWORD` | two random URL-safe strings: `openssl rand -hex 24` |
+| `SPOOR_ADMIN_EMAIL` | your email, the bootstrap admin login |
+| `SPOOR_ADMIN_PASSWORD` | at least 12 characters |
+| `SPOOR_PUBLIC_URL` | the URL people will type, `http://localhost:3000` for a local trial |
+
+```sh
+docker compose up -d --build     # builds the image from this checkout and tags it spoor-memory:local (SPOOR_IMAGE)
+curl -s localhost:3000/healthz   # {"status":"ok",...} once migrations ran and the embedding model loaded (up to two minutes)
+```
+
+1. **First login.** Open `SPOOR_PUBLIC_URL`, log in with `SPOOR_ADMIN_EMAIL` and `SPOOR_ADMIN_PASSWORD`. The bootstrap admin is
+   created only while the user table is empty.
+2. **Create a project.** Projects, New project: a name and a slug (`acme`; the slug is permanent). Invite teammates under
+   Admin, Invites (a copyable link, no email) and give them a role on the project (admin, editor or viewer).
+3. **Point Claude Code at the install doc.** In the repository you want to give a memory, tell Claude Code:
+
+   > Set up Spoor memory by following `https://spoor.example.com/p/acme/install.md`
+
+   The page is public and secret-free. It tells the agent to install the CLI, run `spoor login` (you approve a code in the
+   browser; it ends with `spoor init`, which writes `.mcp.json`, the hooks and `.gitignore` entries), run `spoor adr import`
+   and `spoor docs import` to bring existing ADRs and docs in, and finally ask you to restart Claude Code and approve the
+   `spoor` MCP server.
+
+   **Until the first npm release** the CLI is not on npm (`spoor-memory@0.0.0` does not exist there); install.md of a
+   source-built server says so. Install it from this checkout on the developer's machine first:
+   `pnpm install && pnpm --filter spoor-memory build && npm i -g ./packages/cli` (Node 22, pnpm 10).
+
+Quick checks: `spoor status --remote` (project, role, token expiry) and `spoor context --git` (the digest an agent will get).
+
+## Documentation
+
+| read | for |
+|---|---|
+| [docs/operations.md](docs/operations.md) | deploying and running it: env vars, TLS, proxies, backup, restore, upgrades, troubleshooting |
+| [docs/user-guide.md](docs/user-guide.md) | the web UI: projects, spaces, item lifecycle, editing, tokens, admin |
+| [docs/agent-guide.md](docs/agent-guide.md) | what agents get: digest, tools, hooks, drafting, mirror rules, token costs |
+| [CHANGELOG.md](CHANGELOG.md) | what is in 0.1.0 |
+| [ARCHITECTURE.md](ARCHITECTURE.md), [GLOSSARY.md](GLOSSARY.md) | components, flows, terms |
+| [docs/adr/](docs/adr/README.md), [docs/design/](docs/design/) | decisions and the detailed design; [dod-status.md](docs/design/dod-status.md) maps the brief's Definition of done to evidence |
+| [BRIEF.md](BRIEF.md) | the contract: scope and amendments |
+
+## Development
+
+Node 22 and pnpm 10.34.7 (`packageManager`). `pnpm install`, then `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm typecheck`.
+
+The server's integration and end-to-end tests need Postgres with pgvector: `pnpm test:db:up` starts one in Docker on port 55432
+(`pnpm test:db:down` removes it), or point `DATABASE_URL` at a database whose name ends in `_test`. `pnpm test` fails fast
+with a clear message when it is unreachable; `pnpm --filter @spoor/server test:e2e` walks the CLI against the real server.
+`pnpm e2e` builds and runs the Playwright browser tests (once: `pnpm --filter @spoor/web exec playwright install chromium`).
+`pnpm --filter spoor-memory build && pnpm --filter spoor-memory test:pack` checks the npm package as it would be published.
+Releases are cut with a `v*` tag ([operations §10](docs/operations.md), ADR 0013).
+Package notes: [server](packages/server/README.md), [web](packages/web/README.md), [CLI](packages/cli/README.md).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE).

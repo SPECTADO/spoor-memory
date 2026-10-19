@@ -1,0 +1,80 @@
+name: spoor
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spoor
+      POSTGRES_DB: spoor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
+    volumes:
+      - spoor-pgdata:/var/lib/postgresql/data
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro # creates the runtime role spoor_app on first init
+    shm_size: 256mb # HNSW index builds during re-embed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spoor -d spoor"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    image: ${SPOOR_IMAGE:-spoor-memory:local} # the local build; set ghcr.io/<owner>/spoor-memory:<version> to pull
+    build: { context: ., target: runtime }
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 40s
+    mem_limit: 2g
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://spoor_app:${POSTGRES_APP_PASSWORD}@db:5432/spoor
+      DATABASE_MIGRATE_URL: postgres://spoor:${POSTGRES_PASSWORD}@db:5432/spoor # superuser, startup only
+      SPOOR_PUBLIC_URL: ${SPOOR_PUBLIC_URL:-http://localhost:3000}
+      SPOOR_ADMIN_EMAIL: ${SPOOR_ADMIN_EMAIL:?set SPOOR_ADMIN_EMAIL in .env}
+      SPOOR_ADMIN_PASSWORD: ${SPOOR_ADMIN_PASSWORD:?set SPOOR_ADMIN_PASSWORD in .env}
+      SPOOR_ADMIN_NAME: ${SPOOR_ADMIN_NAME:-Admin}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SPOOR_EMBEDDING_DEFAULT: ${SPOOR_EMBEDDING_DEFAULT:-local}
+      SPOOR_EMBED_THREADS: ${SPOOR_EMBED_THREADS:-2}
+      SPOOR_OPENAI_API_KEY: ${SPOOR_OPENAI_API_KEY:-}
+      SPOOR_OPENAI_EMBED_MODEL: ${SPOOR_OPENAI_EMBED_MODEL:-}
+      SPOOR_OPENAI_EMBED_DIMS: ${SPOOR_OPENAI_EMBED_DIMS:-}
+      SPOOR_VOYAGE_API_KEY: ${SPOOR_VOYAGE_API_KEY:-}
+      SPOOR_VOYAGE_EMBED_MODEL: ${SPOOR_VOYAGE_EMBED_MODEL:-}
+      SPOOR_VOYAGE_EMBED_DIMS: ${SPOOR_VOYAGE_EMBED_DIMS:-}
+      SPOOR_TRUST_PROXY: ${SPOOR_TRUST_PROXY:-}
+    healthcheck: # same probe as the image HEALTHCHECK, repeated so `up --wait` works with any image
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+    ports:
+      - "${SPOOR_HTTP_BIND:-0.0.0.0}:${SPOOR_HTTP_PORT:-3000}:3000"
+
+  caddy: # optional: docker compose --profile caddy up -d
+    profiles: ["caddy"]
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      SPOOR_DOMAIN: ${SPOOR_DOMAIN:-localhost} # set a real host name when using this profile
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  spoor-pgdata:
+  caddy-data:
+  caddy-config:

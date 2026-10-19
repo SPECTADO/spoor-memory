@@ -1,0 +1,229 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. Components use the semantic utilities generated from @theme below (bg-bg, bg-surface,
+ * text-fg, text-muted, border-border, bg-accent, text-danger, ...), never raw palette colours, so dark mode
+ * is one override of these variables under prefers-color-scheme (no `dark:` variants in components).
+ */
+:root {
+  color-scheme: light dark;
+  --c-bg: #ffffff;
+  --c-surface: #f6f7f9;
+  --c-surface-2: #eceef2;
+  --c-fg: #16181d;
+  --c-muted: #5b6270;
+  --c-border: #d9dde4;
+  --c-border-strong: #b7bdc8;
+  --c-accent: #2453c7;
+  --c-accent-hover: #1c43a6;
+  --c-accent-fg: #ffffff;
+  --c-accent-soft: #e6edfb;
+  --c-danger: #b42318;
+  --c-danger-hover: #932016;
+  --c-danger-fg: #ffffff;
+  --c-danger-soft: #fdecea;
+  --c-warning: #8a5a00;
+  --c-warning-soft: #fdf3dc;
+  --c-success: #17663a;
+  --c-success-soft: #e3f4e9;
+  --c-focus: #2453c7;
+  --c-diff-add: #e3f4e9;
+  --c-diff-add-strong: #b9e4c8;
+  --c-diff-del: #fdecea;
+  --c-diff-del-strong: #f6c4be;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-bg: #111317;
+    --c-surface: #181b21;
+    --c-surface-2: #22262e;
+    --c-fg: #e7e9ee;
+    --c-muted: #9aa2b1;
+    --c-border: #2c313b;
+    --c-border-strong: #434a57;
+    --c-accent: #7aa2ff;
+    --c-accent-hover: #9bb9ff;
+    --c-accent-fg: #0b1020;
+    --c-accent-soft: #1b2640;
+    --c-danger: #ff8a7f;
+    --c-danger-hover: #ffa79e;
+    --c-danger-fg: #1d0b09;
+    --c-danger-soft: #3a1714;
+    --c-warning: #f2c264;
+    --c-warning-soft: #3a2c10;
+    --c-success: #7fd49d;
+    --c-success-soft: #14301f;
+    --c-focus: #9bb9ff;
+    --c-diff-add: #14301f;
+    --c-diff-add-strong: #1f5233;
+    --c-diff-del: #3a1714;
+    --c-diff-del-strong: #63241f;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-fg: var(--c-fg);
+  --color-muted: var(--c-muted);
+  --color-border: var(--c-border);
+  --color-border-strong: var(--c-border-strong);
+  --color-accent: var(--c-accent);
+  --color-accent-hover: var(--c-accent-hover);
+  --color-accent-fg: var(--c-accent-fg);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-danger: var(--c-danger);
+  --color-danger-hover: var(--c-danger-hover);
+  --color-danger-fg: var(--c-danger-fg);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-warning: var(--c-warning);
+  --color-warning-soft: var(--c-warning-soft);
+  --color-success: var(--c-success);
+  --color-success-soft: var(--c-success-soft);
+  --color-focus: var(--c-focus);
+  --color-diff-add: var(--c-diff-add);
+  --color-diff-add-strong: var(--c-diff-add-strong);
+  --color-diff-del: var(--c-diff-del);
+  --color-diff-del-strong: var(--c-diff-del-strong);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--c-bg);
+    color: var(--c-fg);
+  }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--c-focus);
+    outline-offset: 2px;
+  }
+  dialog::backdrop {
+    background: rgb(0 0 0 / 0.45);
+  }
+}
+
+/* Rendered Markdown (MarkdownView). Plain CSS: the typography plugin is not a dependency. */
+@layer components {
+  .md {
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+  .md > * + * {
+    margin-top: 0.75em;
+  }
+  .md h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-top: 1.25em;
+  }
+  .md h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-top: 1.25em;
+  }
+  .md h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-top: 1em;
+  }
+  .md h4,
+  .md h5,
+  .md h6 {
+    font-weight: 600;
+    margin-top: 1em;
+  }
+  .md > :first-child {
+    margin-top: 0;
+  }
+  .md a {
+    color: var(--c-accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .md a:hover {
+    color: var(--c-accent-hover);
+  }
+  .md a.wikilink {
+    text-decoration-style: dotted;
+  }
+  .md ul {
+    list-style: disc;
+    padding-left: 1.5em;
+  }
+  .md ol {
+    list-style: decimal;
+    padding-left: 1.5em;
+  }
+  .md li + li {
+    margin-top: 0.25em;
+  }
+  .md li > ul,
+  .md li > ol {
+    margin-top: 0.25em;
+  }
+  .md blockquote {
+    border-left: 3px solid var(--c-border-strong);
+    padding-left: 0.75em;
+    color: var(--c-muted);
+  }
+  .md code {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background: var(--c-surface-2);
+    padding: 0.1em 0.3em;
+    border-radius: 4px;
+  }
+  .md pre {
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    padding: 0.75em;
+    overflow-x: auto;
+  }
+  .md pre code {
+    background: none;
+    padding: 0;
+  }
+  .md hr {
+    border: 0;
+    border-top: 1px solid var(--c-border);
+  }
+  .md table {
+    border-collapse: collapse;
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .md th,
+  .md td {
+    border: 1px solid var(--c-border);
+    padding: 0.35em 0.6em;
+    text-align: left;
+  }
+  .md th {
+    background: var(--c-surface);
+    font-weight: 600;
+  }
+  .md input[type="checkbox"] {
+    margin-right: 0.4em;
+  }
+  .md img {
+    max-width: 100%;
+  }
+}
+
+@keyframes progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}

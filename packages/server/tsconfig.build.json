@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "include": ["src"],
+  // tests and the test-only fixtures next to them never ship in dist/
+  "exclude": ["src/**/*.test.ts", "src/**/*.scenarios.ts", "src/**/zipfixtures.ts"]
+}

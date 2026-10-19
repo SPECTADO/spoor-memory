@@ -1,0 +1,44 @@
+{
+  "name": "spoor-memory",
+  "version": "0.0.0",
+  "description": "Spoor CLI and Claude Code hooks: device login, ADR/doc mirror, session digest for a self-hosted Spoor memory server",
+  "keywords": [
+    "spoor",
+    "memory",
+    "mcp",
+    "claude-code",
+    "adr",
+    "hooks"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "spoor": "dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json --noEmit && node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "dev": "node scripts/build.mjs --watch"
+  },
+  "devDependencies": {
+    "@spoor/shared": "workspace:*",
+    "@types/node": "22.20.5",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.12"
+  },
+  "dependencies": {
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  }
+}

@@ -1,0 +1,18 @@
+packages:
+  - "packages/*"
+
+# pnpm blocks dependency build scripts by default; only these may run them.
+# sharp (pulled in by @huggingface/transformers) is not listed: 0.35.x has no install script and
+# uses prebuilt @img/sharp-* packages.
+onlyBuiltDependencies:
+  - onnxruntime-node
+  - esbuild
+
+# Build scripts reviewed and deliberately not run (acknowledged so pnpm does not warn about them).
+# protobufjs (via onnxruntime-web): its postinstall only prints a semver-scheme warning.
+ignoredBuiltDependencies:
+  - protobufjs
+
+# Needed by `pnpm deploy` on pnpm 10 (workspace deps become injected copies).
+# Drop this when moving to pnpm >= 12.2.
+injectWorkspacePackages: true

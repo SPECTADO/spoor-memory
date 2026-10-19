@@ -1,0 +1,2 @@
+# copied from src/db/migrations by `pnpm build` (the Dockerfile ships ./drizzle)
+drizzle/
