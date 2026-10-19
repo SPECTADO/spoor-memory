@@ -21,5 +21,13 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "typescript": "6.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SPECTADO/spoor-memory.git"
+  },
+  "homepage": "https://github.com/SPECTADO/spoor-memory#readme",
+  "bugs": {
+    "url": "https://github.com/SPECTADO/spoor-memory/issues"
   }
 }

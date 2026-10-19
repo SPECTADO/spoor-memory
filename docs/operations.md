@@ -22,7 +22,7 @@ docker compose ps        # app should become "healthy" (start period up to 2 min
 ```
 
 - Compose builds the image from the repository (`build:` in the app service). To use a published image instead set `SPOOR_IMAGE`
-  to a version tag (`ghcr.io/<owner>/spoor-memory:0.1.0`, owner in lowercase: Docker refuses upper-case repository names) and
+  to a version tag (`ghcr.io/spectado/spoor-memory:0.1.0`, owner in lowercase: Docker refuses upper-case repository names) and
   run `docker compose pull && docker compose up -d`. The default `spoor-memory:local` is the tag of the local build; images are
   pushed to GHCR by `.github/workflows/release.yml` when a `v*` tag is pushed (section 10). Pin a version tag in production.
 - Startup order: the server listens at once and answers 503 `starting` to everything except `/healthz`, then runs migrations
@@ -45,7 +45,7 @@ secret value) and exits 1.
 |---|---|---|
 | `POSTGRES_PASSWORD` | required | password of the `spoor` superuser (startup only). URL-safe characters only |
 | `POSTGRES_APP_PASSWORD` | required | password of the `spoor_app` runtime role, set when the volume is first created |
-| `SPOOR_IMAGE` | `spoor-memory:local` | app image; the default is the local build, set `ghcr.io/<owner>/spoor-memory:<version>` to pull a published one |
+| `SPOOR_IMAGE` | `spoor-memory:local` | app image; the default is the local build, set `ghcr.io/spectado/spoor-memory:<version>` to pull a published one |
 | `SPOOR_HTTP_PORT` | `3000` | host port |
 | `SPOOR_HTTP_BIND` | `0.0.0.0` | host address; use `127.0.0.1` behind caddy or another proxy |
 | `SPOOR_DOMAIN` | `localhost` | host name for the caddy profile |
@@ -219,7 +219,7 @@ A release is one `v*` tag. `.github/workflows/release.yml` (ADR 0013) then:
 3. publishes the npm package `spoor-memory` with provenance: builds the bundle, packs it, installs that tarball with npm and runs
    `spoor --help` and `--version`, then `npm publish <tarball> --provenance --access public` (dist-tag `next` for a pre-release
    such as `v0.2.0-rc.1`, `latest` otherwise). A version already on npm is skipped, so a re-run after a failed image job is safe;
-4. after npm, pushes the multi-arch image (`linux/amd64`, `linux/arm64`) to `ghcr.io/<owner>/<repo>` with tags `x.y.z`, `x.y` and
+4. after npm, pushes the multi-arch image (`linux/amd64`, `linux/arm64`) to `ghcr.io/spectado/spoor-memory` with tags `x.y.z`, `x.y` and
    `latest` (a pre-release gets only `x.y.z-…`).
 
 **Before the first release** (review-log-phase5 A1, D2): the npm name `spoor-memory` is unregistered today. Register it for the

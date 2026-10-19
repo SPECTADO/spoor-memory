@@ -20,7 +20,7 @@ services:
       retries: 20
 
   app:
-    image: ${SPOOR_IMAGE:-spoor-memory:local} # the local build; set ghcr.io/<owner>/spoor-memory:<version> to pull
+    image: ${SPOOR_IMAGE:-spoor-memory:local} # the local build; set ghcr.io/spectado/spoor-memory:<version> to pull
     build: { context: ., target: runtime }
     restart: unless-stopped
     init: true

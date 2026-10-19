@@ -11,6 +11,15 @@
     "hooks"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SPECTADO/spoor-memory.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/SPECTADO/spoor-memory#readme",
+  "bugs": {
+    "url": "https://github.com/SPECTADO/spoor-memory/issues"
+  },
   "type": "module",
   "bin": {
     "spoor": "dist/bin.js"

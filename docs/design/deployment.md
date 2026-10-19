@@ -274,7 +274,7 @@ Compose-only (read by `docker-compose.yml`, not by the app):
 |---|---|---|
 | `POSTGRES_PASSWORD` | none, **required** | Password of the `spoor` database superuser (extensions at startup only) |
 | `POSTGRES_APP_PASSWORD` | none, **required** | Password of the `spoor_app` runtime role, created by `deploy/initdb/01-app-role.sh` |
-| `SPOOR_IMAGE` | `spoor-memory:local` | App image: the local build by default; `ghcr.io/<owner>/spoor-memory:<version>` (lowercase) for a published one, pinned in production |
+| `SPOOR_IMAGE` | `spoor-memory:local` | App image: the local build by default; `ghcr.io/spectado/spoor-memory:<version>` (lowercase) for a published one, pinned in production |
 | `SPOOR_HTTP_PORT` | `3000` | Host port for the app |
 | `SPOOR_HTTP_BIND` | `0.0.0.0` | Host address to bind; `127.0.0.1` behind caddy or another proxy |
 | `SPOOR_DOMAIN` | none, required with `--profile caddy` | Public host name for Caddy |

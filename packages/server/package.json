@@ -40,5 +40,14 @@
     "tsx": "4.23.15",
     "typescript": "6.0.3",
     "vitest": "4.1.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SPECTADO/spoor-memory.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/SPECTADO/spoor-memory#readme",
+  "bugs": {
+    "url": "https://github.com/SPECTADO/spoor-memory/issues"
   }
 }
