@@ -1,8 +1,8 @@
 # ADR-0012: Delegated authority is re-checked at use, and item writes lock the project row first
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-19
-- **Deciders:** Phase 2 review fixer (Claude, Opus 5.5) from the phase 2 review findings S1, S3, D1, D2, D3; for the owner (Ladislav Soukup) to confirm at the phase 2 checkpoint
+- **Deciders:** Ladislav Soukup (owner, accepted 2026-10-20), Claude (phase 2 review fixer, from review findings S1, S3, D1, D2, D3)
 - **Tags:** security, concurrency, server
 
 ## Context

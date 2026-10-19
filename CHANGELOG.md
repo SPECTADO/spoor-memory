@@ -43,6 +43,7 @@ First release. Scope is BRIEF.md (MVP) with its 2026-10-19 amendments; evidence 
   `docs/design/`.
 
 ### Fixed
+- Export size cap lowered from 500 MB to 200 MB and derived from the import cumulative cap, so every export can be re-imported (deviations G12).
 
 - The CLI in a package directory below the git top level (its own `.claude/`) now reports changed files and session anchors
   relative to its root and writes root-prefixed `.gitignore` lines at the top level (deviations.md H11).

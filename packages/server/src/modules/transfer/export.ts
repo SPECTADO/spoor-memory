@@ -20,8 +20,12 @@ import { takeTransferLock } from './import.js'
 import { FORMAT } from './schemas.js'
 import { writeZip, ZIP_LIMITS } from './zip.js'
 
-/** api.md section 9: more than this uncompressed is 413 with a hint to use `history=0`. */
-export const EXPORT_MAX_BYTES = 500 * 1024 * 1024
+/**
+ * api.md section 9: more than this uncompressed is 413 with a hint to use `history=0`. Equal to the import
+ * cumulative cap by construction (deviations G12, decided 2026-10-20), so every export can be re-imported.
+ */
+export const EXPORT_MAX_BYTES: number = ZIP_LIMITS.maxTotalBytes
+const EXPORT_MAX_LABEL = `${Math.round(EXPORT_MAX_BYTES / (1024 * 1024))} MB`
 
 const TYPED = new Set(['refines', 'supports', 'depends_on', 'conflicts_with'])
 
@@ -65,7 +69,8 @@ export async function buildExport(
         )
         estimate += Number((res.rows[0] as { n: string }).n)
       }
-      if (estimate > EXPORT_MAX_BYTES) throw tooLarge('The export would be larger than 500 MB uncompressed.')
+      if (estimate > EXPORT_MAX_BYTES)
+        throw tooLarge(`The export would be larger than ${EXPORT_MAX_LABEL} uncompressed.`)
       const edgeRows = await tx
         .select()
         .from(edges)
@@ -114,7 +119,8 @@ export async function buildExport(
   const put = (name: string, bytes: Uint8Array, cap: number) => {
     if (bytes.length > cap) throw tooLarge(`${name} is larger than ${cap} bytes.`)
     total += bytes.length
-    if (total > EXPORT_MAX_BYTES) throw tooLarge('The export would be larger than 500 MB uncompressed.')
+    if (total > EXPORT_MAX_BYTES)
+      throw tooLarge(`The export would be larger than ${EXPORT_MAX_LABEL} uncompressed.`)
     files[name] = bytes
   }
 

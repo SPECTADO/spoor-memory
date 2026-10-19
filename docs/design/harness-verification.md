@@ -73,9 +73,9 @@ Observed in every run:
 - The CLI's `init`, `login` and hook code matched the docs and the observed contracts; no change.
 - Docs: cli-and-hooks.md §5, §7.1, §7.2, §9 items 11–12; ADR 0010 consequences; deviations.md §C, §E.3, P3-9.
 
-## 4. Open (owner)
+## 4. Decided (owner, 2026-10-20)
 
-- Whether `spoor login` should also write `permissions.allow: ["mcp__spoor"]` into `.claude/settings.local.json`, so the Spoor
+- **No**: `spoor login` does not write the permission rule into `.claude/settings.local.json`. The trust decision stays with the user; CI passes `--allowedTools` explicitly. Original question: whether `spoor login` should also write `permissions.allow: ["mcp__spoor"]` into `.claude/settings.local.json`, so the Spoor
   tools run unprompted before the folder is trusted (e.g. `claude -p` in CI or in a fresh clone). Run 4 shows it works. Not done
   here: it widens what an untrusted checkout can do without the user's trust decision, and interactive users see the trust
   dialog on first launch anyway.
