@@ -227,7 +227,7 @@ project's npm account now (a placeholder `0.0.1` is enough), or switch the CLI t
 repository uses a release server: the committed SessionStart hook falls back to `npx --yes spoor-memory@<server version>` when `spoor`
 is not on the PATH, so whoever owns that name would run code at every session start. A source-built server reports `0.0.0`; for that
 version the hook renders no `npx` fallback (`|| exit 0`) and install.md tells users to install the CLI from the source checkout
-(`pnpm install && pnpm --filter spoor-memory build && npm i -g ./packages/cli`).
+(`pnpm install && pnpm --filter "spoor-memory..." build && npm i -g ./packages/cli`).
 
 Steps for a maintainer:
 
@@ -250,5 +250,5 @@ No other secret is used: provenance signs through the workflow's OIDC token (`id
 set the GHCR package's visibility to public once (Packages, spoor-memory, Package settings); GHCR creates it private. If the
 repository is renamed or forked, both the image name and the npm `repository` follow `github.repository`.
 
-Check a package locally before tagging: `pnpm --filter spoor-memory build && pnpm --filter spoor-memory test:pack` (the tarball
+Check a package locally before tagging: `pnpm --filter "spoor-memory..." build && pnpm --filter spoor-memory test:pack` (the tarball
 must hold only `package.json`, `README.md`, `LICENSE` and `dist/bin.js`; `npm pack --dry-run` in `packages/cli` shows the same).

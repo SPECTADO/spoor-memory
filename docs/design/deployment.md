@@ -296,7 +296,7 @@ import `@spoor/shared` from its `dist/`, so jobs that type-check or test build i
 | job | needs | service | runs |
 |---|---|---|---|
 | `lint` | | | `pnpm lint` (Biome 2.5.15), build shared, `pnpm typecheck` |
-| `unit` | | | build shared, `pnpm -r run test:unit` (shared, server unit project, web, cli); CLI package smoke test: `pnpm --filter spoor-memory build && pnpm --filter spoor-memory test:pack` (ADR 0013) |
+| `unit` | | | build shared, `pnpm -r run test:unit` (shared, server unit project, web, cli); CLI package smoke test: `pnpm --filter "spoor-memory..." build && pnpm --filter spoor-memory test:pack` (ADR 0013) |
 | `integration` | | pgvector | build shared, `pnpm --filter @spoor/server test:integration` with `SPOOR_JOBS=off` (REST + MCP tools, fake EmbeddingProvider) |
 | `e2e-server` | lint, unit, integration | pgvector | `pnpm build`, `pnpm --filter @spoor/server test:e2e` (real server in process, the built CLI; database `<name>_e2e_test`) |
 | `e2e-web` | lint, unit, integration | pgvector | `pnpm --filter @spoor/web exec playwright install --with-deps chromium`, then `pnpm e2e` (builds shared, server and web; Playwright starts the built server with the fake embedding model on database `<name>_web_e2e_test` and a random port, serving the built SPA); `actions/upload-artifact` uploads `packages/web/playwright-report` and `test-results` on failure |

@@ -58,7 +58,7 @@ curl -s localhost:3000/healthz   # {"status":"ok",...} once migrations ran and t
 
    **Until the first npm release** the CLI is not on npm (`spoor-memory@0.0.0` does not exist there); install.md of a
    source-built server says so. Install it from this checkout on the developer's machine first:
-   `pnpm install && pnpm --filter spoor-memory build && npm i -g ./packages/cli` (Node 22, pnpm 10).
+   `pnpm install && pnpm --filter "spoor-memory..." build && npm i -g ./packages/cli` (Node 22, pnpm 10).
 
 Quick checks: `spoor status --remote` (project, role, token expiry) and `spoor context --git` (the digest an agent will get).
 
@@ -82,7 +82,7 @@ The server's integration and end-to-end tests need Postgres with pgvector: `pnpm
 (`pnpm test:db:down` removes it), or point `DATABASE_URL` at a database whose name ends in `_test`. `pnpm test` fails fast
 with a clear message when it is unreachable; `pnpm --filter @spoor/server test:e2e` walks the CLI against the real server.
 `pnpm e2e` builds and runs the Playwright browser tests (once: `pnpm --filter @spoor/web exec playwright install chromium`).
-`pnpm --filter spoor-memory build && pnpm --filter spoor-memory test:pack` checks the npm package as it would be published.
+`pnpm --filter "spoor-memory..." build && pnpm --filter spoor-memory test:pack` checks the npm package as it would be published.
 Releases are cut with a `v*` tag ([operations §10](docs/operations.md), ADR 0013).
 Package notes: [server](packages/server/README.md), [web](packages/web/README.md), [CLI](packages/cli/README.md).
 

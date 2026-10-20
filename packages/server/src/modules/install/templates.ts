@@ -107,7 +107,7 @@ export function renderInstallMd(v: InstallValues): string {
       : [
           `This server is a development build (version \`${version}\`), so its CLI is not on npm. Build and install it from a checkout of the Spoor source at the same version (needs pnpm):`,
           '',
-          ...block('sh', 'pnpm install\npnpm --filter spoor-memory build\nnpm i -g ./packages/cli'),
+          ...block('sh', 'pnpm install\npnpm --filter "spoor-memory..." build\nnpm i -g ./packages/cli'),
         ]),
     '',
     'Install it globally: the committed hook commands look for `spoor` on the PATH.',

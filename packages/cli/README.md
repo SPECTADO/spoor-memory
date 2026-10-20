@@ -27,7 +27,7 @@ spoor login --server https://spoor.example.com --project acme --no-browser
    in a committed file.
 
 Before the first npm release (a server at version `0.0.0`) build the CLI from a source checkout instead:
-`pnpm install && pnpm --filter spoor-memory build && npm i -g ./packages/cli`.
+`pnpm install && pnpm --filter "spoor-memory..." build && npm i -g ./packages/cli`.
 
 Device tokens expire after 90 days; `spoor login` prints the date and `spoor status` shows it. Without a browser on the
 machine, create a token in the web UI (Project → Tokens) and run
@@ -128,7 +128,7 @@ Local files live in `<repo>/.spoor/` (gitignored by `spoor login`): `state.json`
 ```
 pnpm --filter spoor-memory test       # vitest: every command and hook against a fake HTTP server
 pnpm --filter spoor-memory typecheck
-pnpm --filter spoor-memory build      # tsc --noEmit, then esbuild: one file, dist/bin.js, @spoor/shared bundled in
+pnpm --filter "spoor-memory..." build      # tsc --noEmit, then esbuild: one file, dist/bin.js, @spoor/shared bundled in
 pnpm --filter spoor-memory test:pack  # pack as published; only dist/bin.js, README.md, LICENSE, package.json; run its bin --help
 ```
 

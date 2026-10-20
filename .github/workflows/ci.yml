@@ -45,7 +45,7 @@ jobs:
       - run: pnpm --filter @spoor/shared build # the other packages import its dist/
       - run: pnpm -r run test:unit
       - name: CLI package smoke test (pack, file list, run the packed bin --help)
-        run: pnpm --filter spoor-memory build && pnpm --filter spoor-memory test:pack
+        run: pnpm --filter "spoor-memory..." build && pnpm --filter spoor-memory test:pack
 
   integration:
     runs-on: ubuntu-24.04

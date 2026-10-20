@@ -40,7 +40,7 @@ const sh = (cmd, argv, opts = {}) =>
 
 const src = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
 if (!existsSync(join(pkgDir, 'dist', 'bin.js'))) {
-  console.error('pack-smoke: dist/bin.js is missing; run `pnpm --filter spoor-memory build` first')
+  console.error('pack-smoke: dist/bin.js is missing; run `pnpm --filter "spoor-memory..." build` first')
   process.exit(1)
 }
 
