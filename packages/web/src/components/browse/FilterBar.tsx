@@ -103,6 +103,8 @@ export function FilterBar({
             value={anchorDraft}
             onChange={(e) => setAnchorDraft(e.target.value)}
             onBlur={() => commitAnchor()}
+            autoComplete="off"
+            spellCheck={false}
           />
         </form>
         <form onSubmit={addTag} className="flex items-end gap-2">
@@ -113,6 +115,8 @@ export function FilterBar({
             error={tagError ?? undefined}
             value={tagDraft}
             onChange={(e) => setTagDraft(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
           />
           <Button type="submit" className="mb-[1.375rem]">
             Add tag

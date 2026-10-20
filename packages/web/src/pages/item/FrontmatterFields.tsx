@@ -123,6 +123,7 @@ export function FrontmatterFields({
         hint="Repo paths, directories or globs this applies to, one per line (src/auth/, **/*.sql)."
         inputClassName="font-mono"
         spellCheck={false}
+        autoComplete="off"
       />
 
       {mode === 'create' ? (
