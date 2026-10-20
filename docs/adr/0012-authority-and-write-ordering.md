@@ -1,3 +1,6 @@
+---
+spoor_id: c86cbf86-8dd2-4d2f-848e-803efce14d90
+---
 # ADR-0012: Delegated authority is re-checked at use, and item writes lock the project row first
 
 - **Status:** Accepted (2026-10-20)

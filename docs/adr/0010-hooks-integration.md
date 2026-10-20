@@ -1,3 +1,6 @@
+---
+spoor_id: c23b9e0d-d3ae-4ff4-bf09-8dddec25f754
+---
 # ADR-0010: Claude Code integration through hooks and a committed .mcp.json
 
 - **Status:** Accepted

@@ -1,3 +1,6 @@
+---
+spoor_id: 1143d379-96e2-47d8-8020-d8407299a2f8
+---
 # ADR-0011: Server code is organised as modules behind ports
 
 - **Status:** Accepted

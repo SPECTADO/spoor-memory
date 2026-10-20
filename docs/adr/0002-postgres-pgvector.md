@@ -1,3 +1,6 @@
+---
+spoor_id: d41dd31a-cdbf-4e14-89c0-90ecf12ac577
+---
 # ADR-0002: Postgres with pgvector as the only store
 
 - **Status:** Accepted

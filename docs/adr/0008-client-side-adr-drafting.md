@@ -1,3 +1,6 @@
+---
+spoor_id: c56c51df-ceb5-4271-af79-5a979f8379a5
+---
 # ADR-0008: ADR drafting happens client-side
 
 - **Status:** Accepted

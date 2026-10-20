@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "spoor": {
+      "type": "http",
+      "url": "http://localhost:3333/p/spoor-memory/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SPOOR_TOKEN}"
+      },
+      "alwaysLoad": true
+    }
+  }
+}

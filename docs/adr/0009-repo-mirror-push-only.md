@@ -1,3 +1,6 @@
+---
+spoor_id: dc25da21-9d7b-485c-aa41-a3428cafde63
+---
 # ADR-0009: Repo mirror is push-only
 
 - **Status:** Accepted

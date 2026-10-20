@@ -1,3 +1,6 @@
+---
+spoor_id: 2b531d52-7828-4457-86c6-5502bbcfbd84
+---
 # ADR-0006: Per-user tokens and device login, no secrets in git
 
 - **Status:** Accepted

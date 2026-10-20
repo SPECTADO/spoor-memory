@@ -1,3 +1,6 @@
+---
+spoor_id: 98f5905c-4a2a-40fc-b919-7045d37fc2e2
+---
 # ADR-0013: The CLI is published as one esbuild bundle, and a v* tag releases the npm package and the image together
 
 - **Status:** Accepted

@@ -1,3 +1,6 @@
+---
+spoor_id: 88e46d59-ba86-4df4-8c91-5fe3c311bfbd
+---
 # ADR-0003: Local multilingual embeddings with a re-embed job
 
 - **Status:** Accepted

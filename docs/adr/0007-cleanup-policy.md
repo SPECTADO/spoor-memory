@@ -1,3 +1,6 @@
+---
+spoor_id: 07a5f5eb-a1e3-41ed-ae1d-c22cc852b2a7
+---
 # ADR-0007: Cleanup policy: stale, archive, expire, human delete
 
 - **Status:** Accepted

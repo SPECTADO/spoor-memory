@@ -1,3 +1,6 @@
+---
+spoor_id: 4c84147e-fe23-4cf4-98fa-d32efe88d6c9
+---
 # ADR-0005: Shared space is a special project, written only by humans
 
 - **Status:** Accepted

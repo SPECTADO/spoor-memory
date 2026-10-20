@@ -1,3 +1,6 @@
+---
+spoor_id: 095d38a2-31a1-4583-834c-fd975f191e8e
+---
 # ADR-0001: Stack: Hono, Drizzle, React/Vite, MCP SDK, pnpm monorepo, Node 22, pinned versions
 
 - **Status:** Accepted

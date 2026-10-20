@@ -1,3 +1,6 @@
+---
+spoor_id: 57a31fdb-ea49-41d0-a863-db5d817f0676
+---
 # ADR-0004: Memory model: memories, decisions and docs
 
 - **Status:** Accepted
