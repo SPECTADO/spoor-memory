@@ -1,4 +1,5 @@
-# CI: lint, unit, server integration, server e2e, Playwright e2e, CLI package smoke test, compose smoke test, image build.
+# CI: lint, unit, server integration, server e2e, Playwright e2e, CLI package smoke test, compose smoke test, image build
+# (pushed as `latest` from main, ADR-0017).
 # Design: docs/design/deployment.md section 6.1. Actions are pinned by commit SHA (section 9 lists the releases).
 # release.yml calls this workflow on v* tags (workflow_call) before it publishes anything.
 name: ci
@@ -145,18 +146,46 @@ jobs:
         run: docker compose down -v
 
   image:
-    needs: [lint, unit, integration]
+    # a push to main publishes the image as `latest` and `sha-<short>` once every other job passed (ADR-0017);
+    # pull requests only build it (proves the linux/arm64 build); release.yml pushes the version tags itself
+    needs: [lint, unit, integration, e2e-server, e2e-web, compose-smoke]
     if: ${{ !inputs.skip_image }}
     runs-on: ubuntu-24.04
+    permissions: { contents: read, packages: write }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: push
+        name: Push only from main, and only once the CLI of this server version is on npm (ADR-0013, I30)
+        run: |
+          push=false
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            version="$(jq -r .version packages/server/package.json)"
+            if [ "$(npm view "spoor-memory@$version" version 2>/dev/null)" = "$version" ]; then
+              push=true
+            else
+              echo "::notice::spoor-memory@$version is not on npm yet; building only (the v$version release moves latest)"
+            fi
+          fi
+          echo "push=$push" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # build only (proves the linux/arm64 build); release.yml pushes on v* tags
+      - if: steps.push.outputs.push == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }} # lowercased by the action
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest
+            type=sha
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: false
+          push: ${{ steps.push.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -4,7 +4,13 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-20
+
 ### Added
+
+- **`latest` image from `main`** (ADR-0017): each push to `main` that passes CI publishes `ghcr.io/spectado/spoor-memory:latest`
+  and `:sha-<short>`, once its server version's CLI is on npm. Releases still publish `x.y.z` and `x.y`, and move `latest` only
+  when the tag is still `main`'s head.
 
 - **Spoor is the agents' only memory** (ADR-0015): new project setting `memory.exclusive` (default on, editable in the web UI Settings
   page). When on, the MCP server instructions carry a rule that Spoor replaces every other memory store (Claude Code auto-memory,

@@ -66,6 +66,9 @@ dist-tag `next` and only the `x.y.z-…` image tag. `ci.yml` no longer pushes im
 - **Publish npm and the image in parallel** - faster, but a failed npm job would leave a pullable image whose install doc points at
   a missing CLI version (I30).
 
+**Update 2026-10-20:** `latest` no longer comes from tags only. `ci.yml` pushes it from `main` after the full CI, and a release
+moves it only when the tag is still `main`'s head. See [ADR-0017](0017-latest-image-follows-main.md).
+
 **Update 2026-10-19 (phase 5 review, review-log-phase5 A1, D2):** until the first `v*` release the name `spoor-memory` is not on
 npm, so the SessionStart `npx` fallback would ask the public registry for a name anyone could register. Since this review the hook
 renders the `npx` fallback only for a released version (`x.y.z`, not `0.0.0`); a source-built server renders `|| exit 0`, and its

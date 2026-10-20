@@ -17,3 +17,5 @@ Project decisions, MADR style, each with date and deciders. Template and rules: 
 - [ADR-0013](0013-cli-packaging-and-release.md) - The CLI is published as one esbuild bundle, and a v* tag releases the npm package and the image together (Accepted, 2026-10-19)
 - [ADR-0014](0014-library-space.md) - Library space: per-project pages written only by humans (Accepted, 2026-10-20)
 - [ADR-0015](0015-exclusive-memory.md) - Spoor is the agents' only memory by default (Accepted, 2026-10-20)
+- [ADR-0016](0016-keep-the-global-cli-install-the-sessionstart-digest-warns-when-the-cli-version.md) - Keep the global CLI install; the SessionStart digest warns when the CLI version differs from the server's (2026-10-20)
+- [ADR-0017](0017-latest-image-follows-main.md) - The `latest` image follows `main`; version tags stay on `v*` releases (Accepted, 2026-10-20)

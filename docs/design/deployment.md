@@ -301,7 +301,7 @@ import `@spoor/shared` from its `dist/`, so jobs that type-check or test build i
 | `e2e-server` | lint, unit, integration | pgvector | `pnpm build`, `pnpm --filter @spoor/server test:e2e` (real server in process, the built CLI; database `<name>_e2e_test`) |
 | `e2e-web` | lint, unit, integration | pgvector | `pnpm --filter @spoor/web exec playwright install --with-deps chromium`, then `pnpm e2e` (builds shared, server and web; Playwright starts the built server with the fake embedding model on database `<name>_web_e2e_test` and a random port, serving the built SPA); `actions/upload-artifact` uploads `packages/web/playwright-report` and `test-results` on failure |
 | `compose-smoke` | lint, unit, integration | | BRIEF DoD 1 as an operator runs it (deviations H13, review-log-phase5 D1): `.env` from `.env.example` with generated passwords and an admin, `docker compose up -d --build --wait --wait-timeout 600`, `curl /healthz`, the bootstrap admin logs in (`POST /api/v1/auth/login`), logs on failure, `docker compose down -v`. Runs also when `release.yml` calls the workflow |
-| `image` | lint, unit, integration | | QEMU + buildx, multi-arch `linux/amd64,linux/arm64` build with the GHA cache, **never pushed**; skipped when `release.yml` calls the workflow (`skip_image: true`) |
+| `image` | all of the above | | QEMU + buildx, multi-arch `linux/amd64,linux/arm64` build with the GHA cache. On a push to `main` it logs in to GHCR (`packages: write`) and pushes `latest` and `sha-<short>` (ADR-0017), but only when `spoor-memory@<server version>` is already on npm (I30); pull requests only build. Skipped when `release.yml` calls the workflow (`skip_image: true`) |
 
 Playwright is a dependency of `packages/web` only, so the browser install runs through `pnpm --filter @spoor/web exec`; a root
 `pnpm exec playwright` does not find the binary. Pull requests cancel superseded runs; pushes to `main` do not. The real-model test
@@ -314,7 +314,8 @@ ADR 0013. Jobs in order; nothing is published unless every earlier job passed.
 
 1. `version`: the tag must be `v<major>.<minor>.<patch>[-pre]` and equal the `version` of `packages/server/package.json` and
    `packages/cli/package.json` (deviations I30). Outputs the version and whether it is a pre-release.
-2. `ci`: `uses: ./.github/workflows/ci.yml` with `skip_image: true`, i.e. every job of §6.1 except the image build.
+2. `ci`: `uses: ./.github/workflows/ci.yml` with `skip_image: true`, i.e. every job of §6.1 except the image build. The call
+   grants `packages: write` because GitHub checks the called image job's permissions even when it is skipped.
 3. `npm` (`id-token: write`): build the CLI bundle; `npm pkg set repository.url=git+https://github.com/<repo>.git` (and
    `repository.directory`, `homepage`, `bugs`), because npm provenance rejects a mismatch; `node packages/cli/scripts/pack-smoke.mjs
    --install --out $RUNNER_TEMP/npm` packs, installs the tarball with npm and runs `spoor --help` and `--version`; then
@@ -323,10 +324,11 @@ ADR 0013. Jobs in order; nothing is published unless every earlier job passed.
 4. `image` (`packages: write`), after `npm`: login to GHCR with `GITHUB_TOKEN`, `docker/metadata-action` on
    `ghcr.io/${{ github.repository }}` (lowercased by the action) with `flavor: latest=false` and tags
    `type=semver,pattern={{version}}`, `type=semver,pattern={{major}}.{{minor}}` (skipped for pre-releases) and `latest` unless a
-   pre-release; `build-push-action` multi-arch with `push: true`.
+   pre-release or `main` has moved past the tag (`git ls-remote origin refs/heads/main`, ADR-0017); `build-push-action` multi-arch
+   with `push: true`.
 
 npm goes before the image so an image whose install doc pins `spoor-memory@X` is never pullable while `X` is missing on npm.
-No image is published from `main` and no GitHub release is created (the design draft had both; dropped as not needed for the MVP).
+`main` publishes `latest` and `sha-<short>` from `ci.yml` (§6.1, ADR-0017). No GitHub release is created.
 After the first push set the GHCR package visibility to public once, by hand (default is private). Secrets and the maintainer's
 steps: [docs/operations.md](../operations.md) §10.
 
