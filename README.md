@@ -43,6 +43,18 @@ docker compose up -d --build     # builds the image from this checkout and tags 
 curl -s localhost:3000/healthz   # {"status":"ok",...} once migrations ran and the embedding model loaded (up to two minutes)
 ```
 
+**Published images.** To pull instead of building, set `SPOOR_IMAGE` in `.env` and run `docker compose pull && docker compose up -d`.
+`ghcr.io/spectado/spoor-memory` has these tags:
+
+| tag | what it is |
+|---|---|
+| `x.y.z`, `x.y` (e.g. `0.2.0`, `0.2`) | a release, pushed by a `v*` tag. Use this in production |
+| `latest` | the newest commit on `main` that passed CI, not the last release. Between releases it reports the last released version while running newer code |
+| `sha-<short>` | one specific `main` build, for pinning or rolling back |
+
+A `main` build is pushed only once the CLI of its server version is on npm, so a version bump gets `latest` from its release
+([ADR-0017](docs/adr/0017-latest-image-follows-main.md)).
+
 1. **First login.** Open `SPOOR_PUBLIC_URL`, log in with `SPOOR_ADMIN_EMAIL` and `SPOOR_ADMIN_PASSWORD`. The bootstrap admin is
    created only while the user table is empty.
 2. **Create a project.** Projects, New project: a name and a slug (`acme`; the slug is permanent). Invite teammates under
@@ -72,7 +84,7 @@ and names the commands (`npm i -g spoor-memory@<server version>`, then `spoor in
 | [docs/operations.md](docs/operations.md) | deploying and running it: env vars, TLS, proxies, backup, restore, upgrades, troubleshooting |
 | [docs/user-guide.md](docs/user-guide.md) | the web UI: projects, spaces, item lifecycle, editing, tokens, admin |
 | [docs/agent-guide.md](docs/agent-guide.md) | what agents get: digest, tools, hooks, drafting, mirror rules, token costs |
-| [CHANGELOG.md](CHANGELOG.md) | what is in 0.1.0 |
+| [CHANGELOG.md](CHANGELOG.md) | what is in each release |
 | [ARCHITECTURE.md](ARCHITECTURE.md), [GLOSSARY.md](GLOSSARY.md) | components, flows, terms |
 | [docs/adr/](docs/adr/README.md), [docs/design/](docs/design/) | decisions and the detailed design; [dod-status.md](docs/design/dod-status.md) maps the brief's Definition of done to evidence |
 | [BRIEF.md](BRIEF.md) | the contract: scope and amendments |
@@ -86,7 +98,8 @@ The server's integration and end-to-end tests need Postgres with pgvector: `pnpm
 with a clear message when it is unreachable; `pnpm --filter @spoor/server test:e2e` walks the CLI against the real server.
 `pnpm e2e` builds and runs the Playwright browser tests (once: `pnpm --filter @spoor/web exec playwright install chromium`).
 `pnpm --filter "spoor-memory..." build && pnpm --filter spoor-memory test:pack` checks the npm package as it would be published.
-Releases are cut with a `v*` tag ([operations §10](docs/operations.md), ADR 0013).
+Releases are cut with a `v*` tag ([operations §10](docs/operations.md), ADR 0013); every green push to `main` also publishes
+the `latest` image (ADR 0017).
 Package notes: [server](packages/server/README.md), [web](packages/web/README.md), [CLI](packages/cli/README.md).
 
 ## Licence
