@@ -62,6 +62,9 @@ curl -s localhost:3000/healthz   # {"status":"ok",...} once migrations ran and t
 
 Quick checks: `spoor status --remote` (project, role, token expiry) and `spoor context --git` (the digest an agent will get).
 
+The global CLI does not update itself: after a server upgrade, each session's digest says when the installed CLI differs
+and names the commands (`npm i -g spoor-memory@<server version>`, then `spoor init`).
+
 ## Documentation
 
 | read | for |

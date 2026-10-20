@@ -327,7 +327,8 @@ keep the URL under 8 KB), `include_shared` (default true), `format=text|json` (d
 
 Response header `Spoor-Memory-Mode: exclusive|shared` (the project's `memory.exclusive`, ADR-0015), in both formats; the SessionStart hook
 checks the repo's `AGENTS.md` block against it ([cli-and-hooks.md](cli-and-hooks.md) §5.1). The cookie twin (§4.1) shares the response code
-and sends the header too.
+and sends the header too. The bearer route also sends `Spoor-Server-Version: <server version>`; the hook compares it with the
+CLI's own version ([cli-and-hooks.md](cli-and-hooks.md) §5.1 step 9).
 
 Never bumps `last_used_at`. The hook asks for `budget=1500` unless the CLI config says otherwise.
 

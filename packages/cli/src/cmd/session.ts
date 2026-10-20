@@ -8,10 +8,21 @@ import {
   agentsMdBlock,
   claudeMdImportsAgents,
   currentAgentsBlock,
+  isReleaseVersion,
   MEMORY_MODE_HEADER,
   MEMORY_RULE,
+  SERVER_VERSION_HEADER,
 } from '@spoor/shared'
-import { api, authProblem, type Ctx, clientFor, installUrl, mcpUrlMismatch, projectPath } from '../ctx.js'
+import {
+  api,
+  authProblem,
+  type Ctx,
+  clientFor,
+  installUrl,
+  mcpUrlMismatch,
+  projectPath,
+  VERSION,
+} from '../ctx.js'
 import {
   jsonText,
   lockHolder,
@@ -174,6 +185,18 @@ export function agentsLines(ctx: Ctx, exclusive: boolean): string[] {
   ]
 }
 
+/**
+ * Section 5.1 step 9: the CLI is installed globally and does not update itself, so the digest says when its version
+ * differs from the server's (the version install.md pins). Silent for an older server without the header and for a
+ * source build (`0.0.0`) on either side.
+ */
+export function versionLines(cli: string, server: string | null | undefined): string[] {
+  if (!server || server === cli || !isReleaseVersion(server) || !isReleaseVersion(cli)) return []
+  return [
+    `Spoor: the spoor CLI is ${cli} but the server is ${server}; ask the user to run npm i -g spoor-memory@${server}, then spoor init (it updates the version the hooks pin).`,
+  ]
+}
+
 function sessionNotice(
   ctx: Ctx,
   kind: 'unreachable' | 'rejected' | 'not_configured' | 'error',
@@ -227,6 +250,7 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
   let main: string
   let answered = false
   let agents: string[] = []
+  let version: string[] = []
   if (problem) {
     logRun(ctx.root, problem, ctx.rt.now())
     main = sessionNotice(ctx, 'not_configured')
@@ -244,6 +268,7 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
       answered = true
       // an older server sends no header: its projects are exclusive by default
       agents = agentsLines(ctx, r.headers?.get(MEMORY_MODE_HEADER) !== 'shared')
+      version = versionLines(VERSION, r.headers?.get(SERVER_VERSION_HEADER))
       const text = typeof r.body === 'string' ? r.body : JSON.stringify(r.body)
       main = text.endsWith('\n') ? text.slice(0, -1) : text
       // 6. queue replay and mirror sweep in the time left (marked automatic: not the agent's own recording)
@@ -268,7 +293,7 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
         if (d) d.announced = true
       }
     })
-  const out = [...status, ...agents, main].join('\n')
+  const out = [...status, ...agents, ...version, main].join('\n')
   return cutOutput(`${out}\n`)
 }
 

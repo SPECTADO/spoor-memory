@@ -19,7 +19,9 @@ adversarial review, [review-log.md](review-log.md)) are listed there too.
 - Install: `npm i -g spoor-memory@<server version>` (the install doc names the exact version). Only a global install
   works for every hook: the committed commands look for `spoor` on the PATH, Claude Code does not put
   `node_modules/.bin` there, and only SessionStart falls back to `npx` (§7.2), so a devDependency install would silently
-  switch off push-on-edit, drafting and the Stop nag (review-log-phase5 D4). Before the first npm release (a server at
+  switch off push-on-edit, drafting and the Stop nag (review-log-phase5 D4). A global install does not update itself:
+  the SessionStart digest says when the CLI's version differs from the server's (§5.1 step 9). Hooks that ran `npx` for every
+  call were considered and rejected: about 0.5 s more per Write/Edit. Before the first npm release (a server at
   version `0.0.0`), the install doc tells the user to build the CLI from a source checkout and `npm i -g ./packages/cli`.
 
 ## 2. Config resolution
@@ -364,7 +366,13 @@ m12 [proc] Run `pnpm db:migrate` before integration tests
    file). If not, it prints, after the status lines and before the digest, `Spoor: <AGENTS.md has no current Spoor block |
    CLAUDE.md does not import AGENTS.md | both joined with " and ">; ask the user to run spoor init.` and, when exclusive,
    `Spoor: until then: <MEMORY_RULE>`. The hook never writes `AGENTS.md` or `CLAUDE.md`.
-9. Exit 0.
+9. **CLI version check**, only when the digest loaded. The context response carries `Spoor-Server-Version: <server version>`.
+   When it differs from the CLI's own version, it prints, after the AGENTS.md lines and before the digest, `Spoor: the spoor CLI is
+   <cli> but the server is <server>; ask the user to run npm i -g spoor-memory@<server>, then spoor init (it updates the version the
+   hooks pin).` The global CLI never updates itself, so this line is how it learns of a server upgrade; `spoor init` also moves
+   the `npx` fallback pin of §7.2. Silent when the header is missing (a server before this check) or either side is not a
+   release version (`0.0.0`).
+10. Exit 0.
 
 ### 5.2 Stop: one nag, then hand drafting to the background
 

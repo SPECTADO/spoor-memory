@@ -28,6 +28,8 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
   capture or takeover of a library link by a later item is blocked (DB backstop `SPL01`; `SPL02` refuses library revisions via
   `mcp` or `cli`).
 - Export and import carry `library/<slug>.md`; import normalises library rows and drops the refused edge kinds.
+- **CLI version check**: the bearer `GET /p/:slug/api/context` sends `Spoor-Server-Version`, and when the installed CLI differs,
+  the SessionStart digest asks the user to run `npm i -g spoor-memory@<server version>`, then `spoor init`.
 
 ### Changed
 

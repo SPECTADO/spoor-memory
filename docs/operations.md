@@ -152,7 +152,8 @@ large project without history (`history=0`) if its zip will not re-import. A pla
 
 Migrations are forward-only. To roll back, restore the dump taken in step 1 and start the older image. CLI users install the version
 that matches the server (`npm i -g spoor-memory@<server version>`, as install.md says); the pinned `npx` fallback in the hooks follows
-the server automatically after `spoor init` is rerun.
+the server after `spoor init` is rerun and the changed `.claude/settings.json` is committed. Users do not have to watch for
+releases: after the upgrade, every session start whose CLI differs from the server says so in the digest and names both commands.
 
 **Upgrading from 0.1.0 to the Library release.** Migrations 0003 and 0004 run at startup under the advisory lock, before any
 library page can exist; no action is needed apart from the backup. 0003 adds the `library` space, the `memberships.library_editor`

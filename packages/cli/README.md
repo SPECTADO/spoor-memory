@@ -28,6 +28,11 @@ spoor login --server https://spoor.example.com --project acme --no-browser
    when the project's memory is exclusive (the default, ADR-0015), sets `autoMemoryEnabled: false` in an untracked
    `.claude/settings.local.json`, so Claude Code auto-memory is off for that user.
 
+**Keeping the CLI up to date.** A global install does not update itself. When the server is upgraded, the next session's
+digest starts with a line that names the new version: run `npm i -g spoor-memory@<server version>`, then `spoor init` in
+each repo (it moves the version the SessionStart hook pins; commit the changed `.claude/settings.json`). `spoor --version`
+shows what is installed.
+
 Before the first npm release (a server at version `0.0.0`) build the CLI from a source checkout instead:
 `pnpm install && pnpm --filter "spoor-memory..." build && npm i -g ./packages/cli`.
 

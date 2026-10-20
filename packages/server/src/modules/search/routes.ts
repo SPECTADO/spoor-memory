@@ -4,7 +4,7 @@
  * - bearer (`/p/:slug/api`): `GET /context` for the SessionStart hook.
  * None of them bumps `last_used_at`.
  */
-import { ANCHOR_MAX_LENGTH, MEMORY_MODE_HEADER, spaces } from '@spoor/shared'
+import { ANCHOR_MAX_LENGTH, MEMORY_MODE_HEADER, SERVER_VERSION_HEADER, spaces } from '@spoor/shared'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -12,6 +12,7 @@ import { MEMORY_TYPES } from '../../db/schema.js'
 import type { ServerDeps } from '../../lib/deps.js'
 import { readQuery } from '../../lib/validate.js'
 import type { AppEnv } from '../../types.js'
+import { VERSION } from '../../version.js'
 import { requireBearer, requireUser } from '../auth/index.js'
 import { loadProjectAccess } from '../projects/index.js'
 import { BUDGET_MAX, BUDGET_MIN, type ContextService } from './context.js'
@@ -62,6 +63,8 @@ async function contextResponse(c: Context<AppEnv>, services: SearchRouteServices
   c.header('Cache-Control', 'no-store')
   // the SessionStart hook checks the repo's AGENTS.md block against it (cli-and-hooks.md section 5.1, ADR-0015)
   c.header(MEMORY_MODE_HEADER, res.memoryExclusive ? 'exclusive' : 'shared')
+  // and tells the user when the installed CLI differs from this version (cli-and-hooks.md section 5.1)
+  c.header(SERVER_VERSION_HEADER, VERSION)
   if (q.format === 'json') {
     return c.json({
       text: res.text,

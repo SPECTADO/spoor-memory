@@ -12,6 +12,9 @@ export const MEMORY_RULE =
 /** Response header of the bearer `GET /p/:slug/api/context`: `exclusive` or `shared` (the project's `memory.exclusive`). */
 export const MEMORY_MODE_HEADER = 'Spoor-Memory-Mode'
 
+/** Response header of the bearer `GET /p/:slug/api/context`: the server's version, which the CLI compares with its own. */
+export const SERVER_VERSION_HEADER = 'Spoor-Server-Version'
+
 export const AGENTS_BLOCK_BEGIN = '<!-- spoor:begin (managed by spoor init; edit outside these markers) -->'
 export const AGENTS_BLOCK_END = '<!-- spoor:end -->'
 /** Matches any begin marker, so a block written by another CLI version is replaced, not duplicated. */

@@ -2,6 +2,8 @@ import { existsSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from
 import { join } from 'node:path'
 import { MEMORY_RULE } from '@spoor/shared'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { versionLines } from './cmd/session.js'
+import { VERSION } from './ctx.js'
 import { readState, updateState } from './state.js'
 import {
   agentsFiles,
@@ -326,6 +328,32 @@ describe('hook session-start: the AGENTS.md check (ADR-0015)', () => {
     expect((await start(repo)).out).toBe(DIGEST)
     const down = makeRepo({ local: localEnv(await deadUrl()) })
     expect((await start(down)).out).toBe('Spoor: server unreachable, memory not loaded this session.\n')
+  })
+})
+
+describe('hook session-start: the CLI version check', () => {
+  const start = (repo: string) => hook('session-start', repo, { session_id: 's', source: 'startup' })
+
+  it('asks for the server version when the CLI differs, and says nothing when it matches or cannot tell', async () => {
+    const repo = makeRepo({ local: localEnv(srv.url), agents: true })
+    srv.on('GET /p/acme/api/context', { text: DIGEST, headers: { 'Spoor-Server-Version': '9.0.0' } })
+    expect((await start(repo)).out).toBe(
+      `Spoor: the spoor CLI is ${VERSION} but the server is 9.0.0; ask the user to run npm i -g spoor-memory@9.0.0, then spoor init (it updates the version the hooks pin).\n${DIGEST}`,
+    )
+    const cases: Record<string, string>[] = [
+      { 'Spoor-Server-Version': VERSION },
+      { 'Spoor-Server-Version': '0.0.0' },
+      {},
+    ]
+    for (const headers of cases) {
+      srv.on('GET /p/acme/api/context', { text: DIGEST, headers })
+      expect((await start(repo)).out).toBe(DIGEST)
+    }
+  })
+
+  it('a source-built CLI (0.0.0) is never told to upgrade', () => {
+    expect(versionLines('0.0.0', '9.0.0')).toEqual([])
+    expect(versionLines('0.1.0', '0.2.0-rc.1')).toHaveLength(1)
   })
 })
 

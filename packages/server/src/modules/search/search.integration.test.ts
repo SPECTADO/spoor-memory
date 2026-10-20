@@ -34,6 +34,7 @@ import type { ServerDeps } from '../../lib/deps.js'
 import { ApiError, apiErrorResponse, errorResponse } from '../../lib/errors.js'
 import { type EmbeddingProvider, JobError, LeaseLostError, NoopSearchPort } from '../../ports.js'
 import type { AppEnv } from '../../types.js'
+import { VERSION } from '../../version.js'
 import { createAuthModule } from '../auth/index.js'
 import {
   createSearchModule,
@@ -848,6 +849,7 @@ describe('REST', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8')
     expect(res.headers.get('spoor-memory-mode')).toBe('exclusive')
+    expect(res.headers.get('spoor-server-version')).toBe(VERSION)
     const text = await res.text()
     expect(text).toMatch(/^Spoor digest acme /)
     expect(text).toContain('@src/auth/')
