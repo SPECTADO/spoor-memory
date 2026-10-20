@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { agentsMdBlock } from '@spoor/shared'
 import { main } from '../cli.js'
 import type { Io } from '../runtime.js'
 
@@ -16,7 +17,9 @@ export interface Req {
   body: unknown
 }
 
-export type Reply = { status?: number; body?: unknown; text?: string; delayMs?: number } | 'hang'
+export type Reply =
+  | { status?: number; body?: unknown; text?: string; delayMs?: number; headers?: Record<string, string> }
+  | 'hang'
 export type Handler = (req: Req) => Reply | Promise<Reply>
 
 export interface FakeServer {
@@ -59,11 +62,11 @@ export async function fakeServer(): Promise<FakeServer> {
       if (reply === 'hang') return
       if (reply.delayMs) await new Promise((x) => setTimeout(x, reply.delayMs))
       if (reply.text !== undefined) {
-        res.writeHead(reply.status ?? 200, { 'content-type': 'text/plain; charset=utf-8' })
+        res.writeHead(reply.status ?? 200, { 'content-type': 'text/plain; charset=utf-8', ...reply.headers })
         res.end(reply.text)
         return
       }
-      res.writeHead(reply.status ?? 200, { 'content-type': 'application/json' })
+      res.writeHead(reply.status ?? 200, { 'content-type': 'application/json', ...reply.headers })
       res.end(JSON.stringify(reply.body ?? {}))
     })
   })
@@ -91,7 +94,15 @@ export interface RepoOpts {
   /** env block of .claude/settings.local.json; omit for an opted-out teammate */
   local?: Record<string, string>
   config?: unknown
+  /** write the AGENTS.md block and the CLAUDE.md import `spoor init` would (`'shared'`: the non-exclusive block) */
+  agents?: true | 'shared'
 }
+
+/** What `spoor init` writes into AGENTS.md and CLAUDE.md of an empty repo (ADR-0015). */
+export const agentsFiles = (shared = false): Record<string, string> => ({
+  'AGENTS.md': `${agentsMdBlock(!shared)}\n`,
+  'CLAUDE.md': '@AGENTS.md\n',
+})
 
 export function makeRepo(o: RepoOpts = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'spoor-cli-'))
@@ -105,6 +116,7 @@ export function makeRepo(o: RepoOpts = {}): string {
   for (const [p, c] of Object.entries(o.files ?? {})) writeFile(dir, p, c)
   if (o.local) writeFile(dir, '.claude/settings.local.json', JSON.stringify({ env: o.local }, null, 2))
   if (o.config !== undefined) writeFile(dir, 'spoor.config.json', JSON.stringify(o.config))
+  if (o.agents) for (const [p, c] of Object.entries(agentsFiles(o.agents === 'shared'))) writeFile(dir, p, c)
   return dir
 }
 

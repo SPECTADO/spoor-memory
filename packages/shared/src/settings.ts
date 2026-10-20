@@ -23,6 +23,10 @@ const fields = {
     /** A provider name enabled by env (`local` always); the server checks it against its registry. */
     provider: z.string().min(1).max(32),
   },
+  memory: {
+    /** Spoor is the agents' only memory (ADR-0015): MCP instructions, the AGENTS.md block, auto-memory off. */
+    exclusive: z.boolean(),
+  },
 } as const
 
 export const SETTINGS_DEFAULTS = {
@@ -30,6 +34,7 @@ export const SETTINGS_DEFAULTS = {
   digest: { default_budget: 1500, decision_window_days: 30 },
   dedupe: { threshold: 0.92 },
   embedding: { provider: 'local' },
+  memory: { exclusive: true },
 } as const
 
 const f = fields
@@ -52,6 +57,7 @@ export const projectSettings = z.strictObject({
     .prefault({}),
   dedupe: z.strictObject({ threshold: f.dedupe.threshold.default(d.dedupe.threshold) }).prefault({}),
   embedding: z.strictObject({ provider: f.embedding.provider.default(d.embedding.provider) }).prefault({}),
+  memory: z.strictObject({ exclusive: f.memory.exclusive.default(d.memory.exclusive) }).prefault({}),
 })
 export type ProjectSettings = z.infer<typeof projectSettings>
 
@@ -72,6 +78,7 @@ export const projectSettingsPatch = z.strictObject({
     .optional(),
   dedupe: z.strictObject({ threshold: f.dedupe.threshold.optional() }).optional(),
   embedding: z.strictObject({ provider: f.embedding.provider.optional() }).optional(),
+  memory: z.strictObject({ exclusive: f.memory.exclusive.optional() }).optional(),
 })
 export type ProjectSettingsPatch = z.infer<typeof projectSettingsPatch>
 

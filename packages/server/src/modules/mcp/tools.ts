@@ -6,7 +6,7 @@
  * Bounds published here are the loose request bounds of mcp.md; tag pattern, anchor normalisation, slug
  * pattern and the exact code-point limits are checked server-side by the items module's cleaners.
  */
-import { confidences, memoryTypes, relationKinds, spaces } from '@spoor/shared'
+import { confidences, MEMORY_RULE, memoryTypes, relationKinds, spaces } from '@spoor/shared'
 import { z } from 'zod'
 
 const Id = z.string().min(1).max(80)
@@ -183,3 +183,11 @@ export const READ_ONLY_INSTRUCTIONS = INSTRUCTIONS.replace(
   'Record durable facts with spoor_remember and decisions with spoor_decide.',
   'This token is read-only: do not try to record anything in Spoor.',
 )
+
+/** The session's instructions: the role's variant, with the memory rule as its second sentence when the project's `memory.exclusive` is on (ADR-0015). */
+export function instructionsFor(writer: boolean, exclusive: boolean): string {
+  const base = writer ? INSTRUCTIONS : READ_ONLY_INSTRUCTIONS
+  if (!exclusive) return base
+  const first = "Spoor is this project's shared team memory."
+  return base.replace(first, `${first} ${MEMORY_RULE}`)
+}

@@ -386,7 +386,7 @@ describe('spoor docs import / push', () => {
 
 describe('invalid spoor.config.json', () => {
   it('human commands exit 1, hooks fall back to defaults', async () => {
-    const repo = makeRepo({ local: localEnv(srv.url), config: { bogus: 1 } })
+    const repo = makeRepo({ local: localEnv(srv.url), config: { bogus: 1 }, agents: true })
     const r = await run(['adr', 'import'], { cwd: repo })
     expect(r.code).toBe(1)
     expect(r.err).toMatch(/spoor\.config\.json/)

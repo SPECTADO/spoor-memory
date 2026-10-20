@@ -9,8 +9,10 @@ describe('project settings', () => {
       digest: { default_budget: 1500, decision_window_days: 30 },
       dedupe: { threshold: 0.92 },
       embedding: { provider: 'local' },
+      memory: { exclusive: true },
     })
     expect(projectSettings.safeParse({ cleanup: { nope: 1 } }).success).toBe(false)
+    expect(projectSettings.safeParse({ memory: { exclusive: 'yes' } }).success).toBe(false)
     expect(projectSettings.safeParse({ digest: { default_budget: 100 } }).success).toBe(false)
     expect(projectSettings.safeParse({ dedupe: { threshold: 0.995 } }).success).toBe(false)
   })

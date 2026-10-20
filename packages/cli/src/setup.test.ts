@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MEMORY_RULE } from '@spoor/shared'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { VERSION } from './ctx.js'
 import {
+  agentsFiles,
   deadUrl,
   type FakeServer,
   fakeServer,
@@ -54,7 +56,9 @@ describe('spoor init', () => {
     srv.on('GET /p/acme/install.json', { body: installJson(srv.url) })
     const r = await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
     expect(r.code).toBe(0)
-    expect(r.out).toBe('updated .mcp.json\nupdated .claude/settings.json\nupdated .gitignore\n')
+    expect(r.out).toBe(
+      'updated .mcp.json\nupdated .claude/settings.json\nupdated .gitignore\ncreated AGENTS.md\ncreated CLAUDE.md\n',
+    )
     expect(srv.requests[0]?.headers.authorization).toBeUndefined()
     const mcp = readJson(join(repo, '.mcp.json'))
     expect(Object.keys(mcp.mcpServers)).toEqual(['other', 'spoor'])
@@ -67,14 +71,63 @@ describe('spoor init', () => {
       'node_modules\n.claude/settings.local.json\n.spoor/\n',
     )
 
-    const snapshot = ['.mcp.json', '.claude/settings.json', '.gitignore'].map((f) =>
-      readFileSync(join(repo, f), 'utf8'),
-    )
+    expect(readFileSync(join(repo, 'AGENTS.md'), 'utf8')).toBe(agentsFiles()['AGENTS.md'])
+    expect(readFileSync(join(repo, 'CLAUDE.md'), 'utf8')).toBe('@AGENTS.md\n')
+
+    const files = ['.mcp.json', '.claude/settings.json', '.gitignore', 'AGENTS.md', 'CLAUDE.md']
+    const snapshot = files.map((f) => readFileSync(join(repo, f), 'utf8'))
     const again = await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
-    expect(again.out).toBe('unchanged .mcp.json\nunchanged .claude/settings.json\nunchanged .gitignore\n')
-    expect(
-      ['.mcp.json', '.claude/settings.json', '.gitignore'].map((f) => readFileSync(join(repo, f), 'utf8')),
-    ).toEqual(snapshot)
+    expect(again.out).toBe(
+      'unchanged .mcp.json\nunchanged .claude/settings.json\nunchanged .gitignore\nunchanged AGENTS.md\nunchanged CLAUDE.md\n',
+    )
+    expect(files.map((f) => readFileSync(join(repo, f), 'utf8'))).toEqual(snapshot)
+  })
+
+  it('AGENTS.md: keeps the team text, follows memory_exclusive, and writes through a CLAUDE.md link (ADR-0015)', async () => {
+    const repo = makeRepo({ files: { 'AGENTS.md': '# Team rules\n\nUse tabs.\n' } })
+    symlinkSync('AGENTS.md', join(repo, 'CLAUDE.md'))
+    srv.on('GET /p/acme/install.json', { body: { ...installJson(srv.url), memory_exclusive: false } })
+    const r = await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
+    expect(r.code).toBe(0)
+    expect(r.out).not.toContain('CLAUDE.md')
+    expect(lstatSync(join(repo, 'CLAUDE.md')).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(repo, 'AGENTS.md'), 'utf8')).toBe(
+      `# Team rules\n\nUse tabs.\n\n${agentsFiles(true)['AGENTS.md']}`,
+    )
+    srv.on('GET /p/acme/install.json', { body: installJson(srv.url) })
+    await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
+    const text = readFileSync(join(repo, 'AGENTS.md'), 'utf8')
+    expect(text).toBe(`# Team rules\n\nUse tabs.\n\n${agentsFiles()['AGENTS.md']}`)
+    expect(text).toContain(MEMORY_RULE)
+  })
+
+  it('turns auto-memory off only in an existing, untracked settings.local.json, and only when exclusive', async () => {
+    const repo = makeRepo({ local: { SPOOR_TOKEN: 'spr_testtoken123' } })
+    const local = join(repo, '.claude/settings.local.json')
+    srv.on('GET /p/acme/install.json', { body: { ...installJson(srv.url), memory_exclusive: false } })
+    await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
+    expect(readJson(local).autoMemoryEnabled).toBeUndefined()
+    srv.on('GET /p/acme/install.json', { body: installJson(srv.url) })
+    const r = await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
+    expect(r.out).toContain('updated .claude/settings.local.json\n')
+    expect(readJson(local)).toEqual({ env: { SPOOR_TOKEN: 'spr_testtoken123' }, autoMemoryEnabled: false })
+    expect(statSync(local).mode & 0o777).toBe(0o600)
+    srv.on('GET /p/acme/install.json', { body: { ...installJson(srv.url), memory_exclusive: false } })
+    writeFileSync(local, JSON.stringify({ env: { SPOOR_TOKEN: 'spr_testtoken123' } }))
+    srv.on('GET /p/acme/install.json', { body: installJson(srv.url) })
+    const dry = await run(['init', '--server', srv.url, '--project', 'acme', '--dry-run'], { cwd: repo })
+    expect(dry.out).toContain('+   "autoMemoryEnabled": false')
+    expect(dry.out).toContain('spr_test…')
+    expect(dry.out).not.toContain('spr_testtoken123')
+    await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
+    srv.on('GET /p/acme/install.json', { body: { ...installJson(srv.url), memory_exclusive: false } })
+    const flipped = await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
+    expect(flipped.out).toContain('note: autoMemoryEnabled is false in .claude/settings.local.json')
+
+    const anon = makeRepo()
+    srv.on('GET /p/acme/install.json', { body: installJson(srv.url) })
+    await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: anon })
+    expect(existsSync(join(anon, '.claude/settings.local.json'))).toBe(false)
   })
 
   it('below the git top level: writes the top-level .gitignore with root-prefixed lines (H11)', async () => {
@@ -263,13 +316,14 @@ describe('spoor login', () => {
     expect(readJson(local)).toEqual({
       permissions: { allow: ['x'] },
       env: { OTHER: '1', SPOOR_TOKEN: 'spr_newtoken_abcdef', SPOOR_URL: srv.url, SPOOR_PROJECT: 'acme' },
+      autoMemoryEnabled: false,
     })
     expect(statSync(local).mode & 0o777).toBe(0o600)
     expect(readFileSync(join(repo, '.gitignore'), 'utf8')).toBe('.claude/settings.local.json\n.spoor/\n')
     expect(existsSync(join(repo, '.mcp.json'))).toBe(true)
     expect(existsSync(join(repo, '.claude/settings.json'))).toBe(true)
     // the token is in no other file
-    for (const f of ['.mcp.json', '.claude/settings.json', '.gitignore', '.spoor/state.json'])
+    for (const f of ['.mcp.json', '.claude/settings.json', '.gitignore', '.spoor/state.json', 'AGENTS.md'])
       expect(readFileSync(join(repo, f), 'utf8')).not.toContain('spr_newtoken_abcdef')
   })
 

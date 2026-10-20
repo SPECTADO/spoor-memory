@@ -28,6 +28,7 @@ export {
 } from './sessions.js'
 export {
   INSTRUCTIONS,
+  instructionsFor,
   READ_ONLY_INSTRUCTIONS,
   READ_TOOLS,
   TOOL_SPECS,

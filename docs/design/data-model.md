@@ -200,12 +200,14 @@ CREATE INDEX device_codes_pending_idx ON device_codes (created_at) WHERE status 
   "cleanup":   { "stale_days": 30, "archive_days": 90, "observation_days": 7 },
   "digest":    { "default_budget": 1500, "decision_window_days": 30 },
   "dedupe":    { "threshold": 0.92 },
-  "embedding": { "provider": "local" }
+  "embedding": { "provider": "local" },
+  "memory":    { "exclusive": true }
 }
 ```
 Ranges: `stale_days` 1–3650, `archive_days` 1–3650, `observation_days` 1–365,
 `default_budget` 200–8000, `decision_window_days` 1–365, `threshold` 0.80–0.99,
-`embedding.provider` ∈ providers enabled by env (`local` always). Changing the provider sets
+`embedding.provider` ∈ providers enabled by env (`local` always). `memory.exclusive` is a boolean, default true (ADR-0015): when on, the
+MCP instructions, the `AGENTS.md` block and the SessionStart hook tell agents to use no other memory store. Changing the provider sets
 `embedding_target` (see search-and-digest.md §3); choosing the active model's provider again clears it.
 Unknown keys are rejected on write. The column stores only the keys an admin set (a write deep-merges the
 patch and validates the result), so a changed default reaches every project that never overrode it. A new

@@ -78,7 +78,13 @@ describe('GET /p/:slug/install.json', () => {
     expect(r.headers.get('cache-control')).toBe('no-cache')
     const b = await json(r)
     expect(b).toEqual(
-      renderInstallJson({ server: TEST_ORIGIN, slug: 'acme', version: '0.1.0', budget: 2000 }),
+      renderInstallJson({
+        server: TEST_ORIGIN,
+        slug: 'acme',
+        version: '0.1.0',
+        budget: 2000,
+        memoryExclusive: true,
+      }),
     )
     expect(b).toMatchObject({
       version: '0.1.0',

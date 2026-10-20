@@ -65,6 +65,7 @@ export interface ProjectJson {
     digest: { default_budget: number; decision_window_days: number }
     dedupe: { threshold: number }
     embedding: { provider: string }
+    memory: { exclusive: boolean }
   }
   /**
    * Effective role. Projects: the membership role, `admin` for an instance admin. `_shared`: `admin` for an

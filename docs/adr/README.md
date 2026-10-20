@@ -16,3 +16,4 @@ Project decisions, MADR style, each with date and deciders. Template and rules: 
 - [ADR-0012](0012-authority-and-write-ordering.md) - Delegated authority is re-checked at use, and item writes lock the project row first (Accepted, 2026-10-19)
 - [ADR-0013](0013-cli-packaging-and-release.md) - The CLI is published as one esbuild bundle, and a v* tag releases the npm package and the image together (Accepted, 2026-10-19)
 - [ADR-0014](0014-library-space.md) - Library space: per-project pages written only by humans (Accepted, 2026-10-20)
+- [ADR-0015](0015-exclusive-memory.md) - Spoor is the agents' only memory by default (Accepted, 2026-10-20)

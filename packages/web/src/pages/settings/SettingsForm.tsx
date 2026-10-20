@@ -1,10 +1,10 @@
 /**
- * The project settings forms (web-ui.md §8): General, Cleanup, Digest and Duplicates, each with its own Save
+ * The project settings forms (web-ui.md §8): General, Cleanup, Digest, Duplicates and Memory, each with its own Save
  * that sends only the changed keys. Values are validated in the browser with the shared patch schema and the
  * server's `invalid_input` issues (`settings.cleanup.stale_days`) are mapped back to the same fields.
  */
 import { descriptionSchema, nameSchema, type ProjectJson, projectSettingsPatch } from '@spoor/shared'
-import { type FormEvent, type ReactNode, useState } from 'react'
+import { type FormEvent, type ReactNode, useId, useState } from 'react'
 import { isApiError } from '../../api/client'
 import { usePatchProject } from '../../api/hooks'
 import type { ProjectPatchRequest } from '../../api/types'
@@ -96,6 +96,7 @@ export function SettingsForm({ project }: { project: ProjectJson }) {
           spec={g}
         />
       ))}
+      <MemoryForm project={project} />
     </div>
   )
 }
@@ -251,6 +252,51 @@ function NumbersForm({ project, spec }: { project: ProjectJson; spec: (typeof GR
           error={errors[`${spec.group}.${f.key}`] ?? fields[`${spec.group}.${f.key}`]}
         />
       ))}
+    </FormSection>
+  )
+}
+
+function MemoryForm({ project }: { project: ProjectJson }) {
+  const patch = usePatchProject(project.slug)
+  const toast = useToast()
+  const current = project.settings.memory.exclusive
+  const [exclusive, setExclusive] = useState(current)
+  const id = useId()
+  const hintId = `${id}-hint`
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    patch.mutate(
+      { settings: { memory: { exclusive } } },
+      { onSuccess: () => toast.success('Memory settings saved.') },
+    )
+  }
+  const { banner } = serverErrors(patch.error)
+  return (
+    <FormSection
+      title="Memory"
+      onSubmit={submit}
+      dirty={exclusive !== current}
+      saving={patch.isPending}
+      error={banner}
+    >
+      <div className="space-y-1">
+        <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium">
+          <input
+            id={id}
+            type="checkbox"
+            checked={exclusive}
+            onChange={(e) => setExclusive(e.target.checked)}
+            aria-describedby={hintId}
+            className="size-4"
+          />
+          Spoor is the agents' only memory
+        </label>
+        <p id={hintId} className="text-xs text-muted">
+          Agents are told not to use other memory stores (Claude Code auto-memory, other memory servers).
+          Repos pick up a change at the next spoor init.
+        </p>
+      </div>
     </FormSection>
   )
 }

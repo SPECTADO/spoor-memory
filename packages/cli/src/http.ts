@@ -80,6 +80,7 @@ export interface Response<T = unknown> {
   status: number
   ok: boolean
   body: T
+  headers?: Headers
 }
 
 export interface Client {
@@ -140,7 +141,7 @@ export function createClient(o: ClientOptions): Client {
       } catch {
         // keep raw text
       }
-      return { status: res.status, ok: res.ok, body: body as T }
+      return { status: res.status, ok: res.ok, body: body as T, headers: res.headers }
     },
   }
 }

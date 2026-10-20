@@ -41,6 +41,11 @@ export interface ContextParams {
   includeShared?: boolean
 }
 
+/** The digest plus the project's `memory.exclusive` setting, which the bearer route sends as a header (ADR-0015). */
+export interface ContextResult extends DigestResult {
+  memoryExclusive: boolean
+}
+
 type Row = {
   id: string
   project_id: string
@@ -75,7 +80,7 @@ export class ContextService {
   }
 
   /** Build the digest for a project; `est(text) <= budget` always. */
-  async build(params: ContextParams): Promise<DigestResult> {
+  async build(params: ContextParams): Promise<ContextResult> {
     const project = await projectModels(this.deps.db, params.projectId)
     if (!project) throw new Error(`context: no project ${params.projectId}`)
     const settings = resolveSettings(project.settings)
@@ -200,6 +205,6 @@ export class ContextService {
       // cannot happen (buildDigest guarantees it); logged loudly if it ever does
       this.deps.logger.error({ budget }, 'digest exceeded its budget')
     }
-    return result
+    return { ...result, memoryExclusive: settings.memory.exclusive }
   }
 }

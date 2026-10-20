@@ -23,14 +23,7 @@ import {
   supersedeTool,
   verifyTool,
 } from './handlers.js'
-import {
-  INSTRUCTIONS,
-  READ_ONLY_INSTRUCTIONS,
-  READ_TOOLS,
-  TOOL_SPECS,
-  type ToolName,
-  WRITE_TOOLS,
-} from './tools.js'
+import { instructionsFor, READ_TOOLS, TOOL_SPECS, type ToolName, WRITE_TOOLS } from './tools.js'
 
 type AnyHandler = (s: McpServices) => (args: never, x: never) => Promise<unknown>
 
@@ -51,11 +44,15 @@ export function toolsFor(role: ProjectRole | null): ToolName[] {
   return roleAtLeast(role, 'editor') ? [...READ_TOOLS, ...WRITE_TOOLS] : [...READ_TOOLS]
 }
 
-export function buildMcpServer(services: McpServices, role: ProjectRole | null): McpServer {
+export function buildMcpServer(
+  services: McpServices,
+  role: ProjectRole | null,
+  memoryExclusive = true,
+): McpServer {
   const mcp = new McpServer(
     { name: 'spoor', version: VERSION },
     {
-      instructions: roleAtLeast(role, 'editor') ? INSTRUCTIONS : READ_ONLY_INSTRUCTIONS,
+      instructions: instructionsFor(roleAtLeast(role, 'editor'), memoryExclusive),
       capabilities: { tools: {} },
     },
   )

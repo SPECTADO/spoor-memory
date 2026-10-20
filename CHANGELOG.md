@@ -6,6 +6,14 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ### Added
 
+- **Spoor is the agents' only memory** (ADR-0015): new project setting `memory.exclusive` (default on, editable in the web UI Settings
+  page). When on, the MCP server instructions carry a rule that Spoor replaces every other memory store (Claude Code auto-memory,
+  other memory MCP servers, memory notes in files) unless the user asks.
+- `spoor init` writes a managed Spoor block to `AGENTS.md`, adds an `@AGENTS.md` import to `CLAUDE.md`, and, when exclusive, sets
+  `autoMemoryEnabled: false` in an untracked `.claude/settings.local.json` (so `spoor login` turns Claude Code auto-memory off for that user).
+- The SessionStart hook asks the user to run `spoor init` when `AGENTS.md` lacks the current block or `CLAUDE.md` does not import it,
+  and repeats the rule until then. `install.json` gains `memory_exclusive`; the bearer `GET /p/:slug/api/context` sends
+  `Spoor-Memory-Mode: exclusive|shared`.
 - **Library space**: a fourth space in every project (and in `_shared`) for guides agents must follow, such as a graphics guide
   or coding conventions. Pages are written only by humans in the web UI, are `active` or `archived` (never stale, expiring,
   pinned or verified) and are read-only for MCP, CLI and tokens (`read_only_space`). Handle `L<n>` (`S:L<n>` for a shared page);

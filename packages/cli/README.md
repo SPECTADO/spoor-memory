@@ -24,7 +24,9 @@ spoor login --server https://spoor.example.com --project acme --no-browser
 3. runs `spoor init`: merges the project's `.mcp.json` (the MCP server `spoor`, token only as `${SPOOR_TOKEN}`) and
    `.claude/settings.json` (the three hooks and the `mcp__spoor` permission). It renders these blocks itself from
    `SPOOR_URL`, the slug and the server version of `<server>/p/<slug>/install.json`; nothing else from the server ends up
-   in a committed file.
+   in a committed file. Init also writes a managed Spoor block to `AGENTS.md`, adds an `@AGENTS.md` import to `CLAUDE.md` and,
+   when the project's memory is exclusive (the default, ADR-0015), sets `autoMemoryEnabled: false` in an untracked
+   `.claude/settings.local.json`, so Claude Code auto-memory is off for that user.
 
 Before the first npm release (a server at version `0.0.0`) build the CLI from a source checkout instead:
 `pnpm install && pnpm --filter "spoor-memory..." build && npm i -g ./packages/cli`.
@@ -80,7 +82,7 @@ in_ci}`, `context.{max_tokens, max_files}`. Details: [cli-and-hooks.md](../../do
 | command | mode | what it does |
 |---|---|---|
 | `spoor login [--server URL] [--project SLUG] [--token T\|-] [--no-browser] [--no-init] [--untrack]` | human | device flow (or a pasted token), writes `env.SPOOR_URL/PROJECT/TOKEN` into `.claude/settings.local.json` (0600, other keys kept), adds `.gitignore` lines, runs `init` |
-| `spoor init [--dry-run]` | human | reads the server version from `/p/<slug>/install.json`, merges `.mcp.json`, `.claude/settings.json` (hooks, `mcp__spoor`) and `.gitignore` with blocks it renders itself (`@spoor/shared` install.ts); idempotent |
+| `spoor init [--dry-run]` | human | reads the server version from `/p/<slug>/install.json`, merges `.mcp.json`, `.claude/settings.json` (hooks, `mcp__spoor`) and `.gitignore`, writes the `AGENTS.md` block and `CLAUDE.md` import and sets `autoMemoryEnabled` in `.claude/settings.local.json` (ADR-0015), with blocks it renders itself (`@spoor/shared` install.ts); idempotent |
 | `spoor whoami [--json]`, `spoor status [--remote]` | human | identity; local config, push conflicts, queue, orphans, breaker |
 | `spoor context [--query T] [--files a,b \| --git] [--budget N] [--no-shared] [--json]` | agent | prints the digest |
 | `spoor adr import [--dir D] [--dry-run]`, `spoor docs import [--dry-run]` | human | one-time push of existing files |

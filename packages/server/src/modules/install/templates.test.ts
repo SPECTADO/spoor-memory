@@ -1,3 +1,4 @@
+import { agentsMdBlock, MEMORY_RULE } from '@spoor/shared'
 import { describe, expect, it } from 'vitest'
 import {
   checkValues,
@@ -21,6 +22,7 @@ describe('install.json (cli-and-hooks.md 7.1, 7.2, 7.4)', () => {
       version: '0.1.0',
       server: 'https://spoor.example.com',
       project: 'acme',
+      memory_exclusive: true,
       mcp_json: {
         mcpServers: {
           spoor: {
@@ -165,9 +167,17 @@ describe('install.md (cli-and-hooks.md 9)', () => {
     expect(JSON.stringify(json)).not.toContain('npx')
   })
 
-  it('renders deterministically and only from its four values', () => {
+  it('renders deterministically and only from its five values', () => {
     expect(renderInstallMd(V)).toBe(md)
     expect(renderInstallMd({ ...V, budget: 2000 })).not.toBe(md)
+  })
+
+  it('shows the AGENTS.md block spoor init writes, with the memory rule only when exclusive (ADR-0015)', () => {
+    expect(md).toContain(agentsMdBlock(true))
+    const shared = renderInstallMd({ ...V, memoryExclusive: false })
+    expect(shared).toContain(agentsMdBlock(false))
+    expect(shared).not.toContain(MEMORY_RULE)
+    expect(renderInstallJson({ ...V, memoryExclusive: false }).memory_exclusive).toBe(false)
   })
 })
 

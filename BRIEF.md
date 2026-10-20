@@ -189,3 +189,18 @@ Agreed 2026-10-20 between the owner and Claude (four questions; the owner took t
   push may be added later.
 
 Recorded in ADR-0014.
+
+## Amendment (2026-10-20): Exclusive memory
+
+Agreed 2026-10-20 between the owner and Claude (four questions, answered one at a time).
+- **Spoor is the agents' only memory by default**: the project setting `memory.exclusive` (default on, toggled by
+  project admins in the web UI) adds one rule to the MCP instructions: do not read or write other memory stores
+  (Claude Code auto-memory, other memory MCP servers, memory notes in files) unless the user asks.
+- **`spoor init` writes the instructions into the repo**: a managed Spoor block in `AGENTS.md` (the rule when
+  exclusive, plus the Spoor usage lines) and an `@AGENTS.md` import in `CLAUDE.md`; both files are created if missing.
+- **SessionStart checks the block**: when it is missing or out of date, the hook tells the agent to ask the user for
+  `spoor init` and, for an exclusive project, injects the rule for that session. The hook never edits the files.
+- **Auto-memory off per user**: for an exclusive project, init (and so `spoor login`) sets `autoMemoryEnabled: false`
+  in the user's own `.claude/settings.local.json`; teammates who never logged in keep theirs.
+
+Recorded in ADR-0015.

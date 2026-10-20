@@ -4,6 +4,13 @@
  */
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
+import {
+  agentsMdBlock,
+  claudeMdImportsAgents,
+  currentAgentsBlock,
+  MEMORY_MODE_HEADER,
+  MEMORY_RULE,
+} from '@spoor/shared'
 import { api, authProblem, type Ctx, clientFor, installUrl, mcpUrlMismatch, projectPath } from '../ctx.js'
 import {
   jsonText,
@@ -11,6 +18,8 @@ import {
   logRun,
   oncePerDay,
   readJsonObject,
+  readText,
+  repoFileTarget,
   sha256,
   spoorDir,
   writeAtomic,
@@ -142,6 +151,29 @@ export function statusLines(ctx: Ctx): string[] {
   return lines
 }
 
+/**
+ * Section 5.1 step 5a (ADR-0015): the repo's `AGENTS.md` must hold the block `spoor init` writes for the project's
+ * memory mode, and `CLAUDE.md` must import it. When it does not, the agent is told to ask for `spoor init` and, for an
+ * exclusive project, gets the memory rule for this session. Read-only: a hook never edits committed files.
+ */
+export function agentsLines(ctx: Ctx, exclusive: boolean): string[] {
+  const agents = repoFileTarget(ctx.root, 'AGENTS.md')
+  const claude = repoFileTarget(ctx.root, 'CLAUDE.md')
+  const blockOk =
+    agents !== undefined && currentAgentsBlock(readText(agents) ?? '') === agentsMdBlock(exclusive)
+  const importOk =
+    claude !== undefined && (claude === agents || claudeMdImportsAgents(readText(claude) ?? ''))
+  if (blockOk && importOk) return []
+  const what = [
+    ...(blockOk ? [] : ['AGENTS.md has no current Spoor block']),
+    ...(importOk ? [] : ['CLAUDE.md does not import AGENTS.md']),
+  ].join(' and ')
+  return [
+    `Spoor: ${what}; ask the user to run spoor init.`,
+    ...(exclusive ? [`Spoor: until then: ${MEMORY_RULE}`] : []),
+  ]
+}
+
 function sessionNotice(
   ctx: Ctx,
   kind: 'unreachable' | 'rejected' | 'not_configured' | 'error',
@@ -194,6 +226,7 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
   const problem = authProblem(ctx)
   let main: string
   let answered = false
+  let agents: string[] = []
   if (problem) {
     logRun(ctx.root, problem, ctx.rt.now())
     main = sessionNotice(ctx, 'not_configured')
@@ -209,6 +242,8 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
     })
     if (r.kind === 'ok') {
       answered = true
+      // an older server sends no header: its projects are exclusive by default
+      agents = agentsLines(ctx, r.headers?.get(MEMORY_MODE_HEADER) !== 'shared')
       const text = typeof r.body === 'string' ? r.body : JSON.stringify(r.body)
       main = text.endsWith('\n') ? text.slice(0, -1) : text
       // 6. queue replay and mirror sweep in the time left (marked automatic: not the agent's own recording)
@@ -233,7 +268,7 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
         if (d) d.announced = true
       }
     })
-  const out = [...status, main].join('\n')
+  const out = [...status, ...agents, main].join('\n')
   return cutOutput(`${out}\n`)
 }
 

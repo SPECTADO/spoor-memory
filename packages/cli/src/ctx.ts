@@ -141,7 +141,7 @@ function warnPlainHttp(ctx: Ctx, server: string): void {
 }
 
 export type ApiResult<T> =
-  | { kind: 'ok'; status: number; body: T }
+  | { kind: 'ok'; status: number; body: T; headers?: Headers }
   | { kind: 'error'; status: number; code: string; message: string; body: Record<string, unknown> }
   | { kind: 'unauthorized'; status: 401 }
   | { kind: 'network'; code: string }
@@ -155,7 +155,7 @@ export async function api<T>(
 ): Promise<ApiResult<T>> {
   try {
     const r = await client.request<T>(method, path, opts)
-    if (r.ok) return { kind: 'ok', status: r.status, body: r.body }
+    if (r.ok) return { kind: 'ok', status: r.status, body: r.body, headers: r.headers }
     if (r.status === 401) return { kind: 'unauthorized', status: 401 }
     const b = (r.body && typeof r.body === 'object' ? r.body : {}) as Record<string, unknown>
     return {

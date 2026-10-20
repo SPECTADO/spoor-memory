@@ -16,6 +16,7 @@ const project: ProjectJson = {
     digest: { default_budget: 1500, decision_window_days: 30 },
     dedupe: { threshold: 0.92 },
     embedding: { provider: 'local' },
+    memory: { exclusive: true },
   },
   role: 'admin',
   can_edit_library: true,
@@ -96,5 +97,21 @@ describe('SettingsForm', () => {
     await userEvent.type(days, '10')
     await userEvent.click(screen.getByRole('button', { name: 'Save cleanup' }))
     expect(await screen.findByText('You are not a project admin.')).toBeInTheDocument()
+  })
+
+  it('saves the memory switch and sends only that setting', async () => {
+    const api = mockApi({ [patchPath]: [200, project] })
+    renderWithProviders(<SettingsForm project={project} />)
+    const save = screen.getByRole('button', { name: 'Save memory' })
+    expect(save).toBeDisabled()
+    const box = screen.getByLabelText("Spoor is the agents' only memory")
+    expect(box).toBeChecked()
+    await userEvent.click(box)
+    await userEvent.click(save)
+    await waitFor(() => expect(api.find('PATCH', '/api/v1/projects/acme')).toHaveLength(1))
+    expect(api.find('PATCH', '/api/v1/projects/acme')[0]?.body).toEqual({
+      settings: { memory: { exclusive: false } },
+    })
+    expect(await screen.findByText('Memory settings saved.')).toBeInTheDocument()
   })
 })

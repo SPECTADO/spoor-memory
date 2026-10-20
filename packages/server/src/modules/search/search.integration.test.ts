@@ -847,6 +847,7 @@ describe('REST', () => {
     })
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(res.headers.get('spoor-memory-mode')).toBe('exclusive')
     const text = await res.text()
     expect(text).toMatch(/^Spoor digest acme /)
     expect(text).toContain('@src/auth/')
@@ -863,6 +864,13 @@ describe('REST', () => {
     expect(body.budget).toBe(1500)
     expect(body.items).toEqual(['m1'])
     expect(body.est_tokens).toBeGreaterThanOrEqual(estimateTokens(body.text))
+    await db().execute(
+      sql`UPDATE projects SET settings = '{"memory":{"exclusive":false}}'::jsonb WHERE slug = 'acme'`,
+    )
+    const off = await app.request('/p/acme/api/context', {
+      headers: { authorization: `Bearer ${tok.secret}` },
+    })
+    expect(off.headers.get('spoor-memory-mode')).toBe('shared')
   })
 
   it('validates the context query and needs a token', async () => {

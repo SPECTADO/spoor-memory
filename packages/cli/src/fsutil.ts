@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -13,7 +14,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 
 export const spoorDir = (root: string) => join(root, '.spoor')
 
@@ -172,4 +173,16 @@ export function tryLock(
 
 export function fileExists(path: string): boolean {
   return existsSync(path)
+}
+
+/**
+ * Where to write a repo Markdown file: the file itself, or the target of a symlink when that stays inside the repo
+ * (so a `CLAUDE.md -> AGENTS.md` link survives); `undefined` for a link that leads out of the repo.
+ */
+export function repoFileTarget(root: string, name: string): string | undefined {
+  const path = join(root, name)
+  if (!existsSync(path)) return path
+  const real = realpathSync(path)
+  const rel = relative(realpathSync(root), real)
+  return rel.startsWith('..') || rel === '' ? undefined : real
 }

@@ -52,7 +52,7 @@ curl -s localhost:3000/healthz   # {"status":"ok",...} once migrations ran and t
    > Set up Spoor memory by following `https://spoor.example.com/p/acme/install.md`
 
    The page is public and secret-free. It tells the agent to install the CLI, run `spoor login` (you approve a code in the
-   browser; it ends with `spoor init`, which writes `.mcp.json`, the hooks and `.gitignore` entries), run `spoor adr import`
+   browser; it ends with `spoor init`, which writes `.mcp.json`, the hooks, `.gitignore` entries, the `AGENTS.md` block and `CLAUDE.md` import, and turns Claude Code auto-memory off for you), run `spoor adr import`
    and `spoor docs import` to bring existing ADRs and docs in, and finally ask you to restart Claude Code and approve the
    `spoor` MCP server.
 

@@ -101,7 +101,7 @@ treated as untrusted data either way; provenance helps the reader weigh it. Impo
 
 **Job**: Background work the server runs itself on a schedule, one holder at a time across containers (a database lease): `cleanup` (stale, archive, expire, plus a chunk consistency sweep), `embed-pending`, `reembed`, `purge-ephemeral`. A write can ask for a job to run soon; an **instance admin** can start one.
 
-**Install doc**: The public, secret-free page `/p/<slug>/install.md` (and its machine form `install.json`) that tells an agent how to set up one repository: install the CLI, `spoor login`, `spoor init`. It carries only the server URL, slug, version and the project's digest budget.
+**Install doc**: The public, secret-free page `/p/<slug>/install.md` (and its machine form `install.json`) that tells an agent how to set up one repository: install the CLI, `spoor login`, `spoor init`. It carries only the server URL, slug, version, the project's digest budget and its memory mode (ADR-0015).
 
 **Re-embed**: The job that rebuilds a project's vectors under a new **embedding model tag** after the provider or the default model changes; search keeps using the old model until one transaction switches the project over (see [docs/operations.md](docs/operations.md) §7).
 

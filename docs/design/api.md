@@ -325,6 +325,10 @@ keep the URL under 8 KB), `include_shared` (default true), `format=text|json` (d
   what `spoor_context` returns.
 - `json`: `{ "text": "…", "budget": 1500, "est_tokens": 1432, "items": ["ADR-0012","m42"], "dropped": 18 }`.
 
+Response header `Spoor-Memory-Mode: exclusive|shared` (the project's `memory.exclusive`, ADR-0015), in both formats; the SessionStart hook
+checks the repo's `AGENTS.md` block against it ([cli-and-hooks.md](cli-and-hooks.md) §5.1). The cookie twin (§4.1) shares the response code
+and sends the header too.
+
 Never bumps `last_used_at`. The hook asks for `budget=1500` unless the CLI config says otherwise.
 
 ### 7.2 Other bearer endpoints for the CLI
@@ -434,18 +438,18 @@ Audit `data` never contains secrets or bodies.
 
 Public, no cookie, no token. `200 text/markdown; charset=utf-8`, `Cache-Control: no-cache`. Rendered from a template
 with exactly these substitutions, all escaped: server URL (`SPOOR_PUBLIC_URL`), project slug, CLI version
-(the server's own version), the current default digest budget. No project name. It contains the placeholder `spr_…`
+(the server's own version), the current default digest budget, the memory mode (`memory.exclusive`, ADR-0015). No project name. It contains the placeholder `spr_…`
 only as the string `<paste token>`: no secret, no per-user data. Unknown slug and `_shared`: `404 text/plain`. Outline:
 [cli-and-hooks.md](cli-and-hooks.md) §9.
 
 ### 11.1a `GET /p/:slug/install.json` (**new**)
 
 Public, secret-free, same substitutions as install.md. `200 application/json`:
-`{ "version": "0.1.0", "server": "https://spoor.example.com", "project": "acme",
+`{ "version": "0.1.0", "server": "https://spoor.example.com", "project": "acme", "memory_exclusive": true,
    "mcp_json": { "mcpServers": { "spoor": { … } } }, "settings_json": { "permissions": { … }, "hooks": { … } },
    "gitignore": [".claude/settings.local.json", ".spoor/"] }`
 — exactly the blocks of [cli-and-hooks.md](cli-and-hooks.md) §7.1, §7.2 and §7.4 with the literal server URL, slug and
-version rendered in. `spoor init` (run by `spoor login`) merges them into the repo deterministically, so no agent has
+version rendered in. `memory_exclusive` (boolean) only picks the variant of the `AGENTS.md` block, whose text `spoor init` renders itself. `spoor init` (run by `spoor login`) merges them into the repo deterministically, so no agent has
 to reproduce JSON from a summarised web page.
 
 ### 11.2 `GET /healthz`

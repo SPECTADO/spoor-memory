@@ -1,8 +1,10 @@
-import { existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MEMORY_RULE } from '@spoor/shared'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readState, updateState } from './state.js'
 import {
+  agentsFiles,
   bodyOf,
   deadUrl,
   type FakeServer,
@@ -82,6 +84,7 @@ describe('hook session-start', () => {
     const repo = makeRepo({
       git: true,
       local: localEnv(srv.url),
+      agents: true,
       files: { 'src/a.ts': 'a', 'pnpm-lock.yaml': 'x' },
     })
     gitCommitAll(repo)
@@ -109,7 +112,8 @@ describe('hook session-start', () => {
         DIGEST,
     )
     const req = srv.requests.find((q) => q.path === '/p/acme/api/context')
-    expect(req?.query.getAll('file')).toEqual(['src/a.ts', 'src/new.ts'])
+    // working-tree changes first, then the last commit's files (AGENTS.md and CLAUDE.md came with it)
+    expect(req?.query.getAll('file')).toEqual(['src/a.ts', 'src/new.ts', 'AGENTS.md', 'CLAUDE.md'])
     expect(req?.query.get('budget')).toBeNull()
     expect(req?.headers.authorization).toBe('Bearer spr_testtoken123')
     expect(req?.headers['user-agent']).toMatch(/^spoor-cli\//)
@@ -201,6 +205,7 @@ describe('hook session-start', () => {
   it('replays the queue and sweeps changed mirror files after the digest', async () => {
     const repo = makeRepo({
       local: localEnv(srv.url),
+      agents: true,
       files: { 'docs/adr/0001-a.md': '# A\n', 'docs/adr/0002-b.md': '# B\n', 'ARCHITECTURE.md': '# Arch\n' },
     })
     srv.on('GET /p/acme/api/context', { text: DIGEST })
@@ -279,12 +284,48 @@ describe('hook session-start', () => {
   })
 
   it('cuts the output at a line boundary to 9,500 characters', async () => {
-    const repo = makeRepo({ local: localEnv(srv.url) })
+    const repo = makeRepo({ local: localEnv(srv.url), agents: true })
     const line = `${'x'.repeat(99)}\n`
     srv.on('GET /p/acme/api/context', { text: line.repeat(200) })
     const r = await hook('session-start', repo, { session_id: 's', source: 'startup' })
     expect(r.out.length).toBe(9500)
     expect(r.out.endsWith('\n')).toBe(true)
+  })
+})
+
+describe('hook session-start: the AGENTS.md check (ADR-0015)', () => {
+  const start = (repo: string) => hook('session-start', repo, { session_id: 's', source: 'startup' })
+  const NOTICE =
+    'Spoor: AGENTS.md has no current Spoor block and CLAUDE.md does not import AGENTS.md; ask the user to run spoor init.'
+
+  it('without the block: asks for spoor init and gives the memory rule for this session', async () => {
+    const repo = makeRepo({ local: localEnv(srv.url) })
+    srv.on('GET /p/acme/api/context', { text: DIGEST })
+    const r = await start(repo)
+    expect(r.out).toBe(`${NOTICE}\nSpoor: until then: ${MEMORY_RULE}\n${DIGEST}`)
+    expect(existsSync(join(repo, 'AGENTS.md'))).toBe(false)
+  })
+
+  it('a block of the other memory mode is out of date; a shared project gets no rule', async () => {
+    const repo = makeRepo({ local: localEnv(srv.url), agents: true })
+    srv.on('GET /p/acme/api/context', { text: DIGEST, headers: { 'Spoor-Memory-Mode': 'shared' } })
+    expect((await start(repo)).out).toBe(
+      `Spoor: AGENTS.md has no current Spoor block; ask the user to run spoor init.\n${DIGEST}`,
+    )
+    const ok = makeRepo({ local: localEnv(srv.url), agents: 'shared' })
+    expect((await start(ok)).out).toBe(DIGEST)
+  })
+
+  it('accepts CLAUDE.md linked to AGENTS.md, and says nothing when the digest did not load', async () => {
+    const repo = makeRepo({
+      local: localEnv(srv.url),
+      files: { 'AGENTS.md': agentsFiles()['AGENTS.md'] as string },
+    })
+    symlinkSync('AGENTS.md', join(repo, 'CLAUDE.md'))
+    srv.on('GET /p/acme/api/context', { text: DIGEST })
+    expect((await start(repo)).out).toBe(DIGEST)
+    const down = makeRepo({ local: localEnv(await deadUrl()) })
+    expect((await start(down)).out).toBe('Spoor: server unreachable, memory not loaded this session.\n')
   })
 })
 

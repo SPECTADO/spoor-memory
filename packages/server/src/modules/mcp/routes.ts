@@ -23,6 +23,7 @@ import { ApiError, apiErrorResponse, errorResponse, loggableError } from '../../
 import { JSON_BODY_LIMIT } from '../../lib/validate.js'
 import type { AppEnv } from '../../types.js'
 import { bearerAuth, requireBearer } from '../auth/index.js'
+import { resolveSettings } from '../projects/index.js'
 import { buildAuthExtra, type McpServices } from './handlers.js'
 import { buildMcpServer } from './server.js'
 import type { McpSession, SessionStore } from './sessions.js'
@@ -97,6 +98,16 @@ function sharedProjectIdLookup(deps: ServerDeps) {
     cached = row?.id ?? null
     return cached
   }
+}
+
+/** The project's `memory.exclusive` setting, read when a session starts (ADR-0015). */
+async function memoryExclusive(deps: ServerDeps, projectId: string): Promise<boolean> {
+  const [row] = await deps.db
+    .select({ settings: projects.settings })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1)
+  return resolveSettings(row?.settings).memory.exclusive
 }
 
 /** A request id and logger even when mounted outside app.ts's middleware (tests). */
@@ -180,7 +191,7 @@ export function mcpRoutes(deps: ServerDeps, { store, services }: McpRouteOptions
     }
 
     // a new session: its own server, with the tools of the role at initialize
-    const mcp = buildMcpServer(services, auth.role)
+    const mcp = buildMcpServer(services, auth.role, await memoryExclusive(deps, auth.project.id))
     let session: McpSession | undefined
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),

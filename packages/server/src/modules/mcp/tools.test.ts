@@ -5,12 +5,19 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { estimateTokens } from '@spoor/shared'
+import { estimateTokens, MEMORY_RULE } from '@spoor/shared'
 import { pino } from 'pino'
 import { describe, expect, it } from 'vitest'
 import type { McpServices } from './handlers.js'
 import { buildMcpServer, toolsFor } from './server.js'
-import { INSTRUCTIONS, READ_ONLY_INSTRUCTIONS, READ_TOOLS, TOOL_SPECS, WRITE_TOOLS } from './tools.js'
+import {
+  INSTRUCTIONS,
+  instructionsFor,
+  READ_ONLY_INSTRUCTIONS,
+  READ_TOOLS,
+  TOOL_SPECS,
+  WRITE_TOOLS,
+} from './tools.js'
 
 const services = { logger: pino({ level: 'silent' }) } as unknown as McpServices
 
@@ -45,7 +52,7 @@ describe('tools/list', () => {
 
   it('gives viewers the three read tools only, and instructions without the recording sentence (A4)', async () => {
     const { list, instructions } = await listTools('viewer')
-    expect(instructions).toBe(READ_ONLY_INSTRUCTIONS)
+    expect(instructions).toBe(instructionsFor(false, true))
     expect(instructions).not.toContain('spoor_remember')
     expect(instructions).toContain('This token is read-only')
     expect(list.tools.map((t) => t.name).sort()).toEqual([...READ_TOOLS].sort())
@@ -58,7 +65,7 @@ describe('tools/list', () => {
     const tool = (n: string) => list.tools.find((t) => t.name === n) as (typeof list.tools)[number]
     const props = (n: string) => tool(n).inputSchema.properties as Record<string, Record<string, unknown>>
 
-    expect(instructions).toBe(INSTRUCTIONS)
+    expect(instructions).toBe(instructionsFor(true, true))
     expect(tool('spoor_context').annotations?.readOnlyHint).toBe(true)
     expect(tool('spoor_verify').annotations?.idempotentHint).toBe(true)
     expect(tool('spoor_search').inputSchema.required).toEqual(['query'])
@@ -113,5 +120,15 @@ describe('instructions', () => {
     expect(READ_ONLY_INSTRUCTIONS).not.toBe(INSTRUCTIONS)
     expect(READ_ONLY_INSTRUCTIONS).toContain('L = library')
     console.info(`instructions: ${estimateTokens(INSTRUCTIONS)} estimated tokens`)
+  })
+
+  it('carry the memory rule as the second sentence only when memory.exclusive is on (ADR-0015)', () => {
+    expect(instructionsFor(true, false)).toBe(INSTRUCTIONS)
+    expect(instructionsFor(false, false)).toBe(READ_ONLY_INSTRUCTIONS)
+    const writer = instructionsFor(true, true)
+    expect(writer.startsWith(`Spoor is this project's shared team memory. ${MEMORY_RULE} If a`)).toBe(true)
+    expect(instructionsFor(false, true)).toContain(MEMORY_RULE)
+    expect(instructionsFor(false, true)).toContain('This token is read-only')
+    console.info(`instructions (exclusive): ${estimateTokens(writer)} estimated tokens`)
   })
 })

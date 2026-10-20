@@ -10,6 +10,7 @@
 - Commit only when the owner asks.
 
 ## Now
+- Exclusive memory (ADR-0015, BRIEF amendment 2026-10-20) built 2026-10-20, uncommitted: setting `memory.exclusive` (default on) → MCP instructions rule, `spoor init` writes AGENTS.md block + CLAUDE.md `@AGENTS.md` + `autoMemoryEnabled:false` in settings.local.json, SessionStart notice + rule when the block is stale. Owner picked every recommended option except the hook check (notice + inject rule).
 - Library space (ADR-0014, BRIEF amendment 2026-10-20) built 2026-10-20 by ultracode workflows: fourth space `library`, handle L<n>, human-only writes (IA/PA/`library_editor` flag), digest tier 0, no mirror. Owner chose: outgoing links from library pages allowed, capture/takeover blocked, conflicts_with refused. Uncommitted until the owner asks. Known limit: an agent driving a logged-in browser session is indistinguishable from the human (same as shared).
 - Parallel integration tests: one `_test` database per agent on the test container (`docker exec spoor-test-db psql -U spoor -d spoor_test -c "CREATE DATABASE spoor_x_test"`, then DATABASE_URL=…/spoor_x_test); the harness truncates tables, so never share one.
 - Build complete 2026-10-20 (phases 1–5, all DoD items met locally; see docs/design/dod-status.md). Pushed to github.com/SPECTADO/spoor-memory (public since 2026-10-20; npm provenance needs public); first CI run green 2026-10-20.

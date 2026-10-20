@@ -53,6 +53,7 @@ const project = (role: string) => ({
     digest: { default_budget: 1500, decision_window_days: 30 },
     dedupe: { threshold: 0.92 },
     embedding: { provider: 'local' },
+    memory: { exclusive: true },
   },
   role,
   embedding: { model: 'x', target: null, remaining: 0 },

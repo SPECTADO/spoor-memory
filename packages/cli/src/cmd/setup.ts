@@ -1,5 +1,5 @@
 /** `spoor init` and `spoor login` (cli-and-hooks.md sections 4.1, 4.9, 7; auth-and-security.md section 6). */
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   checkInstallBlockValues,
@@ -7,11 +7,13 @@ import {
   INSTALL_VERSION_RE,
   type InstallBlockValues,
   mcpJsonBlock,
+  mergeAgentsMd,
+  mergeClaudeMd,
   settingsJsonBlock,
 } from '@spoor/shared'
 import { normalizeServer } from '../config.js'
 import { api, type Ctx, clientFor, USER_AGENT, VERSION } from '../ctx.js'
-import { InvalidJsonFile, readJsonObject, readText, writeAtomic } from '../fsutil.js'
+import { InvalidJsonFile, readJsonObject, readText, repoFileTarget, writeAtomic } from '../fsutil.js'
 import { git, gitPrefix, gitTopLevel, isTracked } from '../git.js'
 import {
   ignoreLinesAt,
@@ -40,6 +42,11 @@ function installVersion(v: unknown, slug: string): string | undefined {
   if (!isObj(v)) return undefined
   if (v.project !== undefined && v.project !== slug) return undefined
   return typeof v.version === 'string' && INSTALL_VERSION_RE.test(v.version) ? v.version : undefined
+}
+
+/** install.json `memory_exclusive`: only an explicit `false` turns the rule off (an older server sends nothing). */
+function installExclusive(v: unknown): boolean {
+  return !(isObj(v) && v.memory_exclusive === false)
 }
 
 interface PlannedWrite {
@@ -76,7 +83,8 @@ function applyWrites(ctx: Ctx, writes: PlannedWrite[], dryRun: boolean | undefin
       continue
     }
     if (dryRun) {
-      ctx.rt.out(lineDiff(w.rel, w.before, w.after))
+      // settings.local.json holds the token: the diff shows only its prefix
+      ctx.rt.out(lineDiff(w.rel, w.before, w.after).replace(/\b(sprs?_[A-Za-z0-9]{4})[A-Za-z0-9_-]+/g, '$1…'))
       continue
     }
     writeAtomic(w.path, w.after, w.mode)
@@ -85,7 +93,8 @@ function applyWrites(ctx: Ctx, writes: PlannedWrite[], dryRun: boolean | undefin
 }
 
 /**
- * `spoor init`: fetch the public install.json and merge `.mcp.json`, `.claude/settings.json` and `.gitignore`.
+ * `spoor init`: fetch the public install.json and merge `.mcp.json`, `.claude/settings.json`, `.gitignore`, the
+ * `AGENTS.md` block, the `CLAUDE.md` import and (logged-in users) `autoMemoryEnabled` in `settings.local.json`.
  * Every file is read and merged first; invalid JSON anywhere aborts with exit 1 before anything is written.
  */
 export async function cmdInit(ctx: Ctx, o: { dryRun?: boolean }): Promise<number> {
@@ -157,8 +166,61 @@ export async function cmdInit(ctx: Ctx, o: { dryRun?: boolean }): Promise<number
     before: giBefore,
     after: mergeGitignore(giBefore, ignoreLinesAt(GITIGNORE_LINES, gi.prefix)),
   })
+  const exclusive = installExclusive(r.body)
+  writes.push(...agentsWrites(ctx, exclusive))
+  const local = await autoMemoryWrite(ctx, exclusive)
+  if (local === 'invalid') return 1
+  if (local) writes.push(local)
   applyWrites(ctx, writes, o.dryRun)
   return 0
+}
+
+/**
+ * The Spoor block in `AGENTS.md` and the `@AGENTS.md` import in `CLAUDE.md` (ADR-0015). A symlink is written through
+ * when it stays in the repo; `CLAUDE.md` linked to `AGENTS.md` needs no import.
+ */
+function agentsWrites(ctx: Ctx, exclusive: boolean): PlannedWrite[] {
+  const writes: PlannedWrite[] = []
+  const agents = repoFileTarget(ctx.root, 'AGENTS.md')
+  if (!agents) ctx.rt.err('spoor: AGENTS.md links outside the repo; not written\n')
+  else {
+    const before = readText(agents) ?? ''
+    writes.push({ path: agents, rel: 'AGENTS.md', before, after: mergeAgentsMd(before, exclusive) })
+  }
+  const claude = repoFileTarget(ctx.root, 'CLAUDE.md')
+  if (!claude) ctx.rt.err('spoor: CLAUDE.md links outside the repo; not written\n')
+  else if (claude !== agents) {
+    const before = readText(claude) ?? ''
+    writes.push({ path: claude, rel: 'CLAUDE.md', before, after: mergeClaudeMd(before) })
+  }
+  return writes
+}
+
+/**
+ * `autoMemoryEnabled: false` in this user's `.claude/settings.local.json` when the project is exclusive (ADR-0015).
+ * Only a logged-in user has that file; a tracked one is never touched (login refuses it for the same reason). When the
+ * project is not exclusive the key is left alone, with a hint if it is still off.
+ */
+async function autoMemoryWrite(ctx: Ctx, exclusive: boolean): Promise<PlannedWrite | 'invalid' | undefined> {
+  const path = join(ctx.root, '.claude', 'settings.local.json')
+  if (!existsSync(path) || (await isTracked(ctx.root, '.claude/settings.local.json'))) return undefined
+  let local: Obj
+  try {
+    local = readJsonObject(path)
+  } catch (e) {
+    ctx.rt.err(`spoor: ${(e as Error).message}\n`)
+    return 'invalid'
+  }
+  if (!exclusive) {
+    if (local.autoMemoryEnabled === false)
+      ctx.rt.out(
+        'note: autoMemoryEnabled is false in .claude/settings.local.json; remove it to use Claude Code auto-memory again\n',
+      )
+    return undefined
+  }
+  const before = readText(path) ?? ''
+  const after = local.autoMemoryEnabled === false ? before : jsonOut({ ...local, autoMemoryEnabled: false })
+  return { path, rel: '.claude/settings.local.json', before, after, mode: 0o600 }
 }
 
 /** Keep the existing text when it already parses to the same value (no reformatting churn). */

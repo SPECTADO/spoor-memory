@@ -4,7 +4,7 @@
  * - bearer (`/p/:slug/api`): `GET /context` for the SessionStart hook.
  * None of them bumps `last_used_at`.
  */
-import { ANCHOR_MAX_LENGTH, spaces } from '@spoor/shared'
+import { ANCHOR_MAX_LENGTH, MEMORY_MODE_HEADER, spaces } from '@spoor/shared'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -60,6 +60,8 @@ async function contextResponse(c: Context<AppEnv>, services: SearchRouteServices
     includeShared: q.include_shared,
   })
   c.header('Cache-Control', 'no-store')
+  // the SessionStart hook checks the repo's AGENTS.md block against it (cli-and-hooks.md section 5.1, ADR-0015)
+  c.header(MEMORY_MODE_HEADER, res.memoryExclusive ? 'exclusive' : 'shared')
   if (q.format === 'json') {
     return c.json({
       text: res.text,

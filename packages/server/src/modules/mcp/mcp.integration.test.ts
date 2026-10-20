@@ -5,6 +5,7 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { MEMORY_RULE } from '@spoor/shared'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { pino } from 'pino'
@@ -296,6 +297,18 @@ describe('sessions (mcp.md section 3)', () => {
     })
     expect(client.getInstructions()).toContain('Spoor is this project')
     expect(s.mcp.sessions.get(transport.sessionId as string)?.client).toBe('claude-code/9.9')
+  })
+
+  it('adds the memory rule while memory.exclusive is on, read when a session starts (ADR-0015)', async () => {
+    const s = await setup()
+    const on = await s.connect(s.tokens.editor.secret)
+    expect(on.client.getInstructions()).toContain(MEMORY_RULE)
+    await db().execute(
+      sql`UPDATE projects SET settings = '{"memory":{"exclusive":false}}'::jsonb WHERE id = ${s.project.id}`,
+    )
+    const off = await s.connect(s.tokens.editor.secret)
+    expect(off.client.getInstructions()).not.toContain(MEMORY_RULE)
+    expect(off.client.getInstructions()).toContain('Spoor is this project')
   })
 })
 

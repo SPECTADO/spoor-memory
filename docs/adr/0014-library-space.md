@@ -1,3 +1,6 @@
+---
+spoor_id: b1dd9d82-90fa-42f2-aa12-be6e1e7db155
+---
 # ADR-0014: Library space: per-project pages written only by humans
 
 - **Status:** Accepted
