@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { FrontmatterError } from '@spoor/shared'
+import { type FrontmatterError, splitFrontmatter } from '@spoor/shared'
 import { describe, expect, it } from 'vitest'
 import {
   canonicalFrontmatter,
@@ -91,10 +91,18 @@ describe('ADR file conventions', () => {
     expect(statusFromSection('- __Status:__ Deprecated\n')).toMatchObject({ status: 'deprecated' })
     expect(statusFromSection('Status: Deprecated\n')).toMatchObject({ status: 'deprecated' })
     expect(statusFromSection('## **Status**\n\nAccepted\n')).toMatchObject({ status: 'accepted' })
-    // every ADR of this repository parses to the status its header says
+    // every ADR of this repository parses to the status its header says; one drafted by `spoor adr draft`
+    // carries status and date in its frontmatter instead (ADR-0016), which must then be valid
     const dir = join(dirname(fileURLToPath(import.meta.url)), '../../../../../docs/adr')
     for (const f of readdirSync(dir).filter((n) => /^\d{4}-.*\.md$/.test(n))) {
-      const text = readFileSync(join(dir, f), 'utf8')
+      const { data, body: text } = splitFrontmatter(readFileSync(join(dir, f), 'utf8'))
+      if (data.status !== undefined) {
+        expect(validateFrontmatter('decisions', data), f).toMatchObject({
+          status: expect.any(String),
+          date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        })
+        continue
+      }
       const said = /^- \*\*Status:\*\* (\w+)/m.exec(text)?.[1]?.toLowerCase()
       expect(said, f).toBeDefined()
       expect(statusFromSection(text)?.status, f).toBe(said)
