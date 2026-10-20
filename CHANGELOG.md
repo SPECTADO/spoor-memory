@@ -2,7 +2,7 @@
 
 All notable changes. Format after Keep a Changelog; versions follow semver.
 
-## [0.1.0] - 2026-10-19 (unreleased until tagged)
+## [0.1.0] - 2026-10-20
 
 First release. Scope is BRIEF.md (MVP) with its 2026-10-19 amendments; evidence per Definition-of-done item is in
 [docs/design/dod-status.md](docs/design/dod-status.md).
