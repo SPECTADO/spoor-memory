@@ -245,7 +245,9 @@ git tag "v$v" && git push origin main "v$v"
 | `NPM_TOKEN` | `release.yml` job `npm` | an npm granular access token with read and write on the `spoor-memory` package (for the first publish: on all packages of the account, then narrow it), no IP allow-list (GitHub runners). Exposed only to the publish step as `NODE_AUTH_TOKEN` |
 | `GITHUB_TOKEN` | jobs `image` (GHCR push) | automatic; the workflow asks for `packages: write` itself. Nothing to create |
 
-No other secret is used: provenance signs through the workflow's OIDC token (`id-token: write`), and `package.json` gets its
+No other secret is used: provenance signs through the workflow's OIDC token (`id-token: write`); npm accepts provenance only
+from a **public** source repository (a private repository fails with `E422 Unsupported GitHub Actions source repository visibility`;
+re-run the failed job after making the repository public, or publish without `--provenance`), and `package.json` gets its
 `repository` URL from the GitHub repository at publish time (npm rejects provenance when they differ). After the first image push,
 set the GHCR package's visibility to public once (Packages, spoor-memory, Package settings); GHCR creates it private. If the
 repository is renamed or forked, both the image name and the npm `repository` follow `github.repository`.
