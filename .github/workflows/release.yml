@@ -58,7 +58,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm, registry-url: "https://registry.npmjs.org" }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter spoor-memory build
+      - run: pnpm --filter "spoor-memory..." build # the CLI plus its workspace dependency @spoor/shared (fresh checkout has no dist)
       - name: Point package.json at this repository (npm provenance requires a matching repository.url)
         working-directory: packages/cli
         run: |
