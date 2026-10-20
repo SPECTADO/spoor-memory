@@ -87,6 +87,20 @@ export async function ensureExtensions(opts: MigrateOptions, client?: pg.Client)
   }
 }
 
+/** "already exists, skipping" from drizzle's own `CREATE … IF NOT EXISTS` on every start: not worth a log line. */
+const SKIP_NOTICE_CODES = new Set(['42P06', '42P07'])
+
+/**
+ * Forwards a migration's `RAISE NOTICE` to the startup log (operations.md: migration 0004 reports its slug
+ * backfill this way). pg drops notices that have no listener.
+ */
+export function migrationNoticeLogger(log: (msg: string) => void) {
+  return (n: { message?: string; code?: string }) => {
+    if (n.code && SKIP_NOTICE_CODES.has(n.code)) return
+    log(`migration notice: ${n.message ?? ''}`)
+  }
+}
+
 /**
  * Startup migration (deployment.md section 4 step 4): extensions via DATABASE_MIGRATE_URL, then drizzle
  * `migrate()` as the DATABASE_URL role on ONE dedicated client holding a session advisory lock (a lock taken
@@ -97,6 +111,7 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
   await ensureExtensions(opts)
   log('extensions ok')
   const client = await connectWithRetry(opts.databaseUrl, 30, 2000, log)
+  client.on('notice', migrationNoticeLogger(log))
   try {
     await client.query("SELECT pg_advisory_lock(hashtext('spoor-migrate'))")
     try {

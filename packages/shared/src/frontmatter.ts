@@ -79,18 +79,23 @@ export const decisionFrontmatter = z.looseObject({
 
 export const docFrontmatter = z.looseObject({ ...commonFrontmatterShape })
 
-export const spaces = ['memories', 'decisions', 'docs'] as const
+/** Library pages: human-approved guides (ADR-0014). The doc shape; `status` is always `active`. */
+export const libraryFrontmatter = z.looseObject({ ...commonFrontmatterShape })
+
+export const spaces = ['memories', 'decisions', 'docs', 'library'] as const
 export type Space = (typeof spaces)[number]
 
 export const frontmatterSchemas = {
   memories: memoryFrontmatter,
   decisions: decisionFrontmatter,
   docs: docFrontmatter,
+  library: libraryFrontmatter,
 } as const
 
 export type MemoryFrontmatter = z.infer<typeof memoryFrontmatter>
 export type DecisionFrontmatter = z.infer<typeof decisionFrontmatter>
 export type DocFrontmatter = z.infer<typeof docFrontmatter>
+export type LibraryFrontmatter = z.infer<typeof libraryFrontmatter>
 
 // ---- which keys are columns (the one known-key table, data-model.md section 5) ---------------------------
 
@@ -109,13 +114,14 @@ export const COMMON_KEYS = [
 
 /**
  * Space-specific known keys. `status` is known in every space: an input for decisions, output only for
- * memories and docs (written by export and `spoor_get`, never stored as an extra). `deciders` is validated
- * by the schema but stored as an extra.
+ * memories, docs and library (written by export and `spoor_get`, never stored as an extra). `deciders` is
+ * validated by the schema but stored as an extra.
  */
 export const SPACE_KEYS: Record<Space, readonly string[]> = {
   memories: ['type', 'confidence', 'status', 'expires'],
   decisions: ['adr', 'status', 'date', 'drafted_from'],
   docs: ['status'],
+  library: ['status'],
 }
 
 export function knownKeys(space: Space): Set<string> {

@@ -87,6 +87,7 @@ describe('tools/list', () => {
     expect(props('spoor_relate').kind).toMatchObject({
       enum: ['refines', 'supports', 'depends_on', 'conflicts_with'],
     })
+    expect(props('spoor_search').space).toMatchObject({ enum: ['memories', 'decisions', 'docs', 'library'] })
   })
 })
 
@@ -95,5 +96,22 @@ describe('tool descriptions', () => {
     for (const [name, spec] of Object.entries(TOOL_SPECS)) {
       expect(spec.description.split(/\s+/).length, name).toBeLessThanOrEqual(35)
     }
+  })
+
+  it('name the library space and the L handle', () => {
+    expect(TOOL_SPECS.spoor_context.description).toContain('library, pinned items')
+    expect(TOOL_SPECS.spoor_search.description).toContain('memories, ADRs, docs and library')
+    expect(TOOL_SPECS.spoor_get.description).toContain('L3')
+  })
+})
+
+describe('instructions', () => {
+  it('explain the L handle and keep the sentence the read-only variant replaces', () => {
+    expect(INSTRUCTIONS).toContain(
+      'Ids are handles like m42, ADR-0007, d3, L3; L = library: human-approved project guides, follow them (read-only);',
+    )
+    expect(READ_ONLY_INSTRUCTIONS).not.toBe(INSTRUCTIONS)
+    expect(READ_ONLY_INSTRUCTIONS).toContain('L = library')
+    console.info(`instructions: ${estimateTokens(INSTRUCTIONS)} estimated tokens`)
   })
 })

@@ -3,7 +3,7 @@
  * (`q_title`), optionally over the shared space (`S:` targets), as a radio group. A handle typed into the
  * filter (`m42`, `ADR-0007`, `S:d3`) can be used directly.
  */
-import { parseHandle } from '@spoor/shared'
+import { HANDLE_KIND_SPACE, parseHandle } from '@spoor/shared'
 import { useId, useState } from 'react'
 import { flattenPages, useItems } from '../../api/hooks'
 import type { ItemSummary, Space } from '../../api/types'
@@ -15,6 +15,8 @@ export interface PickedTarget {
   /** What to send as `to` / `new_id`: a handle, `S:`-prefixed for a shared item. */
   ref: string
   label: string
+  /** Space of the target when known (a picked row, or a typed handle). */
+  space?: Space
 }
 
 export function ItemPicker({
@@ -68,7 +70,15 @@ export function ItemPicker({
           onChange={(e) => {
             setQ(e.target.value)
             const h = parseHandle(e.target.value.trim())
-            onChange(h ? { ref: e.target.value.trim(), label: e.target.value.trim() } : null)
+            onChange(
+              h
+                ? {
+                    ref: e.target.value.trim(),
+                    label: e.target.value.trim(),
+                    space: HANDLE_KIND_SPACE[h.kind],
+                  }
+                : null,
+            )
           }}
           autoComplete="off"
           spellCheck={false}
@@ -105,7 +115,7 @@ export function ItemPicker({
                   name={name}
                   className="mt-1 accent-[var(--c-accent)]"
                   checked={value?.ref === ref}
-                  onChange={() => onChange({ ref, label: `${ref} ${r.title}` })}
+                  onChange={() => onChange({ ref, label: `${ref} ${r.title}`, space: r.space })}
                 />
                 <label htmlFor={id} className="min-w-0 flex-1">
                   <span className="font-mono text-xs">{shared ? `S:${handleText(r)}` : handleText(r)}</span>{' '}

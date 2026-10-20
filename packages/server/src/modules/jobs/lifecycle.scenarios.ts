@@ -4,11 +4,11 @@
  * expected transition, so the two implementations cannot drift apart. Times are days relative to "now";
  * no scenario sits within ~15 minutes of a boundary (exact boundaries are unit-tested separately).
  */
-import { SETTINGS_DEFAULTS } from '@spoor/shared'
+import { SETTINGS_DEFAULTS, type Space } from '@spoor/shared'
 import { type CleanupSettings, type CleanupTransition, DAY_MS, type LifecycleState } from './lifecycle.js'
 
 export interface ScenarioItem {
-  space?: 'memories' | 'decisions' | 'docs'
+  space?: Space
   type?: 'decision' | 'fact' | 'procedure' | 'observation'
   status?: string
   lifecycle?: 'active' | 'stale' | 'archived'
@@ -76,6 +76,7 @@ export const SCENARIOS: Scenario[] = [
     item: { ...old, space: 'decisions', status: 'accepted' },
     expect: null,
   },
+  { name: 'library never goes stale, archives or expires', item: { ...old, space: 'library' }, expect: null },
   { name: 'docs never auto-expire', item: { ...old, space: 'docs' }, expect: null },
   {
     name: 'per-project stale_days (7) applies',

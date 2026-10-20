@@ -36,14 +36,18 @@ function RelationForm({ slug, item, onDone }: { slug: string; item: ItemJson; on
   const add = useAddEdge(slug)
   const [kind, setKind] = useState<RelationKind>('refines')
   const [target, setTarget] = useState<PickedTarget | null>(null)
+  // conflicts_with is refused between a library page and anything else: hide it when either side is one
+  const involvesLibrary = item.space === 'library' || target?.space === 'library'
+  const kinds = involvesLibrary ? RELATION_KINDS.filter((k) => k !== 'conflicts_with') : RELATION_KINDS
+  const effectiveKind: RelationKind = kinds.includes(kind) ? kind : 'refines'
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!target) return
     add.mutate(
-      { ref: item.handle, kind, to: target.ref },
+      { ref: item.handle, kind: effectiveKind, to: target.ref },
       {
         onSuccess: () => {
-          toast.success(`${item.handle} ${RELATION_LABEL[kind]} ${target.ref}`)
+          toast.success(`${item.handle} ${RELATION_LABEL[effectiveKind]} ${target.ref}`)
           onDone()
         },
       },
@@ -53,8 +57,8 @@ function RelationForm({ slug, item, onDone }: { slug: string; item: ItemJson; on
     <form onSubmit={submit} className="space-y-4">
       <Select
         label="Kind"
-        value={kind}
-        options={RELATION_KINDS.map((k) => ({ value: k, label: RELATION_LABEL[k] }))}
+        value={effectiveKind}
+        options={kinds.map((k) => ({ value: k, label: RELATION_LABEL[k] }))}
         onChange={(e) => setKind(e.target.value as RelationKind)}
       />
       <ItemPicker

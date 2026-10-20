@@ -22,6 +22,20 @@
       "when": 1792423745779,
       "tag": "0002_triggers_and_hnsw",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792491021294,
+      "tag": "0003_library_space",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792491039111,
+      "tag": "0004_library_guards",
+      "breakpoints": true
     }
   ]
 }

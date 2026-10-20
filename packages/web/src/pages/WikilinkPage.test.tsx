@@ -38,6 +38,27 @@ describe('WikilinkPage', () => {
     )
   })
 
+  it('a link from a library page offers "Create library page" to holders of the library right only', async () => {
+    const m = mockApi({
+      ...base('viewer'),
+      'GET /api/v1/projects/acme': [200, projectFixture('acme', 'viewer', { can_edit_library: true })],
+      'GET /api/v1/projects/acme/resolve': apiError(404, 'not_found'),
+    })
+    renderApp('/projects/acme/w/house-rules?from=library')
+    expect(await screen.findByRole('link', { name: 'Create library page' })).toHaveAttribute(
+      'href',
+      '/projects/acme/library/new?title=house-rules',
+    )
+    expect(m.find('GET', '/api/v1/projects/acme/resolve')[0]?.url.searchParams.get('from')).toBe('library')
+  })
+
+  it('a link from a library page offers nothing to an editor without the library right', async () => {
+    mockApi({ ...base('editor'), 'GET /api/v1/projects/acme/resolve': apiError(404, 'not_found') })
+    renderApp('/projects/acme/w/house-rules?from=library')
+    expect(await screen.findByText(/No item called/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Create/ })).toBeNull()
+  })
+
   it('shows no create action to viewers', async () => {
     mockApi({ ...base('viewer'), 'GET /api/v1/projects/acme/resolve': apiError(404, 'not_found') })
     renderApp('/projects/acme/w/session-store')

@@ -7,6 +7,7 @@ import {
   cleanLine,
   codePointLength,
   ITEM_LIMITS,
+  isHumanOnlySpace,
   isReservedSlugShape,
   itemSlug,
   SLUG_MAX,
@@ -19,7 +20,7 @@ import {
 import { and, eq, inArray, ne, or, sql } from 'drizzle-orm'
 import { edges, itemRevisions, items, projects, type VIAS } from '../../db/schema.js'
 import { type AuthContext, actorLabel } from '../../lib/auth-context.js'
-import { type DbOrTx, escapeLike, type Tx } from '../../lib/db.js'
+import { type DbOrTx, escapeLike, pgError, type Tx } from '../../lib/db.js'
 import { ApiError, type ErrorExtra } from '../../lib/errors.js'
 import type { Space } from '../../ports.js'
 import type { EdgeActor } from './links.js'
@@ -33,6 +34,12 @@ export interface Caller {
   ctx: AuthContext
   via: WriteVia
   project: ProjectRef
+  /**
+   * The web caller's rights in this project (`item.write`, `library.write` of the permission matrix). Only
+   * the cookie routes set it; MCP, the CLI and the mirror never do, so every human-only write is denied
+   * to them by default.
+   */
+  rights?: { item: boolean; library: boolean }
 }
 
 export interface Actor extends EdgeActor {
@@ -53,20 +60,69 @@ export function actorOf(caller: Caller): Actor {
 /** `agent` after an MCP content write; `human` after a web write or a CLI push (a reviewed repo file). */
 export const provenanceOf = (via: WriteVia): 'human' | 'agent' => (via === 'mcp' ? 'agent' : 'human')
 
-export const readOnlySpace = () =>
-  new ApiError('read_only_space', {
-    message: 'The shared space is read-only here.',
-    hint: 'Shared items are edited by humans in the web UI.',
-  })
+/** Where a write needs a human in the web UI: the shared project, or a human-only space (the library). */
+export type HumanOnlyZone = 'shared' | 'library'
+
+/** THE rule: which writes need a human in the web UI. `_shared` wins over the space. */
+export function humanOnlyZone(kind: 'project' | 'shared', space?: Space): HumanOnlyZone | null {
+  if (kind === 'shared') return 'shared'
+  return space !== undefined && isHumanOnlySpace(space) ? 'library' : null
+}
+
+export const readOnlySpace = (zone: HumanOnlyZone = 'shared') =>
+  zone === 'library'
+    ? new ApiError('read_only_space', {
+        message: 'Library pages are read-only here.',
+        hint: 'Library pages are edited by humans with the library right in the web UI.',
+      })
+    : new ApiError('read_only_space', {
+        message: 'The shared space is read-only here.',
+        hint: 'Shared items are edited by humans in the web UI.',
+      })
 
 /**
- * Shared-space write rule (ADR-0005): only humans in the web UI with the instance-admin or shared-editor
- * right. Routes check the permission matrix first; this is the service-side backstop for every path.
+ * The human-only write rule (ADR-0005 shared space, ADR-0014 library). Routes check the permission matrix
+ * first; this is the service-side backstop for every path.
+ *
+ * - `space` unknown (the entry checks before a ref is resolved): only the shared-space rule, as it always
+ *   was. It never runs the item-right check, because a flagged viewer may still be headed for a library page.
+ * - `space` known (after resolve, on create and insert): the full rule. `_shared` needs a web user who is
+ *   instance admin or shared editor; a library page needs a web caller holding `library.write`; any other
+ *   item refuses a web caller without `item.write` (a viewer holding only the library flag) with `forbidden`.
  */
-export function assertWritable(caller: Caller): void {
-  if (caller.project.kind !== 'shared') return
-  const u = caller.ctx.user
-  if (caller.via !== 'web' || !u || !(u.isAdmin || u.sharedEditor)) throw readOnlySpace()
+export function assertWritable(caller: Caller, space?: Space): void {
+  const zone = humanOnlyZone(caller.project.kind, space)
+  if (zone === 'shared') {
+    const u = caller.ctx.user
+    if (caller.via !== 'web' || !u || !(u.isAdmin || u.sharedEditor)) throw readOnlySpace('shared')
+    return
+  }
+  if (space === undefined) return
+  if (zone === 'library') {
+    if (caller.via !== 'web' || !caller.ctx.user || caller.rights?.library !== true)
+      throw readOnlySpace('library')
+    return
+  }
+  if (caller.via === 'web' && caller.rights && !caller.rights.item) {
+    throw new ApiError('forbidden', { message: 'You may not do this here.' })
+  }
+}
+
+/**
+ * The library database guards (migration 0004) as API errors: SPL01 (an edge kind or direction a library
+ * page refuses) is `wrong_space`, SPL02 (a library revision written through MCP or the CLI) is
+ * `read_only_space`. Anything else is returned unchanged for the caller to rethrow.
+ */
+export function libraryGuardError(err: unknown): unknown {
+  const code = pgError(err)?.code
+  if (code === 'SPL01') {
+    return new ApiError('wrong_space', {
+      message: 'A library page cannot be linked this way.',
+      hint: 'conflicts_with never joins a library page and another item; supersedes and drafted_from never point at a library page.',
+    })
+  }
+  if (code === 'SPL02') return readOnlySpace('library')
+  return err
 }
 
 export function invalid(path: string, message: string, extra: ErrorExtra = {}): ApiError {
@@ -395,20 +451,25 @@ export async function writeContent(
       details: { current_revision: current.revision },
     })
   }
-  await tx.insert(itemRevisions).values({
-    itemId: item.id,
-    revision: row.revision,
-    title: f.title,
-    body: f.body,
-    status: f.status,
-    frontmatter: snapshotOf(item, f),
-    change: args.change,
-    actorUserId: actor.userId,
-    actorLabel: actor.label,
-    tokenId: actor.tokenId,
-    via: actor.via,
-    clientName: actor.clientName,
-  })
+  await tx
+    .insert(itemRevisions)
+    .values({
+      itemId: item.id,
+      revision: row.revision,
+      title: f.title,
+      body: f.body,
+      status: f.status,
+      frontmatter: snapshotOf(item, f),
+      change: args.change,
+      actorUserId: actor.userId,
+      actorLabel: actor.label,
+      tokenId: actor.tokenId,
+      via: actor.via,
+      clientName: actor.clientName,
+    })
+    .catch((err: unknown) => {
+      throw libraryGuardError(err)
+    })
   return (await loadItem(tx, item.id)) as LoadedItem
 }
 

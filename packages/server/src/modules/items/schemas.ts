@@ -5,11 +5,11 @@
  * NOTE: the design puts these in `packages/shared/src/api/` so the SPA and the CLI share them; they live
  * here until they move, because this module may not write outside its folder.
  */
-import { adrStatuses, confidences, ITEM_LIMITS, memoryTypes, relationKinds } from '@spoor/shared'
+import { adrStatuses, confidences, ITEM_LIMITS, memoryTypes, relationKinds, spaces } from '@spoor/shared'
 import { z } from 'zod'
 import { paginationQuery } from '../../lib/pagination.js'
 
-export const SPACE_VALUES = ['memories', 'decisions', 'docs'] as const
+export const SPACE_VALUES = spaces
 export const spaceParam = z.enum(SPACE_VALUES)
 
 const ref = z.string().min(1).max(200)
@@ -128,7 +128,11 @@ export const listQuery = z.strictObject({
 export type ListQuery = z.infer<typeof listQuery>
 
 export const revisionsQuery = z.strictObject({ ...paginationQuery })
-export const resolveQuery = z.strictObject({ ref: z.string().min(1).max(200) })
+/** `from`: the space of the item the link is written in; it only sets the slug precedence (default docs). */
+export const resolveQuery = z.strictObject({
+  ref: z.string().min(1).max(200),
+  from: z.enum(spaces).optional(),
+})
 
 // ---- bearer (CLI) -------------------------------------------------------------------------------------
 

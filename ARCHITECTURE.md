@@ -34,7 +34,7 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │    ├─ items ── item service, revisions (append-only), edges, wikilinks, resolver,  │
  │    │           repo mirror (push, adr/import)                                      │
  │    ├─ search ── chunker, providers (local ONNX e5-small q8 | OpenAI | Voyage),     │
- │    │            hybrid FTS+vector RRF, dedupe, digest (5 tiers), anchor matcher    │
+ │    │            hybrid FTS+vector RRF, dedupe, digest (6 tiers), anchor matcher    │
  │    ├─ jobs ── scheduler (in process, DB leases): cleanup, embed-pending, reembed,  │
  │    │          purge-ephemeral; review queue, dashboard, undrafted, job status      │
  │    ├─ transfer ── export / import (zip, lossless or Markdown folder)               │
@@ -94,7 +94,7 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 2. For `source` = `startup`, `clear` or `compact` the CLI writes `.spoor/session/<id>.json` (kept on `compact`), and collects anchors from git
    (uncommitted, untracked and recently committed files, at most 80). Everything runs under one 7 s deadline and a 5-minute circuit breaker after a network failure.
 3. It calls `GET /p/<slug>/api/context?file=…` with the token from `SPOOR_TOKEN` (set by `.claude/settings.local.json`), then, in the time left, replays queued pushes and sweeps the mirrored files for edits the Write/Edit hook missed.
-4. The server authenticates the token (hash lookup, revocation, membership), builds the digest in five tiers (pinned, accepted decisions of the last 30 days, anchored,
+4. The server authenticates the token (hash lookup, revocation, membership), builds the digest in six tiers (library, pinned, accepted decisions of the last 30 days, anchored,
    relevant to the query, recently verified) inside the token budget, and reads nothing that bumps `last_used_at`.
 5. The CLI prints any open push conflicts or orphaned mirror files, then the digest, to stdout; Claude Code adds it to the context. The digest names itself as `spoor_context` output, so the agent does not fetch it again.
    On any failure it prints one line ("server unreachable") and exits 0.
@@ -228,6 +228,8 @@ Design files (the *what*): [docs/design/](docs/design/). Research the choices re
 | 10 | [`0010-hooks-integration.md`](docs/adr/0010-hooks-integration.md) | Claude Code integration through hooks and a committed `.mcp.json` | SessionStart digest with git anchors and mirror sweep, PostToolUse push, Stop (single nag, detached drafting, per-turn semantics I26), circuit breaker, `spoor init` from `install.json` (I35), `alwaysLoad` with the measured tool-list size, install.md with curl first (D7) | cli-and-hooks |
 | 11 | [`0011-server-modules-and-ports.md`](docs/adr/0011-server-modules-and-ports.md) | Server code is organised as modules behind ports | module convention, `ports.ts`, one composition root (`runtime.ts`) | server README |
 | 12 | [`0012-authority-and-write-ordering.md`](docs/adr/0012-authority-and-write-ordering.md) | Delegated authority is re-checked at use; item writes lock the project row first | invites and other delegated authority end with their source, one lock order for item writes | phase 2 review |
+| 13 | [`0013-cli-packaging-and-release.md`](docs/adr/0013-cli-packaging-and-release.md) | The CLI is published as one esbuild bundle; a v* tag releases the npm package and the image together | esbuild bundle of `@spoor/shared`, one version for image and package (I30), `release.yml` | deployment, cli-and-hooks |
+| 14 | [`0014-library-space.md`](docs/adr/0014-library-space.md) | Library space: per-project pages written only by humans | fourth space `library` with handle `L<n>`, `library_editor` member flag, one human-only rule shared with `_shared` (`humanOnlyZone`), digest tier 0 (≤ 15 %), link rule (outgoing links are human choices; no capture or takeover; no `conflicts_with` with non-library items), `SPL01`/`SPL02` backstops, the stated web-session boundary | auth, data-model, search-and-digest |
 
 [deviations.md](docs/design/deviations.md) §D lists nine slightly different topics (for example "session-managed MCP transport" and "in-process scheduler" as their own ADRs); the list above
 folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule.
@@ -241,5 +243,6 @@ folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav 
 - **No secrets in git or logs.** Tokens, invite tokens, device codes and session ids are stored hashed; `.claude/settings.local.json` and `.spoor/` are gitignored by the CLI, which refuses to write a token into a tracked file
   and sends a token only to the origin stored with it; pino redacts credentials.
 - **Project-scoped resolution.** Every id, handle, `spoor_id` and ref is resolved inside the caller's project (plus `_shared` for reads and link targets); a trigger stops edges from leaving `_shared`.
-- **Memory is untrusted data.** Digest and `spoor_get` output say so in a fixed line, agent-written items are marked `~`, titles are single-line without control or bidi characters, imported history is marked, never attributed.
+- **Human-only spaces.** `_shared` and `library` follow one rule (`humanOnlyZone`, applied by `assertWritable(caller, space)`): only a logged-in web session of a user who holds the right writes them (shared: instance admin or `shared_editor`; library: instance admin, project admin or `library_editor`); every MCP, CLI, token and bearer path answers `read_only_space`. The boundary is stated, not absolute: a browser-automation agent driving a logged-in session passes as the human ([ADR-0005](docs/adr/0005-shared-space-human-only-writes.md), [ADR-0014](docs/adr/0014-library-space.md)).
+- **Memory is untrusted data.** Digest and `spoor_get` output say so in a fixed line, agent-written items are marked `~`, titles are single-line without control or bidi characters, imported history is marked, never attributed. Library pages are human-approved guidance agents are told to follow, but never a source of commands to run unconfirmed.
 - **Dependency safety.** Every package or image is pinned and published at least three days before it was chosen ([deployment.md](docs/design/deployment.md) §9 and the research files).

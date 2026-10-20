@@ -3,11 +3,23 @@
  * links claimed by new items, typed edges, and the scope trigger's error mapped to an API error.
  *
  * Wikilink resolution inside the source's project: handle forms by number (`m42`, `d7`, `adr-7`), then the
- * slug in the source's own space, then docs, decisions, memories. `shared:` resolves in `_shared` only. A
- * shared source resolves only inside `_shared` (nothing points out of it). A link to the item itself is
- * not stored.
+ * slug with the precedence of `spaceRank` (a library page first, then the source's own space, then docs,
+ * decisions, memories). `shared:` resolves in `_shared` only. A shared source resolves only inside `_shared`
+ * (nothing points out of it). A link to the item itself is not stored.
+ *
+ * Library pages (ADR-0014): their outgoing links are a human choice at save time and may point anywhere,
+ * but a later item never captures a library page's dangling link or takes over one it resolved (only a
+ * new library page may claim a library page's dangling link). `conflicts_with` never joins a library page
+ * and another item; `supersedes` and `drafted_from` never point at a library page.
  */
-import { extractWikilinks, pickRefTarget, spaceRank, type Wikilink } from '@spoor/shared'
+import {
+  extractWikilinks,
+  pickRefTarget,
+  refHandle,
+  refTarget,
+  spaceRank,
+  type Wikilink,
+} from '@spoor/shared'
 import { and, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import { edges, items, projects } from '../../db/schema.js'
 import type { DbOrTx, Tx } from '../../lib/db.js'
@@ -15,6 +27,7 @@ import { pgError } from '../../lib/db.js'
 import { ApiError } from '../../lib/errors.js'
 import type { Space } from '../../ports.js'
 import type { LoadedItem } from './rows.js'
+import { libraryGuardError } from './writes.js'
 
 export const TYPED_KINDS = ['refines', 'supports', 'depends_on', 'conflicts_with'] as const
 export type TypedKind = (typeof TYPED_KINDS)[number]
@@ -45,15 +58,9 @@ interface Candidate {
   slug: string
 }
 
-/** The canonical refs a new item answers to: its slug and its handle form (`m42`, `d7`, `adr-7`). */
+/** The canonical refs a new item answers to: its slug and its handle form (`m42`, `d7`, `l3`, `adr-7`). */
 export function refsOf(item: Pick<LoadedItem, 'space' | 'number' | 'adrNumber' | 'slug'>): string[] {
-  const handle =
-    item.space === 'memories'
-      ? `m${item.number}`
-      : item.space === 'docs'
-        ? `d${item.number}`
-        : `adr-${item.adrNumber}`
-  return [item.slug, handle]
+  return [item.slug, refHandle(item.space, item.number, item.adrNumber)]
 }
 
 function pick(cands: Candidate[], projectId: string, srcSpace: Space, ref: string): Candidate | null {
@@ -78,7 +85,7 @@ export async function resolveWikilinks(
   const adrs = new Set<number>()
   for (const l of links) {
     const adr = /^adr-(\d+)$/.exec(l.ref)
-    const md = /^[md](\d+)$/.exec(l.ref)
+    const md = /^[mdl](\d+)$/.exec(l.ref)
     if (adr) adrs.add(Number(adr[1]))
     else if (md) numbers.add(Number(md[1]))
     else slugs.add(l.ref)
@@ -108,7 +115,10 @@ export async function resolveWikilinks(
   return out
 }
 
-/** Map the edge scope trigger (P0002) to `read_only_space`; rethrow anything else. */
+/**
+ * Map the edge scope trigger to an API error: P0002 (out of `_shared`, across projects) is
+ * `read_only_space`, SPL01 (the library edge rule) is `wrong_space`; rethrow anything else.
+ */
 export function mapEdgeError(err: unknown): never {
   if (pgError(err)?.code === 'P0002') {
     throw new ApiError('read_only_space', {
@@ -116,12 +126,46 @@ export function mapEdgeError(err: unknown): never {
       hint: 'Shared items are edited by humans in the web UI.',
     })
   }
-  throw err
+  throw libraryGuardError(err)
+}
+
+/**
+ * The library edge rule (ADR-0014), checked before any typed or system edge is written: 400 `wrong_space`
+ * for `conflicts_with` between a library page and any other item (it is stored once and read both ways,
+ * so it would show on the library page as the page's own claim), and for `supersedes` or `drafted_from`
+ * pointing at a library page. The DB backstop (SPL01) refuses the same.
+ */
+export function assertLibraryEdge(
+  src: Pick<LoadedItem, 'space'>,
+  kind: TypedKind | 'supersedes' | 'drafted_from',
+  dst: Pick<LoadedItem, 'space'>,
+): void {
+  const srcLib = src.space === 'library'
+  const dstLib = dst.space === 'library'
+  if (srcLib === dstLib) return
+  if (kind === 'conflicts_with') {
+    throw new ApiError('wrong_space', {
+      message: 'conflicts_with never joins a library page and another item.',
+      hint: 'conflicts_with is symmetric; point at a library page with refines, supports or depends_on.',
+    })
+  }
+  if (dstLib && (kind === 'supersedes' || kind === 'drafted_from')) {
+    throw new ApiError('wrong_space', {
+      message: `A library page cannot be the target of ${kind}.`,
+      hint: 'Library pages are edited, not superseded; link to them with refines, supports or depends_on.',
+    })
+  }
 }
 
 /**
  * Rewrite the wikilink edges of `src` from its body (every content revision): links no longer in the
  * body are deleted, new ones inserted, existing ones re-resolved. Typed and system edges are untouched.
+ *
+ * A library page's re-save never re-resolves a slug link it already has (ADR-0014, "capture is blocked;
+ * library links are never taken over"): a stored target is kept; a stored dangling link is filled only by
+ * a library page (own project or `_shared`), otherwise it stays dangling. Refs new in this save and handle
+ * forms (`d9`, `l3`, `adr-7`, which name one item for good) resolve normally. To repoint an existing link,
+ * a human changes its ref text (for example to the target's handle).
  */
 export async function rewriteWikilinks(
   tx: Tx,
@@ -137,6 +181,7 @@ export async function rewriteWikilinks(
     links,
     sharedId,
   )
+  if (src.space === 'library') await keepLibraryTargets(tx, src.id, links, resolved)
   // a link to the item itself is not stored
   const wanted = [...resolved.entries()].filter(([ref]) => {
     const self = refsOf(src)
@@ -177,6 +222,44 @@ export async function rewriteWikilinks(
   }
 }
 
+/** The library re-save rule of `rewriteWikilinks`: overwrite `resolved` for slug refs the page already links. */
+async function keepLibraryTargets(
+  tx: Tx,
+  srcId: string,
+  links: Wikilink[],
+  resolved: Map<string, string | null>,
+): Promise<void> {
+  const slugRefs = links.filter((l) => refTarget(l.ref).kind === 'slug').map((l) => l.dstRef)
+  if (slugRefs.length === 0) return
+  const existing = await tx
+    .select({ dstRef: edges.dstRef, dstId: edges.dstId })
+    .from(edges)
+    .where(and(eq(edges.srcId, srcId), eq(edges.kind, 'wikilink'), inArray(edges.dstRef, slugRefs)))
+  if (existing.length === 0) return
+  // candidates for a stored dangling link: only a library page may fill it
+  const fill = existing
+    .filter((e) => e.dstId === null)
+    .map((e) => resolved.get(e.dstRef))
+    .filter((id): id is string => typeof id === 'string')
+  const libraryIds = new Set(
+    fill.length
+      ? (
+          await tx
+            .select({ id: items.id })
+            .from(items)
+            .where(and(inArray(items.id, fill), eq(items.space, 'library')))
+        ).map((r) => r.id)
+      : [],
+  )
+  for (const e of existing) {
+    if (e.dstId !== null) resolved.set(e.dstRef, e.dstId)
+    else {
+      const id = resolved.get(e.dstRef) ?? null
+      resolved.set(e.dstRef, id && libraryIds.has(id) ? id : null)
+    }
+  }
+}
+
 export function sqlTextArray(values: readonly string[]) {
   if (values.length === 0) return sql`'{}'::text[]`
   return sql`ARRAY[${sql.join(
@@ -188,9 +271,19 @@ export function sqlTextArray(values: readonly string[]) {
 /**
  * A new item claims (data-model.md section 3): (1) dangling wikilinks naming its slug or handle, and (2)
  * wikilinks whose slug currently resolves to a lower-precedence item. Scope: its own project; for a shared
- * item every project (links written `shared:<ref>`) plus `_shared` itself.
+ * item every project (links written `shared:<ref>`) plus `_shared` itself. A library page's links are the
+ * human's choice at save time (ADR-0014): only a new library page claims one of its dangling links, and none
+ * of its resolved links is ever taken over.
  */
 export async function claimWikilinks(tx: Tx, item: LoadedItem): Promise<void> {
+  try {
+    await claim(tx, item)
+  } catch (err) {
+    mapEdgeError(err)
+  }
+}
+
+async function claim(tx: Tx, item: LoadedItem): Promise<void> {
   const refs = refsOf(item)
   const shared = item.projectKind === 'shared'
   const scope = shared
@@ -205,13 +298,22 @@ export async function claimWikilinks(tx: Tx, item: LoadedItem): Promise<void> {
         ),
       )
     : and(eq(edges.projectId, item.projectId), sql`${edges.dstRef} = ANY(${sqlTextArray(refs)})`)
-  // 1. dangling links
+  // 1. dangling links; a library page's only by a new library page
+  const fromLibrary = sql`EXISTS (SELECT 1 FROM ${items} s WHERE s.id = ${edges.srcId} AND s.space = 'library')`
   await tx
     .update(edges)
     .set({ dstId: item.id })
-    .where(and(isNull(edges.dstId), eq(edges.kind, 'wikilink'), ne(edges.srcId, item.id), scope))
+    .where(
+      and(
+        isNull(edges.dstId),
+        eq(edges.kind, 'wikilink'),
+        ne(edges.srcId, item.id),
+        scope,
+        item.space === 'library' ? undefined : sql`NOT ${fromLibrary}`,
+      ),
+    )
 
-  // 2. slug links resolved to a lower-precedence item of the same project
+  // 2. slug links resolved to a lower-precedence item of the same project (never a library page's)
   const slugRefs = shared ? [item.slug, `shared:${item.slug}`] : [item.slug]
   const rows = await tx.execute<{ id: string; src_space: Space; dst_space: string }>(sql`
     SELECT e.id, s.space AS src_space, d.space AS dst_space
@@ -220,6 +322,7 @@ export async function claimWikilinks(tx: Tx, item: LoadedItem): Promise<void> {
     JOIN ${items} d ON d.id = e.dst_id
     WHERE e.kind = 'wikilink' AND e.dst_id <> ${item.id} AND e.src_id <> ${item.id}
       AND e.dst_ref = ANY(${sqlTextArray(slugRefs)})
+      AND s.space <> 'library'
       AND d.project_id = ${item.projectId}
       AND ${shared ? sql`TRUE` : sql`e.project_id = ${item.projectId}`}`)
   const takeOver = rows.rows
@@ -237,7 +340,8 @@ export function typedDstRef(src: { projectKind: string }, dst: LoadedItem): stri
 
 /**
  * Insert a typed or system edge; `false` when it already existed (`conflicts_with` counts in both
- * directions). The scope trigger's refusal becomes `read_only_space`.
+ * directions). The library edge rule is `wrong_space`; the scope trigger's refusal becomes
+ * `read_only_space`.
  */
 export async function addEdge(
   tx: Tx,
@@ -252,6 +356,7 @@ export async function addEdge(
       details: { issues: [{ path: 'to', message: 'same item' }] },
     })
   }
+  assertLibraryEdge(src, kind, dst)
   if (kind === 'conflicts_with') {
     // stored once for both directions: serialise the check-then-insert of this pair, so concurrent
     // relate(a, b) and relate(b, a) cannot both insert (review D-conflicts)

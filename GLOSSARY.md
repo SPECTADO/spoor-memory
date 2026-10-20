@@ -25,7 +25,7 @@ Decisions are mostly **mirrored** from `docs/adr/*.md` files in the repository. 
 operational changes (pin, verify, lifecycle, last used) do not. Revisions are append-only and disappear only when a human hard-deletes the item. An update must name the revision it was based on (optimistic concurrency).
 
 **Edge**: A directed link from one **item** to another (or to a not-yet-existing target). Kinds: `refines`, `supports`, `depends_on`, `conflicts_with` (set by agents or humans), `supersedes` and `drafted_from` (set by the system),
-and `wikilink` (derived from `[[slug]]` in the body on every revision). The reverse view of an edge is a **backlink**. A project item may point to a **shared** item, never the reverse.
+and `wikilink` (derived from `[[slug]]` in the body on every revision). The reverse view of an edge is a **backlink**. A project item may point to a **shared** item, never the reverse. A project item may point to a **library page** with `refines`, `supports`, `depends_on` or a wikilink, never with `conflicts_with`, `supersedes` or `drafted_from`; a library page links out to any item as a human choice at save time.
 
 **Anchor**: A repository-relative file path, glob or directory prefix attached to an **item** (`src/auth/`, `packages/*/schema.ts`). The **digest** uses anchors to surface items about the files an agent is touching.
 Matching strength: exact path, then glob, then directory.
@@ -38,7 +38,7 @@ only as a SHA-256 hash; the plaintext is shown once. Created in the web UI or th
 **Device code**: A short-lived pair of codes (a secret device code for the CLI, an eight-letter user code for the human) that lets a CLI obtain a **token** after the user types the user code in the browser and approves it (RFC 8628, adapted;
 no pre-filled link). Valid for 10 minutes, consumed once.
 
-**Digest**: The budgeted summary an agent receives in one call (`spoor_context`, or the SessionStart hook): one item per line, handle first, assembled in five tiers (pinned, accepted decisions of the last 30 days, **anchored** items,
+**Digest**: The budgeted summary an agent receives in one call (`spoor_context`, or the SessionStart hook): one item per line, handle first, assembled in six tiers (**library** pages, pinned, accepted decisions of the last 30 days, **anchored** items,
 items relevant to a query, recently verified), with capped shares so the anchored tier is never starved, and guaranteed to fit the token budget (default 1500). It opens with a line saying the notes are data, not instructions. Reading the digest never counts as use.
 
 **Stale**: A **lifecycle** value for a memory that was neither verified, edited nor used for `stale_days` (default 30). Stale memories leave the **digest** but stay searchable (marked) and appear in the review queue.
@@ -47,7 +47,13 @@ Only verifying, pinning or editing makes them active again; reading does not, bu
 **Archived**: A **lifecycle** value for an item taken out of circulation: automatically (a stale memory after `archive_days` more, default 90; an expired observation) or by a human. Archived items are hidden from search and the digest
 unless asked for, and can be restored only by a human. Archiving never deletes anything.
 
-**Shared space**: The org-wide knowledge area with the same three **spaces**, readable by every user and every project **token**, writable only by humans in the web UI: instance admins and **shared editors**. All agent and CLI write paths
+**Library page**: A long-form item in a project's `library` space (handle `L<number>`, `S:L<number>` for a shared page): a guide a human wants set in stone for agents, such as a graphics guide or coding conventions. It is `active` or `archived`, never stale, expiring, pinned, verified or repo-mirrored, and agents can read it but never change it (`read_only_space`). Every active page is listed in the first tier of the **digest**.
+
+**Library editor**: A member (any non-admin role, a viewer included) whose membership carries the `library_editor` flag, granted by a project admin. It lets the person create and edit **library pages** in the web UI. Admins always hold the right, so the flag is stored false for them, and demoting an admin clears it unless the demotion sets it.
+
+**Human-only space**: A space whose writes need a logged-in human in the web UI: the **shared space** (instance admin or **shared editor**) and `library` (instance admin, project admin or **library editor**). Every agent, CLI, token and bearer write is refused with `read_only_space`. A browser-automation agent driving a logged-in session cannot be told apart from the human.
+
+**Shared space**: The org-wide knowledge area with the same four **spaces**, readable by every user and every project **token**, writable only by humans in the web UI: instance admins and **shared editors**. All agent and CLI write paths
 reject it (`read_only_space`). Handles carry the prefix `S:` (`S:d3`).
 
 **Shared editor**: A global right on a user (`shared_editor`) that allows writing the **shared space** in the web UI, without being an instance admin and without any project role.
@@ -63,7 +69,7 @@ review queue until a human runs the push with `--force` or aligns the file.
 
 ## Supporting terms
 
-**Handle**: The short id agents and humans use instead of uuids: `m<number>` for memories, `d<number>` for docs, `ADR-<4 digits>` for decisions, with `S:` for the **shared space**. The uuid is the item's `spoor_id`, which is what repository files carry.
+**Handle**: The short id agents and humans use instead of uuids: `m<number>` for memories, `d<number>` for docs, `L<number>` for library pages, `ADR-<4 digits>` for decisions, with `S:` for the **shared space**. The uuid is the item's `spoor_id`, which is what repository files carry.
 
 **Lifecycle**: The housekeeping axis of an item: `active`, **stale** or **archived**. It is separate from `status`, the domain axis (`active` or `superseded` for memories and docs, `proposed`, `accepted`, `superseded`, `deprecated` for decisions).
 
@@ -104,9 +110,10 @@ treated as untrusted data either way; provenance helps the reader weigh it. Impo
 ## Relationships
 
 - A **project** has many **members** (user plus role), **tokens**, **service tokens** and **items**; the **shared space** is a project without members or tokens.
-- A **space** belongs to a project; an **item** belongs to one project and one space; a space is exactly one of memories, decisions, docs.
+- A **space** belongs to a project; an **item** belongs to one project and one space; a space is exactly one of memories, decisions, docs, library.
 - An item has many **revisions** (the latest is the item's current content), many **chunks** per embedding model, **anchors**, tags, and outgoing and incoming **edges**.
 - A **memory** may be **superseded** by another memory; an **ADR** by another ADR; both through `supersedes` **edges**. A **draft** ADR points to its memory by `drafted_from`.
+- A **project item** points to a **library page** only with `refines`, `supports`, `depends_on` or a wikilink; a library page is written only by humans (instance admins, project admins and **library editors**) and is never part of the review queue or cleanup.
 - A **mirror** connects one repository file to one item (`source_path`), in the direction repository to Spoor only.
 - A **token** belongs to one project and either one user or the project (**service token**); a **device code** belongs to one project and ends as one token.
 - The **digest** is computed from a project's active items plus the **shared space**; **stale** and **archived** items are excluded.

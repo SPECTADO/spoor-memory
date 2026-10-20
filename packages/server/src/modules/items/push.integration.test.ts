@@ -496,3 +496,26 @@ describe('push races (phase-2 review D1, D3)', () => {
     ).toHaveLength(1)
   })
 })
+
+describe('library pages are never pushed (ADR-0014)', () => {
+  it('a spoor_id naming a library page is 403 read_only_space and changes nothing', async () => {
+    const page = await createItem(db(), { projectId: s.acme.id, space: 'library', title: 'Guide' })
+    for (const space of ['docs', 'decisions']) {
+      const r = await push('docs/guide.md', `---\nspoor_id: ${page.id}\n---\n# Pushed over\n`, {}, space)
+      expect(r.status).toBe(403)
+      expect(r.body.error).toBe('read_only_space')
+    }
+    expect(await item(page.id)).toMatchObject({ title: 'Guide', revision: 1, sourcePath: null })
+    // the space of a push is decisions or docs only
+    const bad = await push('docs/guide.md', '# Guide\n', {}, 'library')
+    expect(bad.status).toBe(400)
+  })
+
+  it('a supersedes / drafted_from ref to a library page is not applied', async () => {
+    await createItem(db(), { projectId: s.acme.id, space: 'library', slug: 'guide' }) // L1
+    const r = await push('docs/adr/0001-a.md', '---\nsupersedes: L1\ndrafted_from: [L1]\n---\n# A\n')
+    expect(r.status).toBe(200)
+    const rows = await db().select().from(edges).where(eq(edges.srcId, r.body.spoor_id))
+    expect(rows.filter((e) => e.kind === 'supersedes' || e.kind === 'drafted_from')).toEqual([])
+  })
+})

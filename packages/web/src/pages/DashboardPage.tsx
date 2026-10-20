@@ -16,6 +16,7 @@ const SPACES: { space: Space; label: string }[] = [
   { space: 'memories', label: 'Memories' },
   { space: 'decisions', label: 'Decisions' },
   { space: 'docs', label: 'Docs' },
+  { space: 'library', label: 'Library' },
 ]
 
 export const REVIEW_LABEL: Record<ReviewSection, string> = {
@@ -65,7 +66,7 @@ export function DashboardPage() {
         }
       />
       {dash.isPending ? (
-        <div className="grid gap-4 md:grid-cols-3" role="status">
+        <div className="grid gap-4 md:grid-cols-4" role="status">
           <span className="sr-only">Loading dashboard</span>
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-28" />
@@ -108,7 +109,7 @@ function Counts({ slug, counts }: { slug: string; counts: DashboardJson['counts'
                 <span className="ml-1 text-sm font-normal text-muted">active</span>
               </p>
               <p className="mt-1 flex gap-3 text-sm text-muted">
-                <span>{c.stale} stale</span>
+                <span>{space === 'library' ? 'never stale' : `${c.stale} stale`}</span>
                 <span>{c.archived} archived</span>
               </p>
             </li>

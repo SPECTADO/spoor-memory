@@ -523,3 +523,98 @@ describe('lifecycle invariants of a manifest item (phase-2 review)', () => {
     })
   })
 })
+
+describe('library pages (ADR-0014)', () => {
+  const libFile = (status?: string) =>
+    renderMarkdown(
+      {
+        spoor_id: ID,
+        title: 'Graphics guide',
+        tags: [],
+        anchors: [],
+        pinned: true,
+        last_verified: T,
+        relations: [],
+        ...(status ? { status } : {}),
+      },
+      'Use tokens.\n',
+    )
+  const lib = (over: Record<string, unknown> = {}, text = libFile()) =>
+    item({ space: 'library', slug: 'graphics-guide', path: 'library/graphics-guide.md', ...over }, text)
+
+  it('a crafted library item is normalised, not refused, and every change is noted', () => {
+    const it = lib({
+      pinned: true,
+      lifecycle: 'stale',
+      stale_since: T,
+      expires_at: T,
+      provenance: 'agent',
+      source_path: 'docs/graphics.md',
+      push_conflict_at: T,
+    })
+    const a = parseArchive(build({ it, history: false }))
+    if (a.kind !== 'lossless') throw new Error('expected lossless')
+    expect(a.items[0]?.m).toMatchObject({
+      lifecycle: 'active',
+      stale_since: null,
+      expires_at: null,
+      pinned: false,
+      provenance: 'human',
+      source_path: null,
+      push_conflict_at: null,
+    })
+    expect(a.items[0]?.content.status).toBe('active')
+    expect(a.notes).toContain(
+      'library/graphics-guide.md: library page normalised (stale → active, expiry dropped, unpinned, provenance human, not repo-mirrored).',
+    )
+  })
+
+  it('a well-formed library item passes unchanged, without a note; an archived one stays archived', () => {
+    const a = parseArchive(build({ it: lib({ provenance: 'human' }), history: false }))
+    expect(a.notes).toEqual([])
+    const archived = parseArchive(
+      build({
+        it: lib({ provenance: 'human', lifecycle: 'archived', archived_at: T, archive_reason: 'manual' }),
+        history: false,
+      }),
+    )
+    if (archived.kind !== 'lossless') throw new Error('expected lossless')
+    expect(archived.items[0]?.m.lifecycle).toBe('archived')
+  })
+
+  it('a library status other than active is invalid_archive', () => {
+    const it = lib({}, libFile('superseded'))
+    expect(issue(() => parseArchive(build({ it, history: false })))).toMatch(
+      /^invalid_archive: .*status is invalid for library/,
+    )
+  })
+
+  it('the allowlist takes library/<slug>.md; an unknown top directory is invalid_archive', () => {
+    expect(entryAllowed('library/graphics-guide.md')).toBe(true)
+    expect(entryAllowed('library/sub/x.md')).toBe(false)
+    expect(entryAllowed('notes/x.md')).toBe(false)
+    expect(issue(() => parseArchive(new Map([['notes/x.md', strToU8('# X')]])))).toMatch(
+      /^invalid_archive: An entry is not in a known space directory/,
+    )
+  })
+
+  it('a folder library file reads like a doc; its pin is dropped and noted', () => {
+    const a = parseArchive(
+      readZip(
+        writeZip(
+          { 'library/graphics-guide.md': strToU8('---\npinned: true\n---\n# Graphics guide\n\n[[runbook]]') },
+          new Date(T),
+        ),
+        entryAllowed,
+      ),
+    )
+    if (a.kind !== 'files') throw new Error('expected files')
+    expect(a.files[0]).toMatchObject({
+      space: 'library',
+      slug: 'graphics-guide',
+      pinned: false,
+      content: { title: 'Graphics guide', status: 'active', type: null },
+    })
+    expect(a.notes).toEqual(['library/graphics-guide.md: library page normalised (unpinned).'])
+  })
+})

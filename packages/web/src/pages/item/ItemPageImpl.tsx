@@ -21,6 +21,7 @@ import { dateTime, fromNow, plural } from '../../lib/format'
 import { isShared, itemPath, projectPath, useProjectSlug } from '../../lib/paths'
 import {
   Alert,
+  Badge,
   Button,
   ButtonLink,
   ConfirmDialog,
@@ -61,10 +62,14 @@ const isExpired = (item: ItemJson) =>
 
 function ItemView({ slug, item, refetch }: { slug: string; item: ItemJson; refetch: () => void }) {
   const location = useLocation()
-  const canWrite = useCan('editor').allowed
+  const isLibrary = item.space === 'library'
+  const canEdit = useCan('editor').allowed
+  const canLibrary = useCan('library').allowed
+  // library pages are gated by the library right (never by the editor role)
+  const canWrite = isLibrary ? canLibrary : canEdit
   const isAdmin = useCan('admin').allowed
   // shared space: IA or shared editor (both pass the editor gate there); projects: project admin
-  const canDelete = isShared(slug) ? canWrite : isAdmin
+  const canDelete = isShared(slug) ? canEdit : isAdmin
   const initialWarnings = ((location.state as { warnings?: ItemWarning[] } | null)?.warnings ?? []).filter(
     (w) => w.code === 'near_duplicate',
   )
@@ -81,6 +86,7 @@ function ItemView({ slug, item, refetch }: { slug: string; item: ItemJson; refet
         </p>
         <h1 className="text-xl font-semibold break-words">{item.title}</h1>
         <ItemBadges item={item} />
+        {isLibrary && <Badge>Library · human-maintained</Badge>}
       </header>
 
       <ItemActions slug={slug} item={item} canWrite={canWrite} canDelete={canDelete} refetch={refetch} />
@@ -108,6 +114,11 @@ function ItemView({ slug, item, refetch }: { slug: string; item: ItemJson; refet
             </Button>
           </Alert>
         )}
+        {isLibrary && !canWrite && (
+          <Alert tone="info">
+            You can read this page. Editing needs the library right; ask a project admin.
+          </Alert>
+        )}
         <Banners slug={slug} item={item} canWrite={canWrite} />
       </div>
 
@@ -115,7 +126,11 @@ function ItemView({ slug, item, refetch }: { slug: string; item: ItemJson; refet
         <div className="min-w-0 space-y-6">
           <section aria-label="Body" className="min-w-0">
             {item.body.trim() ? (
-              <MarkdownView source={item.body} slug={slug} />
+              <MarkdownView
+                source={item.body}
+                slug={slug}
+                from={item.space === 'library' ? 'library' : undefined}
+              />
             ) : (
               <p className="text-sm text-muted">This item has no body.</p>
             )}
@@ -287,26 +302,28 @@ function ItemActions({
               Accept
             </Button>
           )}
-          <Button
-            size="sm"
-            disabled={busy}
-            icon={
-              item.pinned ? (
-                <PinOff className="size-4" aria-hidden="true" />
-              ) : (
-                <Pin className="size-4" aria-hidden="true" />
-              )
-            }
-            onClick={() =>
-              run(
-                item.pinned ? 'unpin' : 'pin',
-                item.pinned ? `Unpinned ${item.handle}` : `Pinned ${item.handle}`,
-              )
-            }
-          >
-            {item.pinned ? 'Unpin' : 'Pin'}
-          </Button>
-          {!archived && (
+          {item.space !== 'library' && (
+            <Button
+              size="sm"
+              disabled={busy}
+              icon={
+                item.pinned ? (
+                  <PinOff className="size-4" aria-hidden="true" />
+                ) : (
+                  <Pin className="size-4" aria-hidden="true" />
+                )
+              }
+              onClick={() =>
+                run(
+                  item.pinned ? 'unpin' : 'pin',
+                  item.pinned ? `Unpinned ${item.handle}` : `Pinned ${item.handle}`,
+                )
+              }
+            >
+              {item.pinned ? 'Unpin' : 'Pin'}
+            </Button>
+          )}
+          {!archived && item.space !== 'library' && (
             <Button
               size="sm"
               disabled={busy}

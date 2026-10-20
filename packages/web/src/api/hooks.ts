@@ -345,22 +345,34 @@ function invalidateMembers(qc: QueryClient, slug: string) {
 export function useAddMember(slug: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: { email: string; role: ProjectRole }) => E.addMember(slug, body),
+    mutationFn: (body: { email: string; role: ProjectRole; library_editor?: boolean }) =>
+      E.addMember(slug, body),
     onSettled: () => invalidateMembers(qc, slug),
   })
 }
 
-export function useSetMemberRole(slug: string) {
+/**
+ * Change a member's role and/or library right. Optimistic, rolled back on error. The server may change the
+ * flag implicitly (admin implies it, leaving admin clears it), so the members and project are refetched after.
+ */
+export function useSetMember(slug: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ userId, role }: { userId: string; role: ProjectRole }) =>
-      E.setMemberRole(slug, userId, role),
-    onMutate: async ({ userId, role }) => {
+    mutationFn: ({ userId, ...patch }: { userId: string; role?: ProjectRole; library_editor?: boolean }) =>
+      E.setMember(slug, userId, patch),
+    onMutate: async ({ userId, role, library_editor }) => {
       await qc.cancelQueries({ queryKey: qk.members(slug) })
       const prev = qc.getQueryData<{ items: MemberJson[] }>(qk.members(slug))
       if (prev) {
         qc.setQueryData(qk.members(slug), {
-          items: prev.items.map((m) => (m.user.id === userId ? { ...m, role } : m)),
+          items: prev.items.map((m) => {
+            if (m.user.id !== userId) return m
+            const next = { ...m, role: role ?? m.role }
+            if (library_editor !== undefined) next.library_editor = library_editor
+            else if (role !== undefined && role !== m.role && (role === 'admin' || m.role === 'admin'))
+              next.library_editor = false
+            return next
+          }),
         })
       }
       return { prev }
@@ -603,10 +615,10 @@ export function useRemoveEdge(slug: string) {
   })
 }
 
-export const useResolve = (slug: string, ref: string) =>
+export const useResolve = (slug: string, ref: string, from?: string) =>
   useQuery({
-    queryKey: qk.resolve(slug, ref),
-    queryFn: ({ signal }) => E.resolveRef(slug, ref, { signal }),
+    queryKey: qk.resolve(slug, ref, from),
+    queryFn: ({ signal }) => E.resolveRef(slug, ref, { signal }, from),
     retry: false,
   })
 

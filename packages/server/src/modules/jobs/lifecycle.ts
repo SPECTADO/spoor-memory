@@ -12,7 +12,7 @@
  *
  * Time is milliseconds since the epoch so tests can drive it with a fake clock.
  */
-import type { ProjectSettings } from '@spoor/shared'
+import type { ProjectSettings, Space } from '@spoor/shared'
 
 export const DAY_MS = 86_400_000
 export const HOUR_MS = 3_600_000
@@ -23,7 +23,7 @@ export type ArchiveReason = 'stale' | 'expired' | 'manual'
 
 /** The columns of `items` the lifecycle reads and writes (data-model.md section 3). */
 export interface LifecycleState {
-  space: 'memories' | 'decisions' | 'docs'
+  space: Space
   /** Memories only; `null` elsewhere. */
   type: 'decision' | 'fact' | 'procedure' | 'observation' | null
   /** Domain status: memories `active | superseded`, decisions `proposed | accepted | superseded | deprecated`. */

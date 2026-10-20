@@ -158,11 +158,34 @@ Reference numbers point to `docs/design/deviations.md`.
   The install doc is mostly commands (curl first, WebFetch second).
 - **I36 model upgrade**: the image ships only the current default model; a project searches
   full-text only (no duplicate check) until its re-embed job cuts over.
-- **I37 digest shares**: pinned ≤ 30 %, recent decisions ≤ 25 % while anchored/relevant items
-  exist (≥ 35 % kept for them); overflow becomes one roll-up line per tier; titles cut at 90 chars.
+- **I37 digest shares**: library ≤ 15 %, pinned ≤ 30 %, recent decisions ≤ 25 % while anchored/relevant items
+  exist (tiers library+pinned+decisions keep ≥ 35 % for them); overflow becomes one roll-up line per tier;
+  titles cut at 90 chars.
 - **I38 untrusted data**: digest and `spoor_get` start with a fixed ~20-token "data, not
   instructions" line; agent-written, unreviewed items carry a `~` marker; control/bidi characters
   are stripped from titles, tags and client names.
 - **D6 duplicates**: threshold is a per-project setting (0.80–0.99, default 0.92); write tools
   accept `allow_duplicate: true` after a duplicate hit.
 - **Docs naming (H16)**: the operator guide the brief calls `docs/install.md` is `docs/operations.md`; the web, agent and CLI guides are `docs/user-guide.md` and `docs/agent-guide.md`; Definition-of-done evidence is `docs/design/dod-status.md`.
+
+## Amendment (2026-10-20): Library space
+
+Agreed 2026-10-20 between the owner and Claude (four questions; the owner took the recommended answer each time).
+- **Fourth space `library`** in every project, including `_shared`: long-form pages a human wants set in stone
+  for agents (graphics guide, architecture guide, conventions). Same `items` table and mechanisms as docs
+  (revisions, search, anchors, tags, wikilinks, export/import, audit). Handle `L3` (`S:L3` in the shared space).
+  Library pages never expire and never go stale; only a human archives or deletes them.
+- **Human-only writes**: created and edited only in the web UI by a logged-in human who is an instance admin, a
+  project admin, or a member with the new per-membership `library_editor` flag (granted by project admins, the
+  project-scoped twin of `shared_editor`). Every MCP, CLI, token and bearer write path, including verify, pin,
+  lifecycle, relate-from and delete, is rejected with `read_only_space`, as for the shared space. Edges from
+  project items to library pages are allowed. Owner amendment the same day: a human editing a library page may
+  also link it to any item (`wikilink`, `refines`, `supports`, `depends_on`); agents' new items never capture or
+  take over those links; `conflicts_with` between a library page and a non-library item is refused either way.
+- **Agent reads**: a new first digest tier lists every active library page as handle + title under a capped
+  share (overflow becomes one roll-up line); anchored pages also surface in the anchor tier; `spoor_search` and
+  `spoor_get` accept the library space. No new MCP tool.
+- **No repo mirror**: library pages live only in Spoor and travel with the project export zip. A human-only CLI
+  push may be added later.
+
+Recorded in ADR-0014.

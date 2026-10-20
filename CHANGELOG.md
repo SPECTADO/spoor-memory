@@ -2,6 +2,42 @@
 
 All notable changes. Format after Keep a Changelog; versions follow semver.
 
+## [Unreleased]
+
+### Added
+
+- **Library space**: a fourth space in every project (and in `_shared`) for guides agents must follow, such as a graphics guide
+  or coding conventions. Pages are written only by humans in the web UI, are `active` or `archived` (never stale, expiring,
+  pinned or verified) and are read-only for MCP, CLI and tokens (`read_only_space`). Handle `L<n>` (`S:L<n>` for a shared page);
+  slugs shaped `l<n>` are reserved. Recorded in [ADR-0014](docs/adr/0014-library-space.md).
+- **`library_editor` member flag**: project admins grant the right to edit the library to any non-admin member, a viewer
+  included. Admins always hold it. New permission action `library.write`; `ProjectJson.can_edit_library`; `counts.library` on the
+  dashboard and project list.
+- **Digest Library tier**: tier 0 lists every active library page (`L3 [lib] <title>`, with the matched anchor for own-project
+  pages), at most 15 % of the budget; an overflow rolls up into one line. Projects without library pages get the same digest as
+  before.
+- Library pages link out to any item as a human choice at save time; `conflicts_with` with non-library items is refused, and
+  capture or takeover of a library link by a later item is blocked (DB backstop `SPL01`; `SPL02` refuses library revisions via
+  `mcp` or `cli`).
+- Export and import carry `library/<slug>.md`; import normalises library rows and drops the refused edge kinds.
+
+### Changed
+
+- `spoor_search` searches the library by default, and `space=library` is accepted; `spoor_get` takes `L<n>`.
+- The member PUT body is `{ role?, library_editor? }` (at least one); POST accepts `library_editor`.
+- Demoting an admin clears library editing unless the request sets `library_editor`.
+- The review queue and cleanup never list library pages.
+- The digest reserve now spans three tiers: library, pinned and decisions leave at least 35 % for anchored and relevant items
+  (library at most 15 %, pinned 30 %, decisions 25 %).
+- A slug read that matches both an own item and a `_shared` library page answers `ambiguous_id`.
+
+### Upgrade notes
+
+- Servers on 0.1.0 reject archives that contain library pages (`invalid_archive`); the export format stays `spoor-export/1`.
+- Migration 0004 renames existing slugs shaped `l<n>` to `x-l<n>`. Body links written `[[l<n>]]` must be re-saved as
+  `[[x-l<n>]]`; the migration reports their count in a NOTICE, which the server now writes to its startup log
+  (`migration notice: library_guards: …`). See [docs/operations.md](docs/operations.md).
+
 ## [0.1.0] - 2026-10-20
 
 First release. Scope is BRIEF.md (MVP) with its 2026-10-19 amendments; evidence per Definition-of-done item is in

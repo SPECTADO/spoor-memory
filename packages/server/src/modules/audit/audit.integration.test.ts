@@ -191,3 +191,29 @@ describe('handle snapshots of _shared rows (phase-2 review SC1)', () => {
     expect(after.items.map((r) => r.action).sort()).toEqual(['item.create', 'item.delete'])
   })
 })
+
+describe('library handles (ADR-0014)', () => {
+  it('?item=L<n> finds a library page’s history, live (either letter case) and after a hard delete', async () => {
+    const { app } = await setup()
+    const admin = await createAdmin(db())
+    const ia = await loginAs(app, admin.email, DEFAULT_PASSWORD)
+    const created = await ia.post('/api/v1/projects/acme/spaces/library/items', {
+      title: 'Graphics guide',
+      body: 'Use tokens.',
+    })
+    expect(created.status).toBe(201)
+    const handle = (await json<{ item: { handle: string } }>(created)).item.handle
+    expect(handle).toBe('L2') // m1 holds number 1 of the shared counter
+    const actions = async (q: string) =>
+      (await json<Page>(await ia.get(`/api/v1/projects/acme/audit?item=${q}`))).items.map(
+        (r) => `${r.action}:${r.item_handle ?? ''}`,
+      )
+    expect(await actions('L2')).toEqual(['item.create:L2'])
+    expect(await actions('l2')).toEqual(['item.create:L2'])
+    // m2 / d2 name nothing: the number belongs to the library page
+    expect(await actions('m2')).toEqual([])
+    expect((await ia.delete('/api/v1/projects/acme/items/L2?confirm=L2')).status).toBe(204)
+    expect((await actions('L2')).sort()).toEqual(['item.create:L2', 'item.delete:L2'])
+    expect((await actions('l2')).sort()).toEqual(['item.create:L2', 'item.delete:L2'])
+  })
+})

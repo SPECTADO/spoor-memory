@@ -192,3 +192,122 @@ describe('item view', () => {
     expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute('href', '/shared/i/m3/edit')
   })
 })
+
+describe('library item view', () => {
+  const lib = (over = {}) =>
+    itemFixture({
+      id: 'id-l3',
+      handle: 'L3',
+      space: 'library',
+      number: 3,
+      type: null,
+      confidence: null,
+      slug: 'graphics-guide',
+      title: 'Graphics guide',
+      body: 'See [[some-doc]].\n',
+      ...over,
+    })
+  const routes = (role: 'viewer' | 'editor' | 'admin', can: boolean, item = lib()) => ({
+    ...baseRoutes(role, 'acme', { can_edit_library: can }),
+    'GET /api/v1/projects/acme/items/L3': [200, item] as [number, unknown],
+    'GET /api/v1/projects/acme/items/L3/edges': noEdges,
+  })
+
+  it('has no Pin, Verify or Supersede; Edit and Archive follow the library right, Delete follows admin', async () => {
+    mockApi(routes('editor', true))
+    renderApp('/projects/acme/i/L3')
+    await screen.findByRole('heading', { level: 1, name: 'Graphics guide' })
+    expect(screen.getByText('Library · human-maintained')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Edit' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument()
+    for (const n of ['Pin', 'Unpin', 'Verify', 'Supersede', 'Accept'])
+      expect(screen.queryByRole('button', { name: n })).not.toBeInTheDocument()
+    expect(screen.queryByText('Last verified')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+  })
+
+  it('an editor without the library right can only read, and is told so', async () => {
+    mockApi(routes('editor', false))
+    renderApp('/projects/acme/i/L3')
+    await screen.findByRole('heading', { level: 1, name: 'Graphics guide' })
+    expect(screen.getByText(/Editing needs the library right; ask a project admin/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Edit' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Add link/ })).not.toBeInTheDocument()
+  })
+
+  it('a viewer with the right can edit but not delete', async () => {
+    mockApi(routes('viewer', true))
+    renderApp('/projects/acme/i/L3')
+    expect(await screen.findByRole('link', { name: 'Edit' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+  })
+
+  it('shows Delete to an admin', async () => {
+    mockApi(routes('admin', true))
+    renderApp('/projects/acme/i/L3')
+    expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument()
+  })
+
+  it('wikilinks resolve with from=library', async () => {
+    mockApi(routes('viewer', false))
+    renderApp('/projects/acme/i/L3')
+    expect(await screen.findByRole('link', { name: 'some-doc' })).toHaveAttribute(
+      'href',
+      '/projects/acme/w/some-doc?from=library',
+    )
+  })
+
+  it('a dangling link offers to create a library page, which is the only kind that can claim it', async () => {
+    mockApi({
+      ...routes('viewer', true),
+      'GET /api/v1/projects/acme/items/L3/edges': [
+        200,
+        {
+          outgoing: [{ id: 'e1', kind: 'wikilink', editable: false, other: null, dst_ref: 'house-rules' }],
+          incoming: [],
+        },
+      ],
+    })
+    renderApp('/projects/acme/i/L3')
+    const links = await screen.findByRole('region', { name: 'Links' })
+    expect(await within(links).findByRole('link', { name: 'create' })).toHaveAttribute(
+      'href',
+      '/projects/acme/library/new?title=house-rules',
+    )
+  })
+
+  it('the Add link picker covers every space and hides conflicts_with', async () => {
+    mockApi({
+      ...routes('viewer', true),
+      'GET /api/v1/projects/acme/spaces/memories/items': [200, { items: [], next_cursor: null }],
+    })
+    renderApp('/projects/acme/i/L3')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Add link' }))
+    const dialog = await screen.findByRole('dialog')
+    const spaces = within(dialog)
+      .getAllByRole('option')
+      .map((o) => o.textContent)
+    expect(spaces).toEqual(expect.arrayContaining(['Memories', 'Decisions', 'Docs', 'Library']))
+    const kinds = within(within(dialog).getByLabelText('Kind')).getAllByRole('option')
+    expect(kinds.map((o) => o.textContent)).toEqual(['refines', 'supports', 'depends on'])
+  })
+
+  it('hides conflicts_with on a memory once a library target is typed', async () => {
+    mockApi({
+      ...baseRoutes('editor'),
+      'GET /api/v1/projects/acme/items/m42': [200, itemFixture()],
+      'GET /api/v1/projects/acme/items/m42/edges': noEdges,
+      'GET /api/v1/projects/acme/spaces/memories/items': [200, { items: [], next_cursor: null }],
+    })
+    renderApp('/projects/acme/i/m42')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Add relation' }))
+    const dialog = await screen.findByRole('dialog')
+    const kind = () => within(within(dialog).getByLabelText('Kind')).getAllByRole('option')
+    expect(kind().map((o) => o.textContent)).toContain('conflicts with')
+    await user.type(within(dialog).getByLabelText(/Find by title/), 'L3')
+    expect(kind().map((o) => o.textContent)).not.toContain('conflicts with')
+  })
+})

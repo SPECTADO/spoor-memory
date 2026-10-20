@@ -42,7 +42,12 @@ export function itemFixture(over: Partial<ItemJson> = {}): ItemJson {
   }
 }
 
-export function projectFixture(role: ProjectJson['role'], slug = 'acme'): ProjectJson {
+/** `can_edit_library` defaults to true for admins only; pass it to model a viewer/editor with the flag. */
+export function projectFixture(
+  role: ProjectJson['role'],
+  slug = 'acme',
+  opts: { can_edit_library?: boolean } = {},
+): ProjectJson {
   return {
     id: 'p1',
     slug,
@@ -56,17 +61,22 @@ export function projectFixture(role: ProjectJson['role'], slug = 'acme'): Projec
       embedding: { provider: 'local' },
     },
     role,
+    can_edit_library: opts.can_edit_library ?? role === 'admin',
     embedding: { model: 'x', target: null, remaining: 0 },
     created_at: '2026-10-01T00:00:00Z',
   }
 }
 
 /** The routes every project page needs: me, project list (switcher), the project with `role`. */
-export function baseRoutes(role: ProjectJson['role'], slug = 'acme'): Record<string, Reply | Reply[]> {
+export function baseRoutes(
+  role: ProjectJson['role'],
+  slug = 'acme',
+  opts: { can_edit_library?: boolean } = {},
+): Record<string, Reply | Reply[]> {
   return {
     'GET /api/v1/me': [200, meFixture()],
     'GET /api/v1/projects': [200, { items: [] }],
-    [`GET /api/v1/projects/${slug}`]: [200, projectFixture(role, slug)],
+    [`GET /api/v1/projects/${slug}`]: [200, projectFixture(role, slug, opts)],
     [`GET /api/v1/projects/${slug}/review`]: [
       200,
       { counts: { stale: 0, archived: 0, expiring: 0, conflicts: 0, push_conflicts: 0 } },

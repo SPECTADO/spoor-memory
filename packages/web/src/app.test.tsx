@@ -129,3 +129,33 @@ describe('app shell', () => {
     expect(api.find('POST', '/api/v1/auth/logout')).toHaveLength(1)
   })
 })
+
+describe('library nav', () => {
+  const routes = (slug: string, role: 'editor' | 'viewer') => ({
+    'GET /api/v1/me': [200, meFixture({ shared_editor: true })] as [number, unknown],
+    'GET /api/v1/projects': [200, projectList] as [number, unknown],
+    [`GET /api/v1/projects/${slug}`]: [200, project(role, slug)] as [number, unknown],
+    [`GET /api/v1/projects/${slug}/review`]: [200, reviewCounts] as [number, unknown],
+  })
+
+  it('shows the Library tab after Docs on a project', async () => {
+    mockApi(routes('demo', 'viewer'))
+    renderApp('/projects/demo/search')
+    const nav = await screen.findByRole('navigation', { name: 'Project' })
+    expect(within(nav).getByRole('link', { name: 'Library' })).toHaveAttribute(
+      'href',
+      '/projects/demo/library',
+    )
+    const names = within(nav)
+      .getAllByRole('link')
+      .map((a) => a.textContent)
+    expect(names.indexOf('Library')).toBe(names.indexOf('Docs') + 1)
+  })
+
+  it('shows the Library tab on /shared', async () => {
+    mockApi(routes('_shared', 'editor'))
+    renderApp('/shared/search')
+    const nav = await screen.findByRole('navigation', { name: 'Project' })
+    expect(within(nav).getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/shared/library')
+  })
+})

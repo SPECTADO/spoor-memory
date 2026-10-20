@@ -59,20 +59,22 @@ export interface RestoreState {
 export function EditorPageImpl({ mode }: { mode: 'create' | 'edit' }) {
   const slug = useProjectSlug()
   const params = useParams()
-  const can = useCan('editor')
+  const canEditor = useCan('editor')
+  const canLibrary = useCan('library')
   const item = useItem(slug, mode === 'edit' ? params.ref : undefined)
   const back = <NotFound backTo={projectPath(slug)} backLabel="Back to the project" />
 
   if (mode === 'create' && !isSpace(params.space)) return back
-  if (can.pending) return <SkeletonRows rows={6} />
-  if (!can.allowed) return <Forbidden />
+  if (canEditor.pending || canLibrary.pending) return <SkeletonRows rows={6} />
   if (mode === 'create') {
     const space = params.space as Space
+    if (!(space === 'library' ? canLibrary : canEditor).allowed) return <Forbidden />
     return <ItemEditor key={`new:${space}`} slug={slug} space={space} />
   }
   if (item.isPending) return <SkeletonRows rows={6} />
   if (item.error instanceof ApiError && item.error.status === 404) return back
   if (item.isError) return <ErrorState error={item.error} onRetry={() => item.refetch()} />
+  if (!(item.data.space === 'library' ? canLibrary : canEditor).allowed) return <Forbidden />
   return <ItemEditor key={item.data.id} slug={slug} space={item.data.space} item={item.data} />
 }
 
@@ -371,7 +373,11 @@ function ItemEditor({ slug, space, item }: { slug: string; space: Space; item?: 
               )}
             >
               {preview.trim() ? (
-                <MarkdownView source={preview} slug={slug} />
+                <MarkdownView
+                  source={preview}
+                  slug={slug}
+                  from={space === 'library' ? 'library' : undefined}
+                />
               ) : (
                 <p className="text-sm text-muted">Nothing to preview yet.</p>
               )}

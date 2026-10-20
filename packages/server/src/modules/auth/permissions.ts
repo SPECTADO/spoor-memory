@@ -16,6 +16,12 @@ export const ACTIONS = [
   'project.read',
   /** Create / edit items, pin, verify, archive, restore, relate. Shared target: "write shared space". */
   'item.write',
+  /**
+   * Create, edit, archive, restore and relate-from library pages (ADR-0014). Humans in the web UI only:
+   * project admins and instance admins, or a member holding the library flag (any role, viewer included).
+   * Shared target: the shared-space writers. Never a token.
+   */
+  'library.write',
   /** Hard-delete an item. Shared target: "hard-delete shared item". */
   'item.delete',
   /** Review-queue actions. */
@@ -55,6 +61,8 @@ export interface WebPrincipal {
   isAdmin: boolean
   sharedEditor: boolean
   membership: ProjectRole | null
+  /** The membership's library flag (`memberships.library_editor`); never set on `_shared`. */
+  libraryEditor: boolean
 }
 
 /** A bearer token: its effective role in its own project (mcp.md section 2), `null` when none. */
@@ -86,6 +94,8 @@ function canWeb(p: WebPrincipal, action: Action, t: Target): boolean {
     case 'item.write':
     case 'review.act':
       return shared ? sharedWriter : roleAtLeast(role, 'editor')
+    case 'library.write':
+      return shared ? sharedWriter : pa || (member && p.libraryEditor)
     case 'item.delete':
       return shared ? sharedWriter : pa
     case 'token.create_own':
@@ -128,8 +138,8 @@ export function can(p: Principal, action: Action, target: Target = {}): boolean 
 }
 
 /**
- * `can` or throw: web 403 `forbidden`; bearer `read_only_space` for any write on the shared space,
- * otherwise 403 `forbidden_role` (a viewer or read-only token).
+ * `can` or throw: web 403 `forbidden`; bearer `read_only_space` for any write on the shared space or any
+ * library write, otherwise 403 `forbidden_role` (a viewer or read-only token).
  */
 export function assertCan(p: Principal, action: Action, target: Target = {}): void {
   if (can(p, action, target)) return
@@ -138,6 +148,12 @@ export function assertCan(p: Principal, action: Action, target: Target = {}): vo
     throw new ApiError('read_only_space', {
       message: 'The shared space is read-only for tokens.',
       hint: 'Shared items are edited by humans in the web UI.',
+    })
+  }
+  if (action === 'library.write') {
+    throw new ApiError('read_only_space', {
+      message: 'Library pages are read-only for tokens.',
+      hint: 'Library pages are edited by humans with the library right in the web UI.',
     })
   }
   throw new ApiError('forbidden_role', {
@@ -151,10 +167,20 @@ export function bearerPrincipal(ctx: AuthContext, surface: 'rest' | 'mcp' = 'res
   return { surface, role: ctx.role }
 }
 
-/** The principal of a cookie user for a project in which they hold `membership` (or none). */
+/**
+ * The principal of a cookie user for a project in which they hold `membership` (or none), with that
+ * membership's library flag.
+ */
 export function webPrincipal(
   user: { isAdmin: boolean; sharedEditor: boolean },
   membership: ProjectRole | null,
+  libraryEditor = false,
 ): WebPrincipal {
-  return { surface: 'web', isAdmin: user.isAdmin, sharedEditor: user.sharedEditor, membership }
+  return {
+    surface: 'web',
+    isAdmin: user.isAdmin,
+    sharedEditor: user.sharedEditor,
+    membership,
+    libraryEditor: membership !== null && libraryEditor,
+  }
 }

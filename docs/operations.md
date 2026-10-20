@@ -154,6 +154,16 @@ Migrations are forward-only. To roll back, restore the dump taken in step 1 and 
 that matches the server (`npm i -g spoor-memory@<server version>`, as install.md says); the pinned `npx` fallback in the hooks follows
 the server automatically after `spoor init` is rerun.
 
+**Upgrading from 0.1.0 to the Library release.** Migrations 0003 and 0004 run at startup under the advisory lock, before any
+library page can exist; no action is needed apart from the backup. 0003 adds the `library` space, the `memberships.library_editor`
+column and a shape check; 0004 adds the edge and revision guards (`SPL01`, `SPL02`) and renames slugs shaped `l<n>` (reserved for
+library handles) to `x-l<n>`. The app log shows one line `migration notice: library_guards: …` with three counts: items renamed, items not renamed because `x-l<n>`
+was already taken (they stay reachable by handle or uuid), and items whose body contains `[[l<n>]]`. Open those items and re-save
+them as `[[x-l<n>]]`; bodies are not rewritten, because revisions are append-only, and the next save would otherwise read the link
+as a library handle. Exports stay `spoor-export/1`, but a server still on 0.1.0 rejects an archive that contains library pages
+(`invalid_archive`), so upgrade the target before moving such a project. Rollback is a restore of the backup (see above): the
+migrations are forward-only.
+
 **Re-embed on model change.** Vectors are tagged with the model that made them (`local:Xenova/multilingual-e5-small@q8/384`).
 Search only reads vectors of the project's active model, so a model change never mixes spaces.
 

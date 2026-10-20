@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Project decisions, MADR style, each with date and deciders. Template and rules: the `adr` skill. Never rewrite an accepted ADR; supersede it with a new one. Design sources are in [docs/design](../design/); deviation ids (D1-D9, I1-I45, G, H, P3) are defined in [deviations.md](../design/deviations.md). All ADRs 0001 to 0013 are accepted. Where the amendments in BRIEF.md changed an earlier choice (D9, I33 to I38), the ADR text already states the amended rule. How the decisions show up for users: [user-guide.md](../user-guide.md), [agent-guide.md](../agent-guide.md), [operations.md](../operations.md).
+Project decisions, MADR style, each with date and deciders. Template and rules: the `adr` skill. Never rewrite an accepted ADR; supersede it with a new one. Design sources are in [docs/design](../design/); deviation ids (D1-D9, I1-I45, G, H, P3) are defined in [deviations.md](../design/deviations.md). All ADRs 0001 to 0014 are accepted. Where the amendments in BRIEF.md changed an earlier choice (D9, I33 to I38), the ADR text already states the amended rule. How the decisions show up for users: [user-guide.md](../user-guide.md), [agent-guide.md](../agent-guide.md), [operations.md](../operations.md).
 
 - [ADR-0001](0001-stack.md) - Stack: Hono, Drizzle, React/Vite, MCP SDK, pnpm monorepo, Node 22, pinned versions (Accepted, 2026-10-19)
 - [ADR-0002](0002-postgres-pgvector.md) - Postgres with pgvector as the only store (Accepted, 2026-10-19)
@@ -15,3 +15,4 @@ Project decisions, MADR style, each with date and deciders. Template and rules: 
 - [ADR-0011](0011-server-modules-and-ports.md) - Server code is organised as modules behind ports (Accepted, 2026-10-19)
 - [ADR-0012](0012-authority-and-write-ordering.md) - Delegated authority is re-checked at use, and item writes lock the project row first (Accepted, 2026-10-19)
 - [ADR-0013](0013-cli-packaging-and-release.md) - The CLI is published as one esbuild bundle, and a v* tag releases the npm package and the image together (Accepted, 2026-10-19)
+- [ADR-0014](0014-library-space.md) - Library space: per-project pages written only by humans (Accepted, 2026-10-20)

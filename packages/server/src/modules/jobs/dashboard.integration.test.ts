@@ -59,6 +59,13 @@ describe('GET /api/v1/projects/:slug/dashboard', () => {
     const stale = await create('memories', { title: 'Old claim', type: 'fact' })
     await create('decisions', { title: 'Use Postgres' })
     await create('docs', { title: 'Architecture' })
+    const lib = await createItem(db(), { projectId: s.acme.id, space: 'library' })
+    const libArchived = await createItem(db(), { projectId: s.acme.id, space: 'library' })
+    await db()
+      .update(items)
+      .set({ lifecycle: 'archived', archivedAt: sql`now()`, archiveReason: 'manual' })
+      .where(eq(items.id, libArchived.id))
+    expect(lib.id).toBeTruthy()
     expect((await ed.post(`${P}/items/${fact.id}/archive`)).status).toBe(200)
     await db().update(items).set({ lifecycle: 'stale', staleSince: sql`now()` }).where(eq(items.id, stale.id))
 
@@ -67,6 +74,7 @@ describe('GET /api/v1/projects/:slug/dashboard', () => {
       memories: { active: 1, stale: 1, archived: 1 },
       decisions: { active: 1, stale: 0, archived: 0 },
       docs: { active: 1, stale: 0, archived: 0 },
+      library: { active: 1, stale: 0, archived: 1 },
     })
     expect(d.review).toEqual({ stale: 1, archived: 1, expiring: 0, conflicts: 0, push_conflicts: 0 })
     // the same numbers as GET …/review

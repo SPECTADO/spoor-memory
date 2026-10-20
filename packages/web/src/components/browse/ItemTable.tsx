@@ -24,7 +24,7 @@ export function ItemTable({
   canWrite: boolean
   onTagClick?: (tag: string) => void
 }) {
-  const label = { memories: 'Memories', decisions: 'Decisions', docs: 'Docs' }[space]
+  const label = { memories: 'Memories', decisions: 'Decisions', docs: 'Docs', library: 'Library' }[space]
   return (
     <Table caption={label}>
       <THead>
@@ -33,7 +33,7 @@ export function ItemTable({
           <Th>Title</Th>
           <Th className="hidden md:table-cell">Tags</Th>
           <Th>Updated</Th>
-          <Th className="hidden lg:table-cell">Verified</Th>
+          {space !== 'library' && <Th className="hidden lg:table-cell">Verified</Th>}
           {space === 'memories' && <Th className="hidden lg:table-cell">Expires</Th>}
           {canWrite && <Th>Actions</Th>}
         </tr>
@@ -76,11 +76,13 @@ export function ItemTable({
                 {fromNow(item.updated_at)}
               </time>
             </Td>
-            <Td className="hidden whitespace-nowrap lg:table-cell">
-              <time dateTime={item.last_verified_at} title={item.last_verified_at}>
-                {fromNow(item.last_verified_at)}
-              </time>
-            </Td>
+            {space !== 'library' && (
+              <Td className="hidden whitespace-nowrap lg:table-cell">
+                <time dateTime={item.last_verified_at} title={item.last_verified_at}>
+                  {fromNow(item.last_verified_at)}
+                </time>
+              </Td>
+            )}
             {space === 'memories' && (
               <Td className="hidden whitespace-nowrap lg:table-cell">
                 {item.expires_at ? fromNow(item.expires_at) : '—'}

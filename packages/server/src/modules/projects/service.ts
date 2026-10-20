@@ -46,7 +46,7 @@ function validateSettings(stored: Record<string, unknown>): ProjectSettings {
 async function listStats(db: DbOrTx, ids: string[]) {
   const out = new Map<string, { counts: ProjectListItem['counts']; review: number }>()
   if (ids.length === 0) return out
-  for (const id of ids) out.set(id, { counts: { memories: 0, decisions: 0, docs: 0 }, review: 0 })
+  for (const id of ids) out.set(id, { counts: { memories: 0, decisions: 0, docs: 0, library: 0 }, review: 0 })
   const notArchived = sql`${items.lifecycle} <> 'archived'`
   const rows = await db
     .select({
@@ -54,10 +54,12 @@ async function listStats(db: DbOrTx, ids: string[]) {
       memories: sql<number>`(count(*) FILTER (WHERE ${items.space} = 'memories' AND ${notArchived}))::int`,
       decisions: sql<number>`(count(*) FILTER (WHERE ${items.space} = 'decisions' AND ${notArchived}))::int`,
       docs: sql<number>`(count(*) FILTER (WHERE ${items.space} = 'docs' AND ${notArchived}))::int`,
+      library: sql<number>`(count(*) FILTER (WHERE ${items.space} = 'library' AND ${notArchived}))::int`,
       // review-queue sections of cleanup-and-jobs.md section 6 (conflicts counted below)
       review: sql<number>`(
-        count(*) FILTER (WHERE ${items.lifecycle} = 'stale')
-        + count(*) FILTER (WHERE ${items.lifecycle} = 'archived' AND ${items.archivedAt} > now() - interval '30 days')
+        count(*) FILTER (WHERE ${items.lifecycle} = 'stale' AND ${items.space} <> 'library')
+        + count(*) FILTER (WHERE ${items.lifecycle} = 'archived' AND ${items.space} <> 'library'
+                             AND ${items.archivedAt} > now() - interval '30 days')
         + count(*) FILTER (WHERE ${items.type} = 'observation' AND ${items.lifecycle} = 'active'
                              AND ${items.expiresAt} < now() + interval '48 hours')
         + count(*) FILTER (WHERE ${items.pushConflictAt} IS NOT NULL))::int`,
@@ -67,7 +69,7 @@ async function listStats(db: DbOrTx, ids: string[]) {
     .groupBy(items.projectId)
   for (const r of rows) {
     out.set(r.projectId, {
-      counts: { memories: r.memories, decisions: r.decisions, docs: r.docs },
+      counts: { memories: r.memories, decisions: r.decisions, docs: r.docs, library: r.library },
       review: r.review,
     })
   }
@@ -157,7 +159,7 @@ export class ProjectService {
           name: r.project.name,
           description: r.project.description,
           role: ctx.user.isAdmin ? 'admin' : (r.membership as ProjectRole),
-          counts: s?.counts ?? { memories: 0, decisions: 0, docs: 0 },
+          counts: s?.counts ?? { memories: 0, decisions: 0, docs: 0, library: 0 },
           review_total: s?.review ?? 0,
         }
       }),
@@ -189,6 +191,7 @@ export class ProjectService {
       kind: p.kind,
       settings: resolveSettings(p.settings),
       role: access.role,
+      can_edit_library: access.can('library.write'),
       embedding: { model: p.embeddingModel, target: p.embeddingTarget, remaining },
       created_at: p.createdAt.toISOString(),
     }
@@ -307,7 +310,7 @@ export class ProjectService {
       return updated as ProjectRow
     })
     if (reembed) this.deps.ports.jobs.enqueue('reembed', { projectId: row.id })
-    return this.get(accessFor(ctx, row, access.membership))
+    return this.get(accessFor(ctx, row, access.membership, access.libraryEditor))
   }
 
   /**

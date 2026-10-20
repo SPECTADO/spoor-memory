@@ -32,10 +32,12 @@ import {
 } from './schemas.js'
 import type { Caller, ItemService } from './service.js'
 
+/** A cookie caller carries its rights; the services refuse a library write without `library.write`. */
 const webCaller = (a: ProjectAccess): Caller => ({
   ctx: a.ctx,
   via: 'web',
   project: { id: a.project.id, slug: a.project.slug, kind: a.project.kind },
+  rights: { item: a.can('item.write'), library: a.can('library.write') },
 })
 
 function spaceOf(c: Context<AppEnv>) {
@@ -51,7 +53,14 @@ export function itemRoutes(deps: ServerDeps, items: ItemService) {
     a.assert('project.read')
     return webCaller(a)
   }
+  // either right opens the write routes; which item a caller may write is the services' (assertWritable)
   const writer = async (c: Context<AppEnv>) => {
+    const a = await access(c)
+    if (!a.can('library.write')) a.assert('item.write')
+    return webCaller(a)
+  }
+  // the review queue's bulk actions: item editors only (a flagged viewer is refused here)
+  const itemWriter = async (c: Context<AppEnv>) => {
     const a = await access(c)
     a.assert('item.write')
     return webCaller(a)
@@ -154,12 +163,13 @@ export function itemRoutes(deps: ServerDeps, items: ItemService) {
       })
       .get('/projects/:slug/resolve', async (c) => {
         const caller = await reader(c)
-        return c.json(await items.resolveText(caller, readQuery(c, resolveQuery).ref))
+        const q = readQuery(c, resolveQuery)
+        return c.json(await items.resolveText(caller, q.ref, q.from))
       })
 
       // ---- 8 review queue: the bulk action (the lists are the jobs module's) ----
       .post('/projects/:slug/review/bulk', async (c) => {
-        const caller = await writer(c)
+        const caller = await itemWriter(c)
         const b = await readJson(c, reviewBulkRequest)
         return c.json(await items.reviewBulk(caller, b.action, b.refs))
       })

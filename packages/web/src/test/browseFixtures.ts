@@ -36,7 +36,11 @@ export function summary(over: Partial<ItemSummary> = {}): ItemSummary {
   }
 }
 
-export function projectFixture(slug: string, role: 'viewer' | 'editor' | 'admin') {
+export function projectFixture(
+  slug: string,
+  role: 'viewer' | 'editor' | 'admin',
+  opts: { can_edit_library?: boolean } = {},
+) {
   return {
     id: `p-${slug}`,
     slug,
@@ -50,6 +54,7 @@ export function projectFixture(slug: string, role: 'viewer' | 'editor' | 'admin'
       embedding: { provider: 'local' },
     },
     role,
+    can_edit_library: opts.can_edit_library ?? role === 'admin',
     embedding: { model: 'e5', target: null, remaining: 0 },
     created_at: '2026-10-01T00:00:00Z',
   }

@@ -96,10 +96,15 @@ interface SectionSpec {
 function sectionSpec(section: Exclude<ReviewSection, 'conflicts'>): SectionSpec {
   switch (section) {
     case 'stale':
-      return { where: sql`${items.lifecycle} = 'stale'`, sort: items.staleSince, dir: 'asc' }
+      return {
+        where: sql`${items.lifecycle} = 'stale' AND ${items.space} <> 'library'`,
+        sort: items.staleSince,
+        dir: 'asc',
+      }
     case 'archived':
       return {
-        where: sql`${items.lifecycle} = 'archived' AND ${items.archivedAt} > now() - ${ARCHIVED_WINDOW}`,
+        where: sql`${items.lifecycle} = 'archived' AND ${items.space} <> 'library'
+          AND ${items.archivedAt} > now() - ${ARCHIVED_WINDOW}`,
         sort: items.archivedAt,
         dir: 'desc',
       }
@@ -131,8 +136,9 @@ export class ReviewService {
     const p = access.project.id
     const [row] = await this.deps.db
       .select({
-        stale: sql<number>`(count(*) FILTER (WHERE ${items.lifecycle} = 'stale'))::int`,
-        archived: sql<number>`(count(*) FILTER (WHERE ${items.lifecycle} = 'archived'
+        stale: sql<number>`(count(*) FILTER (WHERE ${items.lifecycle} = 'stale'
+          AND ${items.space} <> 'library'))::int`,
+        archived: sql<number>`(count(*) FILTER (WHERE ${items.lifecycle} = 'archived' AND ${items.space} <> 'library'
           AND ${items.archivedAt} > now() - ${ARCHIVED_WINDOW}))::int`,
         expiring: sql<number>`(count(*) FILTER (WHERE ${items.type} = 'observation'
           AND ${items.lifecycle} = 'active' AND ${items.expiresAt} < now() + ${EXPIRING_HORIZON}))::int`,

@@ -84,10 +84,17 @@ export function FilterBar({
           label="Lifecycle"
           value={filters.lifecycle}
           onChange={(e) => set({ lifecycle: e.target.value as LifecycleFilter })}
-          options={[
-            { value: 'default', label: LIFECYCLE_LABEL.default },
-            ...LIFECYCLES.map((l) => ({ value: l, label: LIFECYCLE_LABEL[l] })),
-          ]}
+          options={
+            space === 'library'
+              ? [
+                  { value: 'default', label: LIFECYCLE_LABEL.active },
+                  { value: 'archived', label: LIFECYCLE_LABEL.archived },
+                ]
+              : [
+                  { value: 'default', label: LIFECYCLE_LABEL.default },
+                  ...LIFECYCLES.map((l) => ({ value: l, label: LIFECYCLE_LABEL[l] })),
+                ]
+          }
         />
         <form onSubmit={commitAnchor}>
           <Input
@@ -129,13 +136,15 @@ export function FilterBar({
             { value: 'asc', label: 'Oldest first' },
           ]}
         />
-        <div className="flex items-end pb-2">
-          <Checkbox
-            label="Pinned only"
-            checked={filters.pinned}
-            onChange={(e) => set({ pinned: e.target.checked })}
-          />
-        </div>
+        {space !== 'library' && (
+          <div className="flex items-end pb-2">
+            <Checkbox
+              label="Pinned only"
+              checked={filters.pinned}
+              onChange={(e) => set({ pinned: e.target.checked })}
+            />
+          </div>
+        )}
       </div>
       {(filters.tags.length > 0 || count > 0) && (
         <div className="flex flex-wrap items-center gap-2">

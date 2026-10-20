@@ -142,3 +142,77 @@ describe('SpaceListPage', () => {
     expect(router.state.location.search).toBe('?tag=db')
   })
 })
+
+describe('SpaceListPage library', () => {
+  const empty = { items: [], next_cursor: null }
+
+  it('shows the subtitle, the footer and the empty state without the right', async () => {
+    mockApi({
+      ...base('editor'),
+      'GET /api/v1/projects/acme/spaces/library/items': [200, empty],
+    })
+    renderApp('/projects/acme/library')
+    expect(await screen.findByRole('heading', { name: 'Library' })).toBeInTheDocument()
+    expect(screen.getByText(/Only people with the library right can change them/)).toBeInTheDocument()
+    // an editor without the library right gets no New page
+    expect(await screen.findByText('No library pages yet')).toBeInTheDocument()
+    expect(screen.getByText('A project admin or a library editor can add pages here.')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'New page' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Shared → Library/ })).toHaveAttribute('href', '/shared/library')
+    // the lifecycle filter has Active and Archived only
+    const options = within(screen.getByLabelText('Lifecycle')).getAllByRole('option')
+    expect(options.map((o) => o.textContent)).toEqual(['Active', 'Archived'])
+    expect(screen.queryByLabelText('Pinned only')).not.toBeInTheDocument()
+  })
+
+  it('offers New page and Archive/Restore to a viewer holding the library right', async () => {
+    mockApi({
+      'GET /api/v1/me': [
+        200,
+        meFixture({}, [{ project: { id: 'p-acme', slug: 'acme', name: 'Acme' }, role: 'viewer' }]),
+      ],
+      'GET /api/v1/projects/acme': [200, projectFixture('acme', 'viewer', { can_edit_library: true })],
+      'GET /api/v1/projects/acme/spaces/library/items': [
+        200,
+        {
+          items: [
+            summary({ id: 'l1', handle: 'L1', space: 'library', number: 1, title: 'Graphics guide' }),
+            summary({
+              id: 'l2',
+              handle: 'L2',
+              space: 'library',
+              number: 2,
+              title: 'Old guide',
+              lifecycle: 'archived',
+            }),
+          ],
+          next_cursor: null,
+        },
+      ],
+    })
+    renderApp('/projects/acme/library')
+    expect(await screen.findByRole('link', { name: 'Graphics guide' })).toHaveAttribute(
+      'href',
+      '/projects/acme/i/L1',
+    )
+    expect(screen.getByRole('link', { name: 'New page' })).toHaveAttribute(
+      'href',
+      '/projects/acme/library/new',
+    )
+    expect(screen.getByRole('button', { name: 'Archive L1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restore L2' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Pin / })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Verify / })).not.toBeInTheDocument()
+  })
+
+  it('invites the right holder to write the first page', async () => {
+    mockApi({
+      ...base('admin'),
+      'GET /api/v1/projects/acme': [200, projectFixture('acme', 'admin')],
+      'GET /api/v1/projects/acme/spaces/library/items': [200, empty],
+    })
+    renderApp('/projects/acme/library')
+    expect(await screen.findByText(/Write the guides agents must follow/)).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'New page' }).length).toBeGreaterThan(0)
+  })
+})

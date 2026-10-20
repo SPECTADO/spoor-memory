@@ -23,7 +23,7 @@ import {
 } from '../ui'
 import { summaryPath } from './item/common'
 
-const SPACES: Space[] = ['memories', 'decisions', 'docs']
+const SPACES: Space[] = ['memories', 'decisions', 'docs', 'library']
 export const SEARCH_DEBOUNCE_MS = 250
 
 export function SearchPage() {
@@ -95,6 +95,7 @@ export function SearchPage() {
             { value: 'memories', label: 'Memories' },
             { value: 'decisions', label: 'Decisions' },
             { value: 'docs', label: 'Docs' },
+            { value: 'library', label: 'Library' },
           ]}
         />
         <Checkbox
@@ -107,7 +108,7 @@ export function SearchPage() {
       </form>
 
       {q.trim() === '' ? (
-        <EmptyState>Type a query to search memories, decisions and docs.</EmptyState>
+        <EmptyState>Type a query to search memories, decisions, docs and the library.</EmptyState>
       ) : search.isPending ? (
         <SkeletonRows rows={5} />
       ) : search.isError ? (

@@ -6,8 +6,8 @@ Postgres with pgvector) serves many isolated projects and one org-wide shared sp
 
 ## Features
 
-- **Three spaces per project**: `memories` (atomic claims: decision, fact, procedure, observation), `decisions` (numbered
-  ADRs, `ADR-0001`) and `docs` (long-form pages). Every item is Markdown with YAML frontmatter, versioned in append-only
+- **Four spaces per project**: `memories` (atomic claims: decision, fact, procedure, observation), `decisions` (numbered
+  ADRs, `ADR-0001`), `docs` (long-form pages) and `library` (human-written guides agents read but cannot change, `L<n>`). Every item is Markdown with YAML frontmatter, versioned in append-only
   revisions, linked by `[[wikilinks]]` and typed edges, with backlinks in the UI.
 - **A shared space** every project token can read, written only by humans in the web UI.
 - **Cheap for agents**: a budgeted digest (about 1,500 tokens by default) at session start, hybrid search (full text plus

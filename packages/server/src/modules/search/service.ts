@@ -9,6 +9,7 @@
  * - search: FTS (`simple` + unaccent, prefix tsquery) and vector cosine on the active model, fused by RRF
  *   (k = 60), project and shared merged by score.
  */
+import { spaces } from '@spoor/shared'
 import { eq, sql } from 'drizzle-orm'
 import { chunks as chunksTable } from '../../db/schema.js'
 import type { DbOrTx, Tx } from '../../lib/db.js'
@@ -45,7 +46,7 @@ export const EMBED_TIMEOUT_MS = 20_000
 export const BRANCH_LIMIT = 50
 export const NOTE_VECTOR_UNAVAILABLE = 'vector search unavailable'
 export const NOTE_REEMBEDDING = 'vector search unavailable (re-embedding)'
-export const SPACES_ALL: Space[] = ['memories', 'decisions', 'docs']
+export const SPACES_ALL: Space[] = [...spaces]
 
 // ---- token counters ---------------------------------------------------------------------------------
 

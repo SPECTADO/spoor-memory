@@ -4,7 +4,7 @@
  * shared `pickRefTarget` (one copy, also behind the item service's resolver); wikilink extraction is the
  * shared `extractWikilinks`. Pure; the caller loads the rows.
  */
-import { canonicalRef, pickRefTarget, refTarget } from '@spoor/shared'
+import { canonicalRef, pickRefTarget, refHandle, refTarget } from '@spoor/shared'
 import type { Space } from '../../ports.js'
 
 export interface RefRow {
@@ -29,9 +29,8 @@ export class RefIndex {
     this.#rows.set(r.id, r)
     this.#bySpaceSlug.set(`${r.space}/${r.slug}`, r.id)
     this.#bySlug.set(r.slug, [...(this.#bySlug.get(r.slug) ?? []), r])
-    const handle =
-      r.space === 'memories' ? `m${r.number}` : r.space === 'docs' ? `d${r.number}` : `adr-${r.adrNumber}`
-    if (r.space !== 'decisions' || r.adrNumber !== null) this.#byHandle.set(handle, r)
+    if (r.space !== 'decisions' || r.adrNumber !== null)
+      this.#byHandle.set(refHandle(r.space, r.number, r.adrNumber), r)
   }
 
   rowOf(id: string): RefRow | undefined {

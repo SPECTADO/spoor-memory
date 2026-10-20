@@ -83,8 +83,9 @@ export async function addMember(
   projectId: string,
   userId: string,
   role: 'admin' | 'editor' | 'viewer',
+  opts: { libraryEditor?: boolean } = {},
 ) {
-  await db.insert(memberships).values({ projectId, userId, role })
+  await db.insert(memberships).values({ projectId, userId, role, libraryEditor: opts.libraryEditor ?? false })
 }
 
 export interface TokenOpts {
@@ -118,8 +119,10 @@ export async function createToken(db: Db, opts: TokenOpts) {
 
 export interface ItemOpts {
   projectId: string
-  space?: 'memories' | 'decisions' | 'docs'
+  space?: 'memories' | 'decisions' | 'docs' | 'library'
   title?: string
+  /** Default `item-<n>`. */
+  slug?: string
   body?: string
   type?: 'decision' | 'fact' | 'procedure' | 'observation'
   status?: string
@@ -160,7 +163,7 @@ export async function createItem(db: Db, opts: ItemOpts) {
         space,
         number: counters.number,
         adrNumber: space === 'decisions' ? counters.adr : null,
-        slug: `item-${n}`,
+        slug: opts.slug ?? `item-${n}`,
         title,
         type,
         status,

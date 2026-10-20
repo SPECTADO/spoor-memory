@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { frontmatterSchemas } from './frontmatter.js'
+import { extrasOf, frontmatterSchemas, knownKeys, spaces } from './frontmatter.js'
 import { projectSettings } from './settings.js'
 
 describe('frontmatter schemas', () => {
@@ -17,6 +17,22 @@ describe('frontmatter schemas', () => {
       frontmatterSchemas.decisions.safeParse({ adr: 7, status: 'accepted', date: '2026-10-19' }).success,
     ).toBe(true)
     expect(frontmatterSchemas.decisions.safeParse({ adr: 0 }).success).toBe(false)
+  })
+  it('library: the doc shape, unknown keys kept, status known', () => {
+    expect(spaces).toContain('library')
+    const r = frontmatterSchemas.library.parse({
+      title: 'Graphics guide',
+      anchors: ['packages/web/**'],
+      x: 1,
+    })
+    expect(r.tags).toEqual([])
+    expect(r.pinned).toBe(false)
+    expect(r.anchors).toEqual(['packages/web/**'])
+    expect((r as Record<string, unknown>).x).toBe(1)
+    expect(frontmatterSchemas.library.safeParse({ tags: ['Bad Tag'] }).success).toBe(false)
+    expect(knownKeys('library').has('status')).toBe(true)
+    expect(knownKeys('library').has('type')).toBe(false)
+    expect(extrasOf('library', { status: 'active', title: 't', foo: 2 })).toEqual({ foo: 2 })
   })
 })
 

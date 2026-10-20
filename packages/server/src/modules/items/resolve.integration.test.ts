@@ -3,9 +3,13 @@ import { eq } from 'drizzle-orm'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { testDb } from '../../../test/db.js'
 import { createItem, createProject, createSharedProject } from '../../../test/factories.js'
+import { testApp } from '../../../test/http.js'
+import { stubPorts } from '../../../test/ports.js'
 import { items } from '../../db/schema.js'
+import type { AuthContext } from '../../lib/auth-context.js'
 import { ApiError } from '../../lib/errors.js'
 import { type ResolveScope, resolveItemRef } from './resolve.js'
+import type { Caller } from './writes.js'
 
 const db = () => testDb()
 
@@ -123,5 +127,101 @@ describe('resolveItemRef', () => {
     const { read } = ctx
     for (const ref of ['', '   ', 'Not A Slug', 'x'.repeat(201), "a'; DROP TABLE items; --", '%', 'ADR-'])
       expect(await code(resolveItemRef(db(), read, ref)), ref).toBe('not_found')
+  })
+})
+
+describe('library pages (ADR-0014)', () => {
+  const handles = async (p: Promise<unknown>) => {
+    try {
+      await p
+      return null
+    } catch (e) {
+      expect((e as ApiError).code).toBe('ambiguous_id')
+      return (e as ApiError).details?.handles
+    }
+  }
+
+  it('L<n> in either case, S:L<n> from a project, plain L<n> inside _shared', async () => {
+    const { read, inShared, acme, shared } = ctx
+    const page = await createItem(db(), { projectId: acme.id, space: 'library', slug: 'guide' }) // number 4
+    const sharedPage = await createItem(db(), { projectId: shared.id, space: 'library' }) // shared number 2
+    for (const ref of ['L4', 'l4', ' L4 ', 'guide', page.id]) {
+      expect(await resolveItemRef(db(), read, ref), ref).toMatchObject({
+        id: page.id,
+        handle: 'L4',
+        space: 'library',
+      })
+    }
+    expect(await resolveItemRef(db(), read, 'S:L2')).toMatchObject({
+      id: sharedPage.id,
+      handle: 'S:L2',
+      shared: true,
+    })
+    expect(await resolveItemRef(db(), read, 'S:l2')).toMatchObject({ id: sharedPage.id })
+    expect(await resolveItemRef(db(), inShared, 'L2')).toMatchObject({ id: sharedPage.id, handle: 'L2' })
+    // the handle names the space: m4 and d4 are not the library page, L1 is not the memory
+    expect(await code(resolveItemRef(db(), read, 'm4'))).toBe('not_found')
+    expect(await code(resolveItemRef(db(), read, 'L1'))).toBe('not_found')
+  })
+
+  it('a library page and a doc with the same slug are ambiguous_id', async () => {
+    const { read, acme, slug, doc } = ctx
+    await slug(doc.id, 'guide')
+    await createItem(db(), { projectId: acme.id, space: 'library', slug: 'guide' })
+    expect(await handles(resolveItemRef(db(), read, 'guide'))).toEqual(['d2', 'L4'])
+  })
+
+  it('an own item with the slug of a _shared library page is ambiguous_id naming both', async () => {
+    const { read, write, acme, shared, slug, doc, sharedMem } = ctx
+    await slug(doc.id, 'graphics-guide')
+    await createItem(db(), { projectId: shared.id, space: 'library', slug: 'graphics-guide' }) // S:L2
+    expect(await handles(resolveItemRef(db(), read, 'graphics-guide'))).toEqual(['d2', 'S:L2'])
+    // a write position never looks at _shared: the own doc
+    expect((await resolveItemRef(db(), write, 'graphics-guide')).id).toBe(doc.id)
+    // a _shared non-library twin still loses to the own item, as before
+    await slug(sharedMem.id, 'session-store')
+    expect((await resolveItemRef(db(), read, 'session-store')).projectId).toBe(acme.id)
+    // an own library page with that slug is fine: no shadowing of a library page by a library page
+    await slug(doc.id, 'other-doc')
+    const own = await createItem(db(), { projectId: acme.id, space: 'library', slug: 'graphics-guide' })
+    expect((await resolveItemRef(db(), read, 'graphics-guide')).id).toBe(own.id)
+  })
+
+  it('a write position on a library page is read_only_space for agents and editors without the right', async () => {
+    const { acme } = ctx
+    await createItem(db(), { projectId: acme.id, space: 'library', slug: 'guide' }) // L4
+    const items = testApp({ ports: stubPorts() }).modules.items.items
+    const ctxOf = (via: 'mcp' | 'cli' | 'web', rights?: Caller['rights']): Caller => ({
+      ctx: {
+        user: {
+          id: '00000000-0000-4000-8000-000000000009',
+          email: 'a@x',
+          name: 'A',
+          isAdmin: false,
+          sharedEditor: false,
+        },
+        project: { id: acme.id, slug: 'acme', name: 'acme', kind: 'project' },
+        role: 'editor',
+        via: via === 'web' ? 'cookie' : 'bearer',
+      } as AuthContext,
+      via,
+      project: { id: acme.id, slug: 'acme', kind: 'project' },
+      rights,
+    })
+    for (const via of ['mcp', 'cli'] as const) {
+      expect(await code(items.resolve(ctxOf(via), 'L4', 'write'))).toBe('read_only_space')
+      expect(await code(items.resolve(ctxOf(via), 'L4', 'read'))).toBe('ok')
+      expect(await code(items.resolve(ctxOf(via), 'm1', 'write'))).toBe('ok')
+    }
+    expect(await code(items.resolve(ctxOf('web', { item: true, library: false }), 'L4', 'write'))).toBe(
+      'read_only_space',
+    )
+    expect(await code(items.resolve(ctxOf('web', { item: true, library: true }), 'L4', 'write'))).toBe('ok')
+    // a viewer holding only the library flag: library pages yes, anything else forbidden
+    expect(await code(items.resolve(ctxOf('web', { item: false, library: true }), 'L4', 'write'))).toBe('ok')
+    expect(await code(items.resolve(ctxOf('web', { item: false, library: true }), 'm1', 'write'))).toBe(
+      'forbidden',
+    )
+    expect(await code(items.resolve(ctxOf('web', { item: false, library: true }), 'm1', 'read'))).toBe('ok')
   })
 })

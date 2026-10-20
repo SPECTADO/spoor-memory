@@ -11,7 +11,7 @@ const list = {
       name: 'Acme',
       description: 'Main app',
       role: 'editor',
-      counts: { memories: 12, decisions: 3, docs: 4 },
+      counts: { memories: 12, decisions: 3, docs: 4, library: 2 },
       review_total: 2,
     },
   ],
@@ -35,6 +35,8 @@ describe('ProjectsPage', () => {
     expect(within(card).getByText('12')).toBeInTheDocument()
     expect(within(card).getByText('editor')).toBeInTheDocument()
     expect(within(card).getByText('2 to review')).toBeInTheDocument()
+    expect(within(card).getByText('library')).toBeInTheDocument()
+    expect(within(card).getByText('2', { selector: 'dd' })).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: 'Shared knowledge' })[0]).toHaveAttribute('href', '/shared')
     expect(screen.queryByRole('button', { name: 'New project' })).not.toBeInTheDocument()
   })

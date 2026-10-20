@@ -10,6 +10,19 @@ import {
 } from './editorModel'
 import { itemFixture } from './testFixtures'
 
+describe('library editor model', () => {
+  it('has the docs shape', () => {
+    const v = emptyValues({ title: 'Guide', body: 'text', tags: ['a'], anchors: 'src/' })
+    expect(createBody(v, 'library')).toEqual(createBody(v, 'docs'))
+    expect(validate(v, 'library', 'create')).toEqual(validate(v, 'docs', 'create'))
+    const item = itemFixture({ space: 'library', type: null, confidence: null })
+    const base = valuesFromItem(item)
+    expect(patchBody({ ...base, title: 'New' }, base, item.revision, 'library')).toEqual(
+      patchBody({ ...base, title: 'New' }, base, item.revision, 'docs'),
+    )
+  })
+})
+
 describe('editor validation', () => {
   it('requires a one-line title of at most 200 characters', () => {
     expect(validate(emptyValues(), 'memories', 'create').title).toBe('A title is required.')

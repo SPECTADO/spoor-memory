@@ -18,11 +18,12 @@ Deviations from BRIEF.md are listed in [deviations.md](deviations.md).
   | memories | `m<number>` | `m42` | `S:m4` |
   | docs | `d<number>` | `d7` | `S:d2` |
   | decisions | `ADR-<adr_number 4-digit>` | `ADR-0012` | `S:ADR-0003` |
+  | library | `L<number>` | `L3` | `S:L1` |
 
-  `number` comes from one per-project counter shared by all spaces, so `m`/`d` numbers never collide.
+  `number` comes from one per-project counter shared by all spaces, so `m`/`d`/`L` numbers never collide (and are sparse: there is no counter per space). The letter of a handle is case-insensitive for `L` (`L3` and `l3` both parse); `m` and `d` stay lower-case only.
   Resolution order for an id argument: `S:` prefix selects the shared project, then
-  `^[md]\d+$` → number, `^ADR-\d+$` (case-insensitive) → adr_number, uuid → id, otherwise slug
-  (searched memories, decisions, docs; >1 hit → `ambiguous_id` error listing the handles).
+  `^[mdl]\d+$` → number, `^ADR-\d+$` (case-insensitive) → adr_number, uuid → id, otherwise slug
+  (searched memories, decisions, docs, library; >1 hit → `ambiguous_id` error listing the handles). A read of a slug that names exactly one own non-library item while `_shared` holds a library page with that slug also answers `ambiguous_id` (listing for example `d4, S:L3`), so an agent-written slug twin cannot silently replace a shared library page.
 - **Every resolution is project-scoped.** One resolver (`packages/server/src/modules/items/resolve.ts`) serves MCP,
   REST, repo push, `adr/import`, frontmatter `relations` / `supersedes` / `drafted_from`, wikilinks and zip
   import edges, and every lookup it runs carries `AND project_id = ANY($allowed)`:
@@ -34,7 +35,7 @@ Deviations from BRIEF.md are listed in [deviations.md](deviations.md).
   exactly like a uuid that does not exist. A repo push whose `spoor_id` is not in the project is treated
   as if it had no `spoor_id` (§7) and never touches the foreign item.
 - **Canonical refs** (wikilink text, ADR refs, handle refs): `ADR-0007`, `adr-7`, `ADR-07` → `adr-7`
-  (unpadded); `m42` → `m42`; `d7` → `d7`; anything else → `slugify`. Both sides use the same function, so
+  (unpadded); `m42` → `m42`; `d7` → `d7`; `L3`, `l3` → `l3`; anything else → `slugify`. Both sides use the same function, so
   a stored `dst_ref` always compares equal to the refs of the item it names.
 - Promoted frontmatter fields live in columns; `items.frontmatter` keeps only unknown/extra keys, so
   columns are always authoritative and nothing is stored twice.
@@ -134,11 +135,15 @@ CREATE TABLE memberships (
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role       text NOT NULL CHECK (role IN ('admin','editor','viewer')),
+  library_editor boolean NOT NULL DEFAULT false,   -- right to write the project's library (ADR-0014)
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, user_id)
 );
 CREATE INDEX memberships_user_idx ON memberships (user_id);
 -- app rule: no memberships on the shared project (access there = is_admin / shared_editor / any reader)
+-- app rule: library_editor is stored false whenever role = 'admin' (the role implies the right). Promoting to
+-- admin clears it; demoting from admin sets it to the request's library_editor, default false, so no one keeps
+-- the right without a visible decision; a viewer/editor change keeps it. Every implicit change is audited.
 
 CREATE TABLE tokens (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -213,8 +218,8 @@ that provider's tag as `embedding_model`; `_shared` is created at startup with `
 CREATE TABLE items (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id       uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  space            text NOT NULL CHECK (space IN ('memories','decisions','docs')),
-  number           integer NOT NULL,           -- per-project counter (handles m42 / d7)
+  space            text NOT NULL CHECK (space IN ('memories','decisions','docs','library')),
+  number           integer NOT NULL,           -- per-project counter (handles m42 / d7 / L3)
   adr_number       integer CHECK (adr_number BETWEEN 1 AND 99999),
   slug             text NOT NULL CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(slug) <= 80),
   title            text NOT NULL CHECK (length(title) BETWEEN 1 AND 200 AND title !~ '[\r\n]'),
@@ -259,7 +264,11 @@ CREATE TABLE items (
   CHECK ((type = 'observation') = (expires_at IS NOT NULL)),
   CHECK ((lifecycle = 'stale') = (stale_since IS NOT NULL)),
   CHECK ((lifecycle = 'archived') = (archived_at IS NOT NULL AND archive_reason IS NOT NULL)),
-  CHECK (cardinality(tags) <= 20 AND cardinality(anchors) <= 20)
+  CHECK (cardinality(tags) <= 20 AND cardinality(anchors) <= 20),
+  -- library pages are active or archived, never stale, expiring, pinned, mirrored or agent-written
+  CONSTRAINT items_library_shape_check CHECK (space <> 'library' OR (source_path IS NULL AND push_conflict_at IS NULL
+    AND pinned = false AND expires_at IS NULL AND stale_since IS NULL AND lifecycle IN ('active','archived')
+    AND provenance = 'human' AND status = 'active'))
 );
 CREATE UNIQUE INDEX items_adr_uq ON items (project_id, adr_number) WHERE adr_number IS NOT NULL;
 CREATE UNIQUE INDEX items_source_uq ON items (project_id, source_path) WHERE source_path IS NOT NULL;
@@ -398,6 +407,16 @@ CREATE TRIGGER edges_scope BEFORE INSERT OR UPDATE OF src_id, dst_id, project_id
 ```
 The item service maps `P0002` to `read_only_space` (shared target in a write position) or `not_found`;
 the trigger is the backstop, not the primary check.
+
+Migration `0004_library_guards.sql` extends `spoor_edge_scope()` (the body above plus the library rules) and raises the
+custom SQLSTATE **`SPL01`** (not `P0003`, which is plpgsql's built-in `too_many_rows`) when
+(a) a non-library source points at a library page with `conflicts_with`, `supersedes` or `drafted_from`, or
+(b) a library source has `conflicts_with` to a non-library item. The service maps `SPL01` to `wrong_space` (library wording).
+Other outgoing links of a library page (`wikilink`, `refines`, `supports`, `depends_on`) may point at any item, in the project or
+in `_shared`: they are a human choice at save time. The trigger does not restrict `dst_id` updates, because the human save path
+re-resolves wikilinks with an upsert of `dst_id`; capture and takeover are refused in the services instead (claim filters
+below). The same migration adds `spoor_library_revision_guard()` as a `BEFORE INSERT` trigger on `item_revisions`: a revision of
+a library page whose `via` is `mcp` or `cli` raises **`SPL02`** (mapped to `read_only_space`), a backstop for every content write.
 Edge kinds: agent-settable `refines | supports | depends_on | conflicts_with` (src → dst;
 `conflicts_with` is symmetric, stored once, queried both ways; the reverse-direction check and the insert
 run under a transaction advisory lock on the unordered pair, so concurrent `a→b` and `b→a` store one edge);
@@ -411,13 +430,19 @@ also never END in another project: no write path (including both import kinds) r
 `packages/shared`, fenced and inline code stripped first):
 `\[\[(?:(shared):)?([^\[\]|#\n]+)(?:#[^\]|\n]*)?(?:\|[^\]\n]*)?\]\]`. Target text is canonicalised
 (§0: `ADR-0007` → `adr-7`, `m42` stays `m42`, else slugify). Resolution order inside the source
-project: handle forms by number, then slug in same space, docs, decisions, memories; `shared:` prefix →
-shared project only. A newly created item has `refs_of_new = {slug, 'm<n>' | 'd<n>' | 'adr-<n>'}` (prefixed
+project: handle forms by number (`m`, `d`, `l` and `adr-` refs), then slug in the source's own space, then docs, decisions, memories, with library pages ranking first for every source (rank 0, the source's own space 1, then docs, decisions, memories). A library source resolves handles and slugs in any space: its links are a human choice at save time, a link that resolves to nothing is stored dangling; `shared:` prefix →
+shared project only. A newly created item has `refs_of_new = {slug, 'm<n>' | 'd<n>' | 'l<n>' | 'adr-<n>'}` (prefixed
 `shared:` for a shared item) and, in its create transaction:
 1. resolves dangling edges:
-   `UPDATE edges SET dst_id=$new WHERE dst_id IS NULL AND kind='wikilink' AND project_id=ANY($scope) AND dst_ref=ANY($refs_of_new)`;
+   `UPDATE edges SET dst_id=$new WHERE dst_id IS NULL AND kind='wikilink' AND project_id=ANY($scope) AND dst_ref=ANY($refs_of_new)`,
+   with the source joined and `AND (s.space <> 'library' OR <new item's space> = 'library')`: a dangling link written in a
+   library page is claimed only by a new library page;
 2. takes over wikilinks whose slug text currently resolves to a lower-precedence item (for example a memory
-   `auth-flow` when the new item is doc `auth-flow`) in the same scope.
+   `auth-flow` when the new item is doc `auth-flow`) in the same scope, except links whose source is a library page
+   (`s.space <> 'library'`): a resolved library link is never taken over by a newer item.
+Capture is therefore blocked: an agent cannot redirect a library link by creating a slug twin later.
+When a human re-saves a library page, wikilinks whose ref text is unchanged keep their stored target; an unchanged dangling ref resolves later only to a library page; refs newly added in that save resolve normally (library pages rank first); to repoint a link the human changes the ref text, for example to the item's handle. Both updates map edge
+errors through `mapEdgeError`.
 For a shared item the scope is every project.
 
 **Hard delete of an item** (purge transaction): incoming typed, `supersedes` and `drafted_from` edges are
@@ -531,6 +556,10 @@ adr-tools), lower-cased; `rejected` → `deprecated` (original kept as extra `or
 `superseded by …` → `superseded` plus a `supersedes` edge when the ref resolves. This mapping applies to
 push and `adr/import`; the manifest-less folder import of §8 does not apply it yet (deviations.md G9).
 
+`library`: only the common keys, except that `pinned` is refused (`invalid_input`) and the item is always `active`; the
+lifecycle is `active` or `archived`, and export writes no `status`, `expires` or `last_verified` for it. Library pages are never
+repo-mirrored: `source_path` is always NULL.
+
 `docs`: only the common keys, plus `status` (`active|superseded`) as an output-only key like the memories'
 one: export writes it when not `active`; it is never stored as an extra (one known-key table in
 `@spoor/shared`). Push ignores it (output only); the manifest-less folder import reads it for memories and
@@ -540,7 +569,7 @@ docs alike, so an export → folder-import round trip keeps a superseded item su
 
 `slugify(title)`: NFKD, drop combining marks, lower-case, every run of chars outside `[a-z0-9]` → `-`,
 trim `-`, cut to 80 chars at the last `-` boundary ≤80. Empty → `item`. Reserved shapes (would shadow
-handles): `^[md]\d+$`, `^adr-\d+$`, uuid shape → prefixed `x-`. Collision inside (project, space) →
+handles): `^[mdl]\d+$`, `^adr-\d+$`, uuid shape → prefixed `x-`. Migration 0004 renames existing slugs shaped `l<n>` to `x-l<n>` and rewrites the `dst_ref` of wikilinks that resolved to them (item bodies are not rewritten, because revisions are append-only, so a body link `[[l<n>]]` must be re-saved as `[[x-l<n>]]`; the migration raises a NOTICE with the counts). Import renames every item whose slug has a reserved shape, in any space, to `x-<slug>` with the usual collision rule, and lists the rename in the result notes. Collision inside (project, space) →
 append `-2`, `-3`, … (same 80-char cap). Slugs are immutable after creation (wikilinks and repo
 files reference them); the title can change freely. Items created by a repo push or `adr/import` take
 their slug from the file name instead (`docs/intro.md` → `intro`; ADRs without the number prefix,
@@ -621,11 +650,12 @@ manifest.json
 memories/<slug>.md
 decisions/<NNNN>-<slug>.md
 docs/<slug>.md
+library/<slug>.md
 revisions/<item-uuid>.jsonl     -- one JSON object per revision, ascending
 audit.jsonl                     -- project audit_log rows, ascending id
 ```
 Entry-name allowlist (import): `^manifest\.json$`, `^audit\.jsonl$`,
-`^(memories|docs)/[a-z0-9-]{1,80}\.md$`, `^decisions/\d{4,5}-[a-z0-9-]{1,80}\.md$`,
+`^(memories|docs|library)/[a-z0-9-]{1,80}\.md$`, `^decisions/\d{4,5}-[a-z0-9-]{1,80}\.md$`,
 `^revisions/[0-9a-f-]{36}\.jsonl$`. Markdown files = canonical frontmatter (§5, plus `spoor_id`) +
 body of the current revision; they are for humans and for manifest-less imports.
 
@@ -657,7 +687,7 @@ to either part is detected. Typed and system edges to a shared item carry `dst_r
 
 Revision line: `{"revision":1,"title":…,"body":…,"status":…,"frontmatter":{…},"change":"create",
 "actor_label":"ann@example.com","via":"mcp","client_name":…,"imported_from":null,"created_at":…}`.
-Not exported: chunks/embeddings (rebuilt), user ids, tokens, sessions, memberships, password hashes,
+Not exported: chunks/embeddings (rebuilt), user ids, tokens, sessions, memberships (so neither `library_editor`), password hashes,
 device codes.
 
 Import (`POST /api/v1/projects/import` new project, or into an existing **empty** project; shared
@@ -693,6 +723,14 @@ export per instance at a time (auth-and-security.md §9):
    The manifest is user-editable, so it is validated beyond the column CHECKs: a pinned item cannot be
    `stale` (422), and `last_verified_at`, `last_used_at` and `updated_at` later than the import are clamped
    to the import time (a future time would keep an item from ever going stale).
+   Library rows are normalised: `lifecycle` `stale` becomes `active`, `stale_since`, `expires_at`, `source_path` and
+   `push_conflict_at` are NULL, `pinned` false, `status` `active`, `provenance` `human` (the shape check would refuse the
+   insert otherwise). Library → non-library `wikilink`, `refines`, `supports` and `depends_on` edges are kept; edges of the kinds
+   the rule refuses (`conflicts_with` between a library and a non-library item, `supersedes` or `drafted_from` into a library page)
+   are dropped and listed with the other skipped edges. The claim updates of the import apply the same two filters as §3, and a
+   later `_shared` import resolves typed refs of a library source normally.
+   An archive that contains `library/` entries needs the library right on the target (`library.write`); a server still on 0.1.0
+   rejects it with `invalid_archive`. The format stays `spoor-export/1`.
 7. `audit.jsonl` appended with original timestamps (marked as in step 3), plus the `project.import` row.
 8. All in one transaction, including the chunk rows: every imported item gets its chunks for every model
    of the project's locked set with `embedding = NULL` (FTS works at once, nothing depends on a background

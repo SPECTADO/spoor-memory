@@ -146,6 +146,13 @@ describe('GET /api/v1/projects', () => {
       .update(items)
       .set({ lifecycle: 'archived', archivedAt: sql`now()`, archiveReason: 'manual' })
       .where(eq(items.id, archived.id))
+    // library pages count per space but never reach the review queue, archived or not
+    await createItem(db(), { projectId: a.id, space: 'library' })
+    const libArchived = await createItem(db(), { projectId: a.id, space: 'library' })
+    await db()
+      .update(items)
+      .set({ lifecycle: 'archived', archivedAt: sql`now()`, archiveReason: 'manual' })
+      .where(eq(items.id, libArchived.id))
     await createItem(db(), { projectId: a.id, type: 'observation' }) // expires in 7 days: not "expiring"
 
     const mine = await json<{
@@ -157,7 +164,7 @@ describe('GET /api/v1/projects', () => {
         name: 'Alpha',
         description: '',
         role: 'viewer',
-        counts: { memories: 3, decisions: 1, docs: 1 },
+        counts: { memories: 3, decisions: 1, docs: 1, library: 1 },
         review_total: 2, // one stale + one recently archived
       },
     ])

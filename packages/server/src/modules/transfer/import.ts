@@ -8,10 +8,12 @@
  */
 import {
   extractWikilinks,
+  isReservedSlugShape,
   isValidProjectSlug,
   itemSlug,
   parseHandle,
   projectSettingsPatch,
+  refHandle,
   uniqueSlug,
 } from '@spoor/shared'
 import { and, eq, inArray, sql } from 'drizzle-orm'
@@ -98,7 +100,16 @@ function mapDbError(err: unknown): unknown {
     return new ApiError('slug_taken', { message: 'That project slug is taken.' })
   }
   const pg = pgError(err)
-  if (pg && (pg.code.startsWith('22') || pg.code.startsWith('23') || pg.code === 'P0002')) {
+  // SPL01 / SPL02: the library guards of migration 0004 (the importer drops such edges first; a hit here is
+  // still the archive's content, never a server fault)
+  if (
+    pg &&
+    (pg.code.startsWith('22') ||
+      pg.code.startsWith('23') ||
+      pg.code === 'P0002' ||
+      pg.code === 'SPL01' ||
+      pg.code === 'SPL02')
+  ) {
     return invalidArchive('The archive violates a database constraint.', [
       { message: pg.constraint ?? `database error ${pg.code}` },
     ])
@@ -274,6 +285,71 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** Edge kinds that never cross into the shared space (they change the target's status / meaning). */
 const SYSTEM_KINDS = new Set<string>(['supersedes', 'drafted_from'])
 
+/**
+ * The edges an import never writes between a library page and another item (ADR-0014): `conflicts_with`
+ * across the boundary in either direction, `drafted_from` into a library page, and any `supersedes` of or by a
+ * library page. Wikilinks and refines / supports / depends_on out of or into a library page are kept.
+ * `dstSpace` null (an unresolved target) is refused only for `supersedes` and `conflicts_with` out of a library
+ * page, so a crafted archive cannot leave those dangling. Layering: this importer drops every supersedes of or by
+ * a library page, while the database trigger still accepts a library-to-library supersedes.
+ */
+export function refusedLibraryEdge(kind: string, srcSpace: Space, dstSpace: Space | null): boolean {
+  const srcLib = srcSpace === 'library'
+  if (dstSpace === null) return srcLib && (kind === 'supersedes' || kind === 'conflicts_with')
+  const dstLib = dstSpace === 'library'
+  if (kind === 'supersedes') return srcLib || dstLib
+  if (srcLib === dstLib) return false
+  if (kind === 'conflicts_with') return true
+  return kind === 'drafted_from' && dstLib
+}
+
+/**
+ * A wikilink of a library page is never captured or taken over by another item (ADR-0014): it stays dangling
+ * until a library page with that slug exists, and a resolved one keeps its target.
+ */
+export function libraryClaimAllowed(
+  srcSpace: Space,
+  currentDstId: string | null,
+  newDstSpace: Space,
+): boolean {
+  if (srcSpace !== 'library') return true
+  return currentDstId === null && newDstSpace === 'library'
+}
+
+/** The space a `shared:<space>/<slug>` typed ref names, or null for any other ref. */
+function sharedRefSpace(dstRef: string): Space | null {
+  const m = /^shared:(memories|decisions|docs|library)\//.exec(dstRef)
+  return m ? (m[1] as Space) : null
+}
+
+const emptyTaken = (): Record<Space, Set<string>> => ({
+  memories: new Set(),
+  decisions: new Set(),
+  docs: new Set(),
+  library: new Set(),
+})
+
+/**
+ * Slugs shaped like a handle (`m42`, `d7`, `l3`, `adr-7`, a uuid) would shadow one: they get the `x-` prefix
+ * the API gives them (`itemSlug`), unique within the space, and each rename is a note.
+ */
+function renameReservedSlugs(
+  rows: { id: string; space: Space; slug: string; path: string }[],
+  notes: string[],
+): Map<string, string> {
+  const taken = emptyTaken()
+  for (const r of rows) taken[r.space].add(r.slug)
+  const out = new Map<string, string>()
+  for (const r of rows) {
+    if (!isReservedSlugShape(r.slug)) continue
+    const slug = uniqueSlug(itemSlug(r.slug), taken[r.space])
+    taken[r.space].add(slug)
+    out.set(r.id, slug)
+    notes.push(`${r.path}: the slug "${r.slug}" has the shape of a handle; imported as "${slug}".`)
+  }
+  return out
+}
+
 // ---- lossless -------------------------------------------------------------------------------------------
 
 async function importLossless(
@@ -328,6 +404,10 @@ async function importLossless(
   if (o.remapIds) {
     notes.push('Items were given new ids; repo files that carry the old spoor_id no longer match.')
   }
+  const renamedSlug = renameReservedSlugs(
+    a.items.map((i) => ({ id: i.m.id, space: i.m.space, slug: i.m.slug, path: i.m.path })),
+    notes,
+  )
 
   // counters: numbers a project once used are never reused
   const maxNumber = a.items.reduce((n, i) => Math.max(n, i.m.number), 0)
@@ -351,7 +431,7 @@ async function importLossless(
           space: m.space,
           number: m.number,
           adrNumber: m.adr_number,
-          slug: m.slug,
+          slug: renamedSlug.get(m.id) ?? m.slug,
           title: c.title,
           type: c.type,
           status: c.status,
@@ -413,7 +493,8 @@ async function importLossless(
   const needsShared = !targetShared && a.edges.some((e) => e.dst_ref.startsWith('shared:'))
   const shared = needsShared ? new RefIndex(await sharedRows(tx)) : null
   const dangling: { from: string; dst_ref: string }[] = []
-  const edgeRows = a.edges.map((e) => {
+  const dropped: string[] = []
+  const edgeRows = a.edges.flatMap((e) => {
     const src = byOldId.get(e.src_id) as PlannedItem
     const from = itemHandle(
       { space: src.m.space, number: src.m.number, adrNumber: src.m.adr_number },
@@ -422,34 +503,59 @@ async function importLossless(
     const isWiki = e.kind === 'wikilink'
     let dstId: string | null = null
     let dstRef = e.dst_ref
-    if (e.dst_ref.startsWith('shared:') && !targetShared) {
+    // the target's space, for the library edge rule: an archive item's, a resolved shared item's, or the
+    // `<space>` of a `shared:<space>/<slug>` ref (so a dangling typed edge is classified too)
+    let dstSpace: Space | null = null
+    const viaShared = e.dst_ref.startsWith('shared:') && !targetShared
+    if (viaShared) {
       const rest = e.dst_ref.slice('shared:'.length)
       // `supersedes` / `drafted_from` stay inside a project: an edge into `_shared` would mark a shared
       // item superseded for every project (auth-and-security.md section 8, review S2); kept dangling
       if (!SYSTEM_KINDS.has(e.kind))
         dstId = (isWiki ? shared?.resolveWikilink(rest, src.m.space) : shared?.bySpaceSlug(rest)) ?? null
-      if (dstId === null) dangling.push({ from, dst_ref: e.dst_ref })
+      dstSpace = (dstId ? shared?.rowOf(dstId)?.space : undefined) ?? sharedRefSpace(e.dst_ref)
     } else if (e.dst_id !== null) {
-      if (byOldId.has(e.dst_id)) dstId = mapId(e.dst_id)
-      else dangling.push({ from, dst_ref: e.dst_ref })
+      const dst = byOldId.get(e.dst_id)
+      if (dst) {
+        dstId = mapId(e.dst_id)
+        dstSpace = dst.m.space
+      }
+    } else if (targetShared) {
+      dstSpace = sharedRefSpace(e.dst_ref)
+    }
+    if (refusedLibraryEdge(e.kind, src.m.space, dstSpace)) {
+      if (dropped.length < MAX_LISTED)
+        dropped.push(`${from}: ${e.kind} edge to ${e.dst_ref.slice(0, 120)} dropped (library link rule).`)
+      return []
+    }
+    if (dstId === null && (viaShared || e.dst_id !== null)) dangling.push({ from, dst_ref: e.dst_ref })
+    // a renamed reserved slug: the link that named it by slug names the new slug (like migration 0004)
+    const renamed = isWiki && e.dst_id !== null ? renamedSlug.get(e.dst_id) : undefined
+    if (renamed !== undefined) {
+      const old = (byOldId.get(e.dst_id as string) as PlannedItem).m.slug
+      if (dstRef === old) dstRef = renamed
+      else if (dstRef === `shared:${old}`) dstRef = `shared:${renamed}`
     }
     if (!isWiki && o.remapIds && UUID_RE.test(dstRef)) dstRef = idMap.get(dstRef) ?? dstRef
     if (dstId === mapId(e.src_id)) {
       throw invalidArchive('An edge points at its own source.', [{ path: 'manifest.edges', message: e.id }])
     }
-    return {
-      id: mapId(e.id),
-      projectId: project.id,
-      srcId: mapId(e.src_id),
-      kind: e.kind,
-      dstRef,
-      dstId,
-      createdAt: new Date(e.created_at),
-      createdBy: null,
-      createdByLabel: e.created_by_label === null ? null : importedLabel(e.created_by_label),
-      clientName: cleanClient(e.client_name),
-    }
+    return [
+      {
+        id: mapId(e.id),
+        projectId: project.id,
+        srcId: mapId(e.src_id),
+        kind: e.kind,
+        dstRef,
+        dstId,
+        createdAt: new Date(e.created_at),
+        createdBy: null,
+        createdByLabel: e.created_by_label === null ? null : importedLabel(e.created_by_label),
+        clientName: cleanClient(e.client_name),
+      },
+    ]
   })
+  notes.push(...dropped)
   await batched(edgeRows, (chunk) => tx.insert(edges).values(chunk))
 
   // audit: original timestamps, marked
@@ -529,7 +635,13 @@ async function resolveInboundSharedEdges(tx: Tx): Promise<void> {
   for (const r of rows) {
     const rest = r.dstRef.slice('shared:'.length)
     const dst = r.kind === 'wikilink' ? index.resolveWikilink(rest, r.srcSpace) : index.bySpaceSlug(rest)
-    if (dst) await tx.update(edges).set({ dstId: dst }).where(eq(edges.id, r.id))
+    if (!dst) continue
+    const dstSpace = (index.rowOf(dst) as RefRow).space
+    // the library rules (ADR-0014): no capture of a library page's wikilink by another item, and no edge
+    // kind the library refuses (it would fail the edge trigger with SPL01 and abort this import)
+    if (r.kind === 'wikilink' ? !libraryClaimAllowed(r.srcSpace, null, dstSpace) : false) continue
+    if (refusedLibraryEdge(r.kind, r.srcSpace, dstSpace)) continue
+    await tx.update(edges).set({ dstId: dst }).where(eq(edges.id, r.id))
   }
 }
 
@@ -550,8 +662,7 @@ async function claimExistingLinks(
   const newIds = new Set(created.map((r) => r.id))
   const refs = new Set<string>()
   for (const r of created) {
-    const handle =
-      r.space === 'memories' ? `m${r.number}` : r.space === 'docs' ? `d${r.number}` : `adr-${r.adrNumber}`
+    const handle = refHandle(r.space, r.number, r.adrNumber)
     for (const ref of [r.slug, handle]) {
       refs.add(ref)
       if (targetShared) refs.add(`shared:${ref}`) // inside `_shared`, both forms resolve in `_shared`
@@ -585,6 +696,8 @@ async function claimExistingLinks(
     if (newIds.has(r.srcId)) continue // resolved when they were planned
     const dst = index.resolveWikilink(r.dstRef.replace(/^shared:/, ''), r.srcSpace)
     if (!dst || dst === r.dstId || dst === r.srcId || !newIds.has(dst)) continue
+    // a library page's link is claimed only by a library page and never taken over (ADR-0014)
+    if (!libraryClaimAllowed(r.srcSpace, r.dstId, (index.rowOf(dst) as RefRow).space)) continue
     byTarget.set(dst, [...(byTarget.get(dst) ?? []), r.id])
   }
   for (const [dst, ids] of byTarget) {
@@ -624,11 +737,7 @@ async function importFiles(
     })
     .from(items)
     .where(eq(items.projectId, project.id))
-  const takenSlugs: Record<Space, Set<string>> = {
-    memories: new Set(),
-    decisions: new Set(),
-    docs: new Set(),
-  }
+  const takenSlugs = emptyTaken()
   const usedAdr = new Set<number>()
   for (const r of existing) {
     takenSlugs[r.space].add(r.slug)
@@ -660,6 +769,8 @@ async function importFiles(
     let slug = itemSlug(f.slug)
     slug = uniqueSlug(slug, takenSlugs[f.space])
     takenSlugs[f.space].add(slug)
+    if (isReservedSlugShape(f.slug))
+      notes.push(`${f.path}: the slug "${f.slug}" has the shape of a handle; imported as "${slug}".`)
     const adr =
       f.space === 'decisions' ? (adrOf.get(f) as { n: number; renumberedFrom: number | null }) : null
     const extras = {
@@ -698,7 +809,7 @@ async function importFiles(
   ): { id: string | null; ref: string } | null => {
     const t = to.trim()
     const found = ((): { id: string | null; ref: string } | null => {
-      const sharedRef = /^shared:(memories|decisions|docs)\/([a-z0-9-]+)$/.exec(t)
+      const sharedRef = /^shared:(memories|decisions|docs|library)\/([a-z0-9-]+)$/.exec(t)
       // `supersedes` / `drafted_from` resolve only inside the archive (review S2): listed as unresolved
       if (!allowShared && (sharedRef || parseHandle(t)?.shared)) return null
       if (sharedRef) {
@@ -720,7 +831,7 @@ async function importFiles(
         const id = byAdr.get(Number.parseInt(adr[1] as string, 10))
         return id ? { id, ref: id } : null
       }
-      if (/^[md]\d+$/.test(t)) return null // numbers of files in a folder mean nothing
+      if (/^[mdl]\d+$/i.test(t)) return null // numbers of files in a folder mean nothing
       const hits = bySlug.get(t)
       return hits?.length === 1 ? { id: hits[0] as string, ref: hits[0] as string } : null
     })()
@@ -754,20 +865,29 @@ async function importFiles(
       clientName: null,
     })
   }
+  const dropped: string[] = []
+  const spaceOf = (id: string | null): Space | null =>
+    id === null ? null : (local.rowOf(id)?.space ?? sharedIndex?.rowOf(id)?.space ?? null)
+  /** A typed edge, unless the library edge rule refuses it (ADR-0014): then dropped and listed. */
+  const addTyped = (
+    p: (typeof planned)[number],
+    kind: 'refines' | 'supersedes' | 'drafted_from',
+    t: { id: string | null; ref: string } | null,
+    to: string,
+  ) => {
+    if (!t) return
+    if (refusedLibraryEdge(kind, p.f.space, spaceOf(t.id))) {
+      if (dropped.length < MAX_LISTED)
+        dropped.push(`${p.f.path}: ${kind} edge to ${to.slice(0, 80)} dropped (library link rule).`)
+      return
+    }
+    addEdge(p.id, kind, t.ref, t.id)
+  }
   for (const p of planned) {
     const from = p.f.path
-    for (const r of p.f.relations) {
-      const t = resolveRef(from, r.to)
-      if (t) addEdge(p.id, r.kind as 'refines', t.ref, t.id)
-    }
-    if (p.f.supersedes) {
-      const t = resolveRef(from, p.f.supersedes, false)
-      if (t) addEdge(p.id, 'supersedes', t.ref, t.id)
-    }
-    for (const d of p.f.draftedFrom) {
-      const t = resolveRef(from, d, false)
-      if (t) addEdge(p.id, 'drafted_from', t.ref, t.id)
-    }
+    for (const r of p.f.relations) addTyped(p, r.kind as 'refines', resolveRef(from, r.to), r.to)
+    if (p.f.supersedes) addTyped(p, 'supersedes', resolveRef(from, p.f.supersedes, false), p.f.supersedes)
+    for (const d of p.f.draftedFrom) addTyped(p, 'drafted_from', resolveRef(from, d, false), d)
     for (const l of extractWikilinks(p.f.content.body)) {
       const dst = l.shared
         ? (targetShared ? local : sharedIndex)?.resolveWikilink(l.ref, p.f.space)
@@ -875,7 +995,7 @@ async function importFiles(
       remapped: false,
       appended_revisions: [],
       dangling_edges: [],
-      notes: [...notes, ...unresolved],
+      notes: [...notes, ...unresolved, ...dropped],
     },
     projectId: project.id,
     toIndex: planned.map((p) => ({

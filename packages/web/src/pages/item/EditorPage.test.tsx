@@ -208,3 +208,29 @@ describe('editor: frontmatter form', () => {
     expect(await screen.findByRole('heading', { name: 'No access' })).toBeInTheDocument()
   })
 })
+
+describe('library editor gate', () => {
+  it('shows Forbidden on /library/new to an editor without the library right', async () => {
+    mockApi(baseRoutes('editor', 'acme', { can_edit_library: false }))
+    renderApp('/projects/acme/library/new')
+    expect(await screen.findByRole('heading', { name: 'No access' })).toBeInTheDocument()
+  })
+
+  it('opens the docs form for a viewer holding the library right', async () => {
+    mockApi(baseRoutes('viewer', 'acme', { can_edit_library: true }))
+    renderApp('/projects/acme/library/new')
+    expect(await screen.findByLabelText(/^Title/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Slug')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Type')).not.toBeInTheDocument()
+  })
+
+  it('does not let the editor role alone edit a library page', async () => {
+    mockApi({
+      ...baseRoutes('editor', 'acme', { can_edit_library: false }),
+      'GET /api/v1/projects/acme/items/L3': [200, itemFixture({ handle: 'L3', space: 'library' })],
+      'GET /api/v1/projects/acme/items/L3/edges': [200, { outgoing: [], incoming: [] }],
+    })
+    renderApp('/projects/acme/i/L3/edit')
+    expect(await screen.findByRole('heading', { name: 'No access' })).toBeInTheDocument()
+  })
+})

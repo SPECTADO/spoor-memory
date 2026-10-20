@@ -37,12 +37,15 @@ export type ReviewBulkRequest = z.input<typeof reviewBulkRequest>
 
 /**
  * Why a bulk ref was not acted on: `not_found`, `ambiguous_id`, `read_only_space` (a shared ref from a
- * project), `archived` (verify of an archived item: restore first), `already_archived` (archive).
+ * project, or a library ref without the library right), `wrong_space` (verify of a library page the caller
+ * may edit: library pages are never verified), `archived` (verify of an archived item: restore first),
+ * `already_archived` (archive).
  */
 export type ReviewBulkSkipReason =
   | 'not_found'
   | 'ambiguous_id'
   | 'read_only_space'
+  | 'wrong_space'
   | 'archived'
   | 'already_archived'
 

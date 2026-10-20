@@ -18,6 +18,7 @@ const project: ProjectJson = {
     embedding: { provider: 'local' },
   },
   role: 'admin',
+  can_edit_library: true,
   embedding: { model: 'local-1', target: null, remaining: 0 },
   created_at: '2026-10-01T00:00:00Z',
 }

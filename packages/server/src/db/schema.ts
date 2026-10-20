@@ -4,6 +4,9 @@
  * What Drizzle cannot express lives in hand-written migrations (src/db/migrations):
  *   0000_extensions.sql         vector + unaccent, spoor_unaccent(), spoor_append_only()
  *   0002_triggers_and_hnsw.sql  append-only triggers, edge scope trigger, HNSW index of the default model
+ *   0003_library_space.sql      generated: the `library` space, memberships.library_editor, library shape check
+ *   0004_library_guards.sql     library edge rules (SQLSTATE SPL01), no mcp/cli library revisions (SPL02),
+ *                               reserved `l<n>` slug backfill
  * Enum-like columns are `text` + CHECK (as in the design), not Postgres enum types, so adding a value
  * is a one-line migration. The value lists are exported for the services and for zod schemas.
  */
@@ -35,7 +38,8 @@ export const TOKEN_ROLES = ['editor', 'viewer'] as const
 export const TOKEN_KINDS = ['user', 'service'] as const
 export const TOKEN_ORIGINS = ['web', 'device'] as const
 export const DEVICE_STATUSES = ['pending', 'approved', 'denied', 'consumed'] as const
-export const SPACES = ['memories', 'decisions', 'docs'] as const
+/** Mirrors `spaces` of @spoor/shared (drizzle-kit loads this file without workspace packages); a test pins it. */
+export const SPACES = ['memories', 'decisions', 'docs', 'library'] as const
 export const MEMORY_TYPES = ['decision', 'fact', 'procedure', 'observation'] as const
 export const CONFIDENCES = ['low', 'medium', 'high'] as const
 export const LIFECYCLES = ['active', 'stale', 'archived'] as const
@@ -189,6 +193,8 @@ export const memberships = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     role: text({ enum: ROLES }).notNull(),
+    /** May write library pages (ADR-0014). Always false for an admin: the role implies the right. */
+    libraryEditor: boolean().notNull().default(false),
     createdAt: tstz().notNull().defaultNow(),
   },
   (t) => [
@@ -354,6 +360,11 @@ export const items = pgTable(
       raw(`(lifecycle = 'archived') = (archived_at IS NOT NULL AND archive_reason IS NOT NULL)`),
     ),
     check('items_array_limits_check', raw('cardinality(tags) <= 20 AND cardinality(anchors) <= 20')),
+    // library pages: human-written, never mirrored, pinned, expiring or stale (ADR-0014)
+    check(
+      'items_library_shape_check',
+      sql`${t.space} <> 'library' OR (${t.sourcePath} IS NULL AND ${t.pushConflictAt} IS NULL AND ${t.pinned} = false AND ${t.expiresAt} IS NULL AND ${t.staleSince} IS NULL AND ${t.lifecycle} IN ('active','archived') AND ${t.provenance} = 'human' AND ${t.status} = 'active')`,
+    ),
   ],
 )
 

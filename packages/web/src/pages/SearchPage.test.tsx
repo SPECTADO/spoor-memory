@@ -65,6 +65,17 @@ describe('SearchPage', () => {
     })
   })
 
+  it('offers the Library space', async () => {
+    const m = mockApi(routes({ items: [], notes: [] }))
+    renderApp('/projects/acme/search?q=guide')
+    await screen.findByText('No results for "guide"')
+    await userEvent.selectOptions(screen.getByLabelText('Space'), 'library')
+    await waitFor(() => {
+      const last = m.find('GET', '/api/v1/projects/acme/search').at(-1)
+      expect(last?.url.searchParams.get('space')).toBe('library')
+    })
+  })
+
   it('debounces typing into the URL query', async () => {
     const m = mockApi(routes({ items: [], notes: [] }))
     const { router } = renderApp('/projects/acme/search')

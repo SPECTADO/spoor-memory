@@ -103,7 +103,8 @@ function SharedCard() {
         </Link>
       </h2>
       <p className="mt-1 text-sm text-muted">
-        Org-wide memories, decisions and docs. Every project can read them; humans edit them here.
+        Org-wide memories, decisions, docs and library pages. Every project can read them; humans edit them
+        here.
       </p>
     </article>
   )
@@ -124,7 +125,7 @@ function ProjectCard({ project: p }: { project: ProjectListItem }) {
       {p.description && <p className="mt-2 line-clamp-2 text-sm text-muted">{p.description}</p>}
       <div className="mt-auto flex flex-wrap items-end justify-between gap-2 pt-4">
         <dl className="flex gap-4 text-sm">
-          {(['memories', 'decisions', 'docs'] as const).map((space) => (
+          {(['memories', 'decisions', 'docs', 'library'] as const).map((space) => (
             <div key={space}>
               <dt className="text-xs text-muted capitalize">{space}</dt>
               <dd className="font-medium tabular-nums">{p.counts[space]}</dd>

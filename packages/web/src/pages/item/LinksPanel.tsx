@@ -67,7 +67,11 @@ export function LinksPanel({ slug, item, canWrite }: { slug: string; item: ItemJ
             <>
               {' '}
               <Link
-                to={projectPath(slug, `docs/new?title=${encodeURIComponent(e.dst_ref)}`)}
+                to={projectPath(
+                  slug,
+                  // only a library page resolves a library page's dangling link (ADR-0014)
+                  `${item.space === 'library' ? 'library' : 'docs'}/new?title=${encodeURIComponent(e.dst_ref)}`,
+                )}
                 className="text-accent underline"
               >
                 create
@@ -127,7 +131,7 @@ export function LinksPanel({ slug, item, canWrite }: { slug: string; item: ItemJ
             icon={<Plus className="size-4" aria-hidden="true" />}
             onClick={() => setAdding(true)}
           >
-            Add relation
+            {item.space === 'library' ? 'Add link' : 'Add relation'}
           </Button>
         )}
       </div>

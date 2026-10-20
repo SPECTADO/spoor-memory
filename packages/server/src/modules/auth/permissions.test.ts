@@ -4,15 +4,17 @@ import { describe, expect, it } from 'vitest'
 import { ApiError } from '../../lib/errors.js'
 import { type Action, assertCan, can, type Principal, type Target } from './permissions.js'
 
-// web callers (section 7 legend): IA instance admin (no membership), PA / E / V members, SE shared editor
-// without a membership, U any other logged-in user
+// web callers (section 7 legend): IA instance admin (no membership), PA / E / V members, LE / LV an editor
+// and a viewer holding the library flag, SE shared editor without a membership, U any other logged-in user
 const WEB = {
-  IA: { surface: 'web', isAdmin: true, sharedEditor: false, membership: null },
-  PA: { surface: 'web', isAdmin: false, sharedEditor: false, membership: 'admin' },
-  E: { surface: 'web', isAdmin: false, sharedEditor: false, membership: 'editor' },
-  V: { surface: 'web', isAdmin: false, sharedEditor: false, membership: 'viewer' },
-  SE: { surface: 'web', isAdmin: false, sharedEditor: true, membership: null },
-  U: { surface: 'web', isAdmin: false, sharedEditor: false, membership: null },
+  IA: { surface: 'web', isAdmin: true, sharedEditor: false, membership: null, libraryEditor: false },
+  PA: { surface: 'web', isAdmin: false, sharedEditor: false, membership: 'admin', libraryEditor: false },
+  E: { surface: 'web', isAdmin: false, sharedEditor: false, membership: 'editor', libraryEditor: false },
+  V: { surface: 'web', isAdmin: false, sharedEditor: false, membership: 'viewer', libraryEditor: false },
+  LE: { surface: 'web', isAdmin: false, sharedEditor: false, membership: 'editor', libraryEditor: true },
+  LV: { surface: 'web', isAdmin: false, sharedEditor: false, membership: 'viewer', libraryEditor: true },
+  SE: { surface: 'web', isAdmin: false, sharedEditor: true, membership: null, libraryEditor: false },
+  U: { surface: 'web', isAdmin: false, sharedEditor: false, membership: null, libraryEditor: false },
 } as const satisfies Record<string, Principal>
 type WebWho = keyof typeof WEB
 
@@ -26,7 +28,7 @@ const bearer = (surface: 'rest' | 'mcp', who: TokenWho): Principal => ({
 })
 
 const ALL_WEB = Object.keys(WEB) as WebWho[]
-const MEMBERS: WebWho[] = ['IA', 'PA', 'E', 'V']
+const MEMBERS: WebWho[] = ['IA', 'PA', 'E', 'V', 'LE', 'LV']
 const ANY_TOKEN: TokenWho[] = [...TOKENS]
 const WRITE_TOKENS: TokenWho[] = ['UT:admin', 'UT:editor', 'ST:editor']
 
@@ -50,12 +52,19 @@ const MATRIX: Row[] = [
   {
     row: 'create / edit project items, pin, verify, archive, restore, relate',
     action: 'item.write',
-    web: ['IA', 'PA', 'E'],
+    web: ['IA', 'PA', 'E', 'LE'],
     rest: WRITE_TOKENS,
     mcp: WRITE_TOKENS,
   },
+  {
+    row: 'write library (create, edit, archive, restore, relate from a library page)',
+    action: 'library.write',
+    web: ['IA', 'PA', 'LE', 'LV'],
+    rest: [],
+    mcp: [],
+  },
   { row: 'hard-delete project item', action: 'item.delete', web: ['IA', 'PA'], rest: [], mcp: [] },
-  { row: 'review-queue actions', action: 'review.act', web: ['IA', 'PA', 'E'], rest: [], mcp: [] },
+  { row: 'review-queue actions', action: 'review.act', web: ['IA', 'PA', 'E', 'LE'], rest: [], mcp: [] },
   {
     row: 'read shared space',
     action: 'project.read',
@@ -67,6 +76,14 @@ const MATRIX: Row[] = [
   {
     row: 'write shared space (create, edit, pin, archive, restore, relate)',
     action: 'item.write',
+    target: { shared: true },
+    web: ['IA', 'SE'],
+    rest: [],
+    mcp: [],
+  },
+  {
+    row: 'write the shared library',
+    action: 'library.write',
     target: { shared: true },
     web: ['IA', 'SE'],
     rest: [],
@@ -236,5 +253,32 @@ describe('assertCan error codes', () => {
     expect(code(bearer('mcp', 'UT:editor'), 'members.manage')).toBe('forbidden_role')
     expect(code(bearer('mcp', 'ST:viewer'), 'project.read', { shared: true })).toBe('ok')
     expect(new ApiError('forbidden_role').status).toBe(403)
+  })
+
+  it('bearer: read_only_space for any library write, whatever the role', () => {
+    for (const who of TOKENS) {
+      expect(code(bearer('rest', who), 'library.write')).toBe('read_only_space')
+      expect(code(bearer('mcp', who), 'library.write')).toBe('read_only_space')
+      expect(code(bearer('mcp', who), 'library.write', { shared: true })).toBe('read_only_space')
+    }
+    expect(code({ surface: 'mcp', role: null }, 'library.write')).toBe('read_only_space')
+  })
+
+  it('web: the library flag grants library.write only; a flagged viewer still may not write items', () => {
+    expect(code(WEB.LV, 'library.write')).toBe('ok')
+    expect(code(WEB.LV, 'item.write')).toBe('forbidden')
+    expect(code(WEB.LV, 'item.delete')).toBe('forbidden')
+    expect(code(WEB.E, 'library.write')).toBe('forbidden')
+    expect(code(WEB.LE, 'library.write', { shared: true })).toBe('forbidden')
+  })
+})
+
+describe('webPrincipal', () => {
+  it('carries the library flag of a membership, never one without a membership', async () => {
+    const { webPrincipal } = await import('./permissions.js')
+    const user = { isAdmin: false, sharedEditor: false }
+    expect(webPrincipal(user, 'viewer', true).libraryEditor).toBe(true)
+    expect(webPrincipal(user, 'viewer').libraryEditor).toBe(false)
+    expect(webPrincipal(user, null, true).libraryEditor).toBe(false)
   })
 })

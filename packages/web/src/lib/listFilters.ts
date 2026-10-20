@@ -17,6 +17,7 @@ export const STATUSES: Record<Space, readonly string[]> = {
   memories: ['active', 'superseded'],
   decisions: ['proposed', 'accepted', 'superseded', 'deprecated'],
   docs: [],
+  library: [],
 }
 
 export interface ListFilters {
@@ -67,11 +68,13 @@ export function parseFilters(space: Space, params: URLSearchParams): ListFilters
   return {
     type: space === 'memories' && type && MEMORY_TYPES.includes(type) ? type : '',
     status: STATUSES[space].includes(status) ? status : '',
-    lifecycle: (LIFECYCLES as readonly string[]).includes(lifecycle ?? '')
-      ? (lifecycle as LifecycleFilter)
-      : 'default',
+    lifecycle:
+      (LIFECYCLES as readonly string[]).includes(lifecycle ?? '') &&
+      !(space === 'library' && (lifecycle === 'stale' || lifecycle === 'all'))
+        ? (lifecycle as LifecycleFilter)
+        : 'default',
     tags,
-    pinned: params.get('pinned') === '1',
+    pinned: space !== 'library' && params.get('pinned') === '1',
     anchor: (params.get('anchor') ?? '').trim(),
     // `number` only makes sense for decisions (ADR numbers) and memories/docs have item numbers too
     sort: (SORTS as readonly string[]).includes(sort ?? '') ? (sort as Sort) : DEFAULT_FILTERS.sort,

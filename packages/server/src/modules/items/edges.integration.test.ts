@@ -515,3 +515,131 @@ describe('update with relations (deviations.md H3: one transaction)', () => {
     ).toHaveLength(0)
   })
 })
+
+describe('library edges (ADR-0014)', () => {
+  const agent = (): Caller => ({
+    ctx: {
+      user: {
+        id: s.editor.id,
+        email: s.editor.email,
+        name: s.editor.name,
+        isAdmin: false,
+        sharedEditor: false,
+      },
+      project: { id: s.acme.id, slug: 'acme', name: 'acme', kind: 'project' },
+      role: 'editor',
+      via: 'bearer',
+      clientName: 'claude-code/2.1.303',
+    } as AuthContext,
+    via: 'mcp',
+    project: { id: s.acme.id, slug: 'acme', kind: 'project' },
+  })
+  const code = async (p: Promise<unknown>) =>
+    p.then(
+      () => 'ok',
+      (e: { code?: string }) => e.code ?? 'error',
+    )
+  const lib = (slug: string) => createItem(db(), { projectId: s.acme.id, space: 'library', slug })
+
+  it('m1 → L is allowed through the web and MCP; L → m1 refines only for a human with the right', async () => {
+    const m = await createItem(db(), { projectId: s.acme.id })
+    const page = await lib('guide')
+    const other = await lib('style')
+    expect((await ed.post(`${P}/items/${m.id}/edges`, { kind: 'refines', to: page.id })).status).toBe(201)
+    expect(await code(s.items.relate(agent(), m.id, 'depends_on', page.id))).toBe('ok')
+    const pa = await s.login(s.pa)
+    expect((await pa.post(`${P}/items/${page.id}/edges`, { kind: 'refines', to: m.id })).status).toBe(201)
+    expect((await pa.post(`${P}/items/${page.id}/edges`, { kind: 'supports', to: other.id })).status).toBe(
+      201,
+    )
+    expect(await code(s.items.relate(agent(), page.id, 'refines', m.id))).toBe('read_only_space')
+    // an agent may unlink from its own side, even an edge a human made
+    expect(await code(s.items.relate(agent(), m.id, 'refines', page.id, true))).toBe('ok')
+  })
+
+  it('conflicts_with with a library page is wrong_space either way; so are supersedes / drafted_from into one', async () => {
+    const m = await createItem(db(), { projectId: s.acme.id })
+    const page = await lib('guide')
+    const pa = await s.login(s.pa)
+    const r1 = await pa.post(`${P}/items/${m.id}/edges`, { kind: 'conflicts_with', to: page.id })
+    expect(await json(r1)).toMatchObject({ error: 'wrong_space' })
+    const r2 = await pa.post(`${P}/items/${page.id}/edges`, { kind: 'conflicts_with', to: m.id })
+    expect(await json(r2)).toMatchObject({ error: 'wrong_space' })
+    expect(await code(s.items.relate(agent(), m.id, 'conflicts_with', page.id))).toBe('wrong_space')
+    // library ↔ library conflicts are fine
+    const other = await lib('style')
+    expect(
+      (await pa.post(`${P}/items/${page.id}/edges`, { kind: 'conflicts_with', to: other.id })).status,
+    ).toBe(201)
+    // the DB backstop says the same (SPL01) for every refused shape
+    for (const [src, kind, dst] of [
+      [m, 'supersedes', page],
+      [m, 'drafted_from', page],
+      [m, 'conflicts_with', page],
+      [page, 'conflicts_with', m],
+    ] as const) {
+      const err = await db()
+        .insert(edges)
+        .values({ projectId: s.acme.id, srcId: src.id, kind, dstRef: dst.id, dstId: dst.id })
+        .catch((e) => e)
+      expect(pgError(err)?.code, kind).toBe('SPL01')
+    }
+    // and allows a library page's other outgoing links, wikilinks included
+    for (const kind of ['refines', 'supports', 'depends_on', 'wikilink'] as const) {
+      await db()
+        .insert(edges)
+        .values({
+          projectId: s.acme.id,
+          srcId: page.id,
+          kind,
+          dstRef: kind === 'wikilink' ? 'x' : m.id,
+          dstId: m.id,
+        })
+    }
+  })
+
+  it('a library body resolves [[some-doc]] and [[m5]]; its dangling links are not claimed by an agent memory', async () => {
+    const pa = await s.login(s.pa)
+    const doc = await mk(pa, 'docs', { title: 'Some doc' })
+    const m = await mk(pa, 'memories', { title: 'A fact', type: 'fact' })
+    const page = await mk(pa, 'library', {
+      title: 'Guide',
+      body: `See [[some-doc]], [[${m.handle}]] and [[deploy-steps]].`,
+    })
+    expect(await wikiEdges(page.id)).toEqual([
+      { dstRef: 'deploy-steps', dstId: null },
+      { dstRef: m.handle, dstId: m.id },
+      { dstRef: 'some-doc', dstId: doc.id },
+    ])
+    const res = await s.items.create(agent(), 'memories', { title: 'Deploy steps', type: 'procedure' })
+    expect(res.item?.handle).toMatch(/^m\d+$/)
+    expect((await wikiEdges(page.id)).find((e) => e.dstRef === 'deploy-steps')?.dstId).toBeNull()
+    // a memory's own link to that slug is claimed as always
+    const m2 = await mk(ed, 'memories', { title: 'Notes', type: 'fact', body: '[[runbook]]' })
+    const runbook = await s.items.create(agent(), 'memories', { title: 'Runbook', type: 'procedure' })
+    expect(await wikiEdges(m2.id)).toEqual([{ dstRef: 'runbook', dstId: runbook.item?.id }])
+  })
+
+  it('a memory link resolved to a library page is not taken over by a later same-slug memory', async () => {
+    const pa = await s.login(s.pa)
+    const page = await mk(pa, 'library', { title: 'Guide' })
+    const m = await mk(ed, 'memories', { title: 'Uses guide', type: 'fact', body: '[[guide]]' })
+    expect(await wikiEdges(m.id)).toEqual([{ dstRef: 'guide', dstId: page.id }])
+    await mk(ed, 'memories', { title: 'Guide', type: 'fact' })
+    expect(await wikiEdges(m.id)).toEqual([{ dstRef: 'guide', dstId: page.id }])
+  })
+
+  it('resolve?from=library ranks a library page first and still resolves other spaces', async () => {
+    const pa = await s.login(s.pa)
+    const doc = await mk(pa, 'docs', { title: 'Guide' })
+    const page = await mk(pa, 'library', { title: 'Guide' })
+    const mem = await mk(pa, 'memories', { title: 'Only memory', type: 'fact' })
+    const get = async (q: string) =>
+      (await json<{ item: { id: string } }>(await pa.get(`${P}/resolve?${q}`))).item.id
+    expect(await get('ref=guide&from=library')).toBe(page.id)
+    expect(await get('ref=guide')).toBe(page.id)
+    expect(await get('ref=only-memory&from=library')).toBe(mem.id)
+    expect(await get(`ref=${doc.handle}&from=library`)).toBe(doc.id)
+    expect((await pa.get(`${P}/resolve?ref=guide&from=nowhere`)).status).toBe(400)
+  })
+})

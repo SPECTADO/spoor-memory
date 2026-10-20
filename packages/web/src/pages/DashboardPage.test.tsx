@@ -7,7 +7,7 @@ import { reviewCounts } from './DashboardPage'
 
 const lc = (active: number, stale: number, archived: number) => ({ active, stale, archived })
 const dashboard = (review: Record<string, number>) => ({
-  counts: { memories: lc(12, 2, 1), decisions: lc(3, 0, 0), docs: lc(4, 1, 0) },
+  counts: { memories: lc(12, 2, 1), decisions: lc(3, 0, 0), docs: lc(4, 1, 0), library: lc(2, 0, 1) },
   review,
   recent: [
     {
@@ -54,6 +54,19 @@ describe('DashboardPage', () => {
     expect(within(recent.closest('li') as HTMLElement).getByText('created')).toBeInTheDocument()
     expect(screen.getByText(/via claude-code\/2.1/)).toBeInTheDocument()
     expect(screen.queryByText('Connect a repository')).not.toBeInTheDocument()
+  })
+
+  it('shows a fourth Library card that is never stale', async () => {
+    setup('viewer')
+    renderApp('/projects/acme')
+    const counts = await screen.findByRole('region', { name: 'Items per space' })
+    const lib = within(counts).getByRole('link', { name: 'Library' })
+    expect(lib).toHaveAttribute('href', '/projects/acme/library')
+    const card = lib.closest('li') as HTMLElement
+    expect(within(card).getByText('2')).toBeInTheDocument()
+    expect(within(card).getByText('never stale')).toBeInTheDocument()
+    expect(within(card).getByText('1 archived')).toBeInTheDocument()
+    expect(within(counts).getAllByRole('listitem')).toHaveLength(4)
   })
 
   it('shows the install hint to project admins', async () => {

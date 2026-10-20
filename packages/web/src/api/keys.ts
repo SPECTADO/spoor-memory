@@ -45,7 +45,7 @@ export const qk = {
   revisions: (slug: string, ref?: string) =>
     ref === undefined ? (['revisions', slug] as const) : (['revisions', slug, ref] as const),
   revision: (slug: string, ref: string, n: number) => ['revision', slug, ref, n] as const,
-  resolve: (slug: string, ref: string) => ['resolve', slug, ref] as const,
+  resolve: (slug: string, ref: string, from?: string) => ['resolve', slug, ref, from ?? null] as const,
   search: (slug: string, params?: SearchParams) =>
     params ? (['search', slug, params] as const) : (['search', slug] as const),
   review: (slug: string, section?: ReviewSection) =>

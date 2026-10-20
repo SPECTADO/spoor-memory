@@ -37,18 +37,18 @@ SPA routes live under `/projects/...`, `/shared/...`, `/admin/...`, `/login`, `/
 | `/device` | Approve a CLI login: the user **types** the code from their terminal (a `?code=` parameter is ignored); shows project, requester IP, age, role and the client name labelled "reported by the requester (unverified)"; buttons **Approve read-only** (default focus), **Approve**, **Deny** ([auth-and-security.md](auth-and-security.md) §6) | logged in, member of the code's project | `GET device/lookup`, `POST device/approve|deny` |
 | `/` | redirect to `/projects` | logged in | |
 | `/projects` | Project list: cards with counts, review badge, your role; "Shared knowledge" card; "New project" (IA) | logged in | `GET projects` |
-| `/projects/:slug` | Dashboard: counts per space (active, stale, archived), review counts for all five sections with links, the last 15 changes, install hint (`/p/:slug/install.md`, token creation) for project admins, "Preview digest" | member | `GET projects/:slug`, `…/dashboard` |
-| `/projects/:slug/memories`, `/decisions`, `/docs` | Space list with filters, "New" | member | `GET …/spaces/:space/items` (infinite) |
-| `/projects/:slug/:space/new` | Editor, create mode | editor | `POST …/spaces/:space/items` |
+| `/projects/:slug` | Dashboard: counts per space (active, stale, archived; a fourth Library card shows active and archived, "never stale"), review counts for all five sections with links, the last 15 changes, install hint (`/p/:slug/install.md`, token creation) for project admins, "Preview digest" | member | `GET projects/:slug`, `…/dashboard` |
+| `/projects/:slug/memories`, `/decisions`, `/docs`, `/library` | Space list with filters, "New" (library: only with the library right) | member | `GET …/spaces/:space/items` (infinite) |
+| `/projects/:slug/:space/new` | Editor, create mode | editor (`library`: the library right) | `POST …/spaces/:space/items` |
 | `/projects/:slug/i/:ref` | Item view (rendered Markdown, meta, links, actions) | member | `GET …/items/:ref`, `…/edges` |
-| `/projects/:slug/i/:ref/edit` | Editor, edit mode | editor | `PATCH …/items/:ref` |
+| `/projects/:slug/i/:ref/edit` | Editor, edit mode | editor (library page: the library right) | `PATCH …/items/:ref` |
 | `/projects/:slug/i/:ref/history?rev=&base=` | Revisions and diff | member | `GET …/revisions`, `…/revisions/:n` |
-| `/projects/:slug/w/:ref` | Wikilink resolver: resolves, then `replace` navigates to the item (a shared item under `/shared/i/…`) or shows "No item called …" with a "Create doc" button (editors; not for a `shared:` ref) that opens `…/docs/new?title=<ref>` | member | `GET …/resolve` |
+| `/projects/:slug/w/:ref` | Wikilink resolver: resolves, then `replace` navigates to the item (a shared item under `/shared/i/…`) or shows "No item called …" with a "Create doc" button (editors; not for a `shared:` ref) that opens `…/docs/new?title=<ref>`; for `from=library` the button is "Create library page" (`library` gate) and opens `…/library/new?title=<ref>`, because only a library page can claim a library page's dangling link | member | `GET …/resolve?ref=&from=` (`from` is the space of the page holding the link; a library page only sets the rank, so a link to a doc or memory resolves normally) |
 | `/projects/:slug/search?q=` | Search | member | `GET …/search` |
 | `/projects/:slug/review?section=` | Review queue | member (actions: editor) | `GET …/review`, `…/review/:section`, `…/decisions/undrafted` |
 | `/projects/:slug/audit` | Audit log | member | `GET …/audit` (infinite) |
 | `/projects/:slug/tokens` | Tokens (own; all for project admin) | member | `GET/POST/DELETE …/tokens` |
-| `/projects/:slug/members` | Members and roles | project admin | `GET/POST/PUT/DELETE …/members` |
+| `/projects/:slug/members` | Members, roles and the library editor flag | project admin | `GET/POST/PUT/DELETE …/members` |
 | `/projects/:slug/settings` | Settings, export/import, delete | project admin | `PATCH projects/:slug`, `GET …/jobs`, `GET …/export`, `POST …/import` |
 | `/account` | Name, password, my API tokens across projects (list, revoke) | logged in | `PATCH me`, `POST me/password`, `GET …/tokens` of every visible project (own user tokens kept), `DELETE …/tokens/:id` |
 | `/admin/users` | Users | IA | `GET/PATCH/DELETE users` |
@@ -71,6 +71,7 @@ Deep links to an item are `…/i/<handle>` (stable) so URLs can be pasted in cha
   "You do not have access to this page" state, never a blank page. Buttons the user cannot use are not rendered. The server is the real check (403).
 - A project the user cannot see returns 404 from the API and renders Not found (slugs do not leak).
 - On the shared space the gate for write controls is `me.user.is_admin || me.user.shared_editor`.
+- Every library control is gated by `useCan('library')`, which reads `ProjectJson.can_edit_library` from `GET projects/:slug` (true for IA, project admins and members with the flag; on `/shared` for IA and shared editors). It is never derived from the role or from `useCan('editor')`, because a viewer with the flag can edit the library and an editor without it cannot.
 
 ## 3. Data fetching
 
@@ -108,7 +109,7 @@ The account menu is a disclosure (button + list, Esc and outside click close it)
 
 | group | components |
 |---|---|
-| shell | `AppShell` (top bar: logo, project switcher, search box for the current project, user menu), `ProjectNav` (Dashboard, Memories, Decisions, Docs, Search, Review with count badge, Audit log, Tokens, and for project admins Members, Settings; no Tokens or Members on the shared space, Settings there only for IA), `AdminNav` (IA: Projects → `/admin/projects`, Users, Invites, Jobs, Instance audit), `PageHeader` |
+| shell | `AppShell` (top bar: logo, project switcher, search box for the current project, user menu), `ProjectNav` (Dashboard, Memories, Decisions, Docs, Library (lucide `Library`), Search, Review with count badge, Audit log, Tokens, and for project admins Members, Settings; no Tokens or Members on the shared space, Settings there only for IA), `AdminNav` (IA: Projects → `/admin/projects`, Users, Invites, Jobs, Instance audit), `PageHeader` |
 | primitives | `Button`, `IconButton`, `Input`, `Textarea`, `Select`, `Checkbox`, `Badge`, `Tabs`, `Table`, `Dialog`, `ConfirmDialog` (type the handle or slug to confirm), `Toast`, `CopyField` (read-only input + copy button), `Spinner`, `Skeleton` |
 | states | `EmptyState`, `ErrorState` (shows `message`, `hint`, request id), `NotFound`, `Forbidden`, `StartingBanner`, `OfflineBanner` |
 | content | `MarkdownView`, `ItemHeader` (handle, space, status/lifecycle/type badges, revision, updated by), `ItemMeta` (tags, anchors, dates, source path, client), `LinksPanel`, `ItemActions`, `ItemTable`, `ItemRow`, `FilterBar`, `SnippetList` |
@@ -132,6 +133,7 @@ The regex is the shared wikilink grammar ([data-model.md](data-model.md) §3). T
   mirrored item ("Edits here stay in Spoor; the next push from the repo is refused until a human forces it"), push refused (when `push_conflict_at` is set: the
   `spoor adr|docs push --force <file>` command and a link to the history instead of the mirrored banner), and after a create the near-duplicate warning (§5.2).
   The superseded banner (and the side panel) follow the `superseded_by` chain up to five hops ("Superseded by m60 Valkey → m72 Postgres").
+- A **library page** shows a "Library · human-maintained" badge instead of the status and lifecycle badges, and has no Pin, Verify, Supersede, promote, expiry or last-verified information. Edit, Archive and Restore need `library`; Delete needs `admin`. Without the right a notice reads "You can read this page. Editing needs the library right; ask a project admin." In its `LinksPanel`, "Add link" needs `library` and the picker offers all spaces; `conflicts_with` is not offered whenever either side is a library page. Backlinks are read-only, each labelled with its source handle (`~` for agent-written sources). A wikilink click resolves with `from=library`.
 - Body: `MarkdownView`. Side panel: tags (click → list filtered by tag), anchors (monospace), dates (created, updated, verified, last used), created/updated by and client,
   revision number with link to history; also type, status, confidence, ADR number and date, lifecycle, provenance (`~` for agent-written), expiry, the mirrored
   `source_path`, the slug and the extra frontmatter keys (collapsed).
@@ -150,11 +152,11 @@ The regex is the shared wikilink grammar ([data-model.md](data-model.md) §3). T
 `FilterBar`: type (memories only), status, lifecycle (default "Active and stale"; options Active, Stale, Archived, All), tags (chips; AND), pinned only, sort. Filters live in the URL query (`type`, `status`, `lifecycle`, repeated `tag` (max 5), `pinned=1`, `anchor`, `sort`, `dir`; defaults are omitted; `lib/listFilters.ts` parses and validates them, so an invalid value is dropped instead of sent). A query change is a router navigation that commits a moment later (the auth loader revalidates), so pages that write the query (space list, search, history) use `lib/useSearchParamsState.ts`: each change is an update applied to the newest written query, not the rendered one, and two quick changes (a tag, then "Pinned only") both land; writes replace the history entry.
 Also: anchor path filter (same matcher as the digest), status only where the space has a vocabulary (not docs). Rows carry quick actions for editors: Pin/Unpin, Verify, Archive (no confirmation, all reversible; Restore stays on the item page because an expired observation needs a choice); a tag in a row adds it as a filter. `ItemTable` columns: handle, title,
 type/status badges, tags, updated, last verified; stale rows tinted. Memories show an "expires" column for observations. "New" button for editors. Empty state per space with one sentence on how items get here
-("Agents add memories with spoor_remember. You can add one yourself.", "Decisions come from spoor_decide, ADR files in the repo, or here.", "Docs are pushed from the repo or written here.").
+("Agents add memories with spoor_remember. You can add one yourself.", "Decisions come from spoor_decide, ADR files in the repo, or here.", "Docs are pushed from the repo or written here."). The **Library** list (title "Library", subtitle "Guides and conventions that agents read and follow. Only people with the library right can change them.") has the docs columns, offers Active and Archived only in the lifecycle filter, shows "New page" and the Archive/Restore quick actions only with the library right, and on a project ends with a footer "Org-wide library pages live in Shared → Library and appear to agents as S:L…". Its empty state reads "No library pages yet. Write the guides agents must follow, such as a graphics guide, architecture guide or conventions. Agents see every page in their digest and can read it, never change it." with a New page button, or without the right "No library pages yet. A project admin or a library editor can add pages here."
 
 ## 5. The editor
 
-Route `…/i/:ref/edit` and `…/:space/new`. One component for both.
+Route `…/i/:ref/edit` and `…/:space/new`. One component for both. For `library` it is the docs form (title, slug, body, tags, anchors, the `near_duplicate` warning) gated on `library`; without the right the page renders Forbidden.
 
 ### 5.1 Layout
 
@@ -165,7 +167,7 @@ Route `…/i/:ref/edit` and `…/:space/new`. One component for both.
 - Body: `MarkdownEditor` (lazy-loaded chunk; Tab is not captured, so keyboard users can leave the editor) = `@uiw/react-codemirror` with `markdown({ base: markdownLanguage, codeLanguages: languages })`, line wrapping, an `aria-label="Editor"` through `EditorView.contentAttributes`
   (the Playwright smoke test types into `.cm-content`). `codemirror`, `@codemirror/state` and `@codemirror/view` are direct dependencies (one copy each).
 - Live preview: a split pane (editor left, `MarkdownView` right, debounced 200 ms); under 1024 px one pane at a time, switched by a Write / Preview toggle-button pair (`aria-pressed`). The preview resolves wikilinks to links but does not fetch.
-- Create mode takes `?title=` as the initial title (a dangling wikilink's "create" opens `…/docs/new?title=<ref>`). Memories and docs have a "Skip the duplicate
+- Create mode takes `?title=` as the initial title (a dangling wikilink's "create" opens `…/docs/new?title=<ref>`, or `…/library/new?title=<ref>` on a library page). Memories and docs have a "Skip the duplicate
   check" checkbox (`allow_duplicate: true`, off by default); decisions have an optional ADR number (the next free one otherwise).
 - Footer: **Save** (disabled until valid and changed), **Cancel**, a character count against the 200,000 limit, and the revision being edited ("editing r3").
 
@@ -230,8 +232,8 @@ non-empty one, else Stale. Sections: `stale | archived | expiring | conflicts | 
   `InviteResultDialog` shows the link `<origin>/invite#spi_…` in a `CopyField` with "Shown once; copy it now. There is no email." Revoke on open invites. Project admins create invites for their own projects from the
   Members page with the same dialog restricted to their projects, without instance flags, and with at least one grant required. Accepting an invite with the
   email of an existing account shows "An account with this email already exists; ask an admin to add you to the project" (409 `already_exists`).
-- **Members** (`/projects/:slug/members`, project admin): table with role `<select>`, remove button, "Add member by email" (shows the `user_not_found` hint with a button "Create an invite instead"), "Invite someone" button.
-  The last-admin rule surfaces as an inline message.
+- **Members** (`/projects/:slug/members`, project admin): table with role `<select>`, a "Library editor" checkbox column (admin rows are checked and disabled, tooltip "Admins can always edit the library"; toggling sends `PUT {library_editor}` with an optimistic update and a rollback toast), remove button, "Add member by email" (with a Library editor checkbox, hidden when the role is admin; shows the `user_not_found` hint with a button "Create an invite instead"), "Invite someone" button.
+  The last-admin rule surfaces as an inline message. Changing a role away from admin shows a notice that the demoted admin loses library editing unless the box is ticked, and the panel refetches after any role change.
 - **Tokens** (`/projects/:slug/tokens`): table (name, kind, origin badge `device login` / `web`, role cap, prefix, created, last used, expires, revoked). **New token** dialog: name, kind (user token for yourself; service token for project admins), role
   (service: editor or viewer, **viewer preselected**; user: "same as my role" or "read-only"), optional expiry. `SecretOnceDialog` shows the secret in a `CopyField` with the text "This is the only time you can see it", and a checkbox
   "I have copied it" before the dialog can close. **Revoke** with confirmation. Short help text with the `spoor login` command for the project and the install doc link `/p/<slug>/install.md`.

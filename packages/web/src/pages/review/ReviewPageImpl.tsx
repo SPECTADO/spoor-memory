@@ -60,7 +60,8 @@ const SECTIONS: { key: ReviewSection; label: string }[] = [
 const SKIP_REASONS: Record<string, string> = {
   not_found: 'not found',
   ambiguous_id: 'ambiguous id',
-  read_only_space: 'shared item, read-only here',
+  read_only_space: 'read-only here (shared or library)',
+  wrong_space: 'not applicable to this item',
   archived: 'archived (restore it first)',
   already_archived: 'already archived',
 }

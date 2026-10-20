@@ -4,7 +4,7 @@
  * - bearer (`/p/:slug/api`): `GET /context` for the SessionStart hook.
  * None of them bumps `last_used_at`.
  */
-import { ANCHOR_MAX_LENGTH } from '@spoor/shared'
+import { ANCHOR_MAX_LENGTH, spaces } from '@spoor/shared'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -37,7 +37,7 @@ export const contextQuery = z.strictObject({
 
 export const searchQuery = z.strictObject({
   q: z.string().trim().min(1).max(500),
-  space: z.enum(['memories', 'decisions', 'docs']).optional(),
+  space: z.enum(spaces).optional(),
   type: z.enum(MEMORY_TYPES).optional(),
   tag: many(z.string().min(1).max(40), 5),
   limit: z.coerce.number().int().min(1).max(50).default(20),

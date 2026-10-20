@@ -24,7 +24,7 @@ const projects = {
       name: 'Acme',
       description: '',
       role: 'admin',
-      counts: { memories: 0, decisions: 0, docs: 0 },
+      counts: { memories: 0, decisions: 0, docs: 0, library: 0 },
       review_total: 0,
     },
     {
@@ -32,7 +32,7 @@ const projects = {
       name: 'Beta',
       description: '',
       role: 'viewer',
-      counts: { memories: 0, decisions: 0, docs: 0 },
+      counts: { memories: 0, decisions: 0, docs: 0, library: 0 },
       review_total: 0,
     },
   ],

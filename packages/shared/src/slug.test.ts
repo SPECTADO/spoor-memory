@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { isValidProjectSlug, itemSlug, SLUG_MAX, SLUG_RE, slugify, uniqueSlug } from './slug.js'
+import {
+  isReservedSlugShape,
+  isValidProjectSlug,
+  itemSlug,
+  SLUG_MAX,
+  SLUG_RE,
+  slugify,
+  uniqueSlug,
+} from './slug.js'
 
 describe('slugify', () => {
   it('lower-cases, strips diacritics and collapses runs', () => {
@@ -25,7 +33,15 @@ describe('itemSlug', () => {
     expect(itemSlug('ADR 7')).toBe('x-adr-7')
     expect(itemSlug('3fa85f64-5717-4562-b3fc-2c963f66afa6')).toBe('x-3fa85f64-5717-4562-b3fc-2c963f66afa6')
   })
-  it('leaves ordinary slugs alone', () => expect(itemSlug('Session store')).toBe('session-store'))
+  it('prefixes library handle shapes', () => {
+    expect(isReservedSlugShape('l3')).toBe(true)
+    expect(itemSlug('L3')).toBe('x-l3')
+    expect(itemSlug('l42')).toBe('x-l42')
+  })
+  it('leaves ordinary slugs alone', () => {
+    expect(itemSlug('Session store')).toBe('session-store')
+    for (const s of ['lab', 'l', 'l3x', 'x-l3', 'l-3']) expect(isReservedSlugShape(s), s).toBe(false)
+  })
 })
 
 describe('uniqueSlug', () => {

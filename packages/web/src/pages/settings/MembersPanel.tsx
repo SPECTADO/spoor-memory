@@ -2,12 +2,13 @@
 import { PROJECT_ROLES, type ProjectRole } from '@spoor/shared'
 import { type FormEvent, useState } from 'react'
 import { isApiError } from '../../api/client'
-import { useAddMember, useMe, useMembers, useRemoveMember, useSetMemberRole } from '../../api/hooks'
+import { useAddMember, useMe, useMembers, useRemoveMember, useSetMember } from '../../api/hooks'
 import type { MemberJson } from '../../api/types'
 import { dateTime } from '../../lib/format'
 import {
   Alert,
   Button,
+  Checkbox,
   ConfirmDialog,
   EmptyState,
   ErrorState,
@@ -24,17 +25,21 @@ import {
 } from '../../ui'
 import { InviteDialog } from '../admin/InviteDialog'
 
+const LEAVING_ADMIN_NOTICE =
+  'Library editing is not kept after leaving admin; tick Library editor to grant it.'
+
 const ROLE_OPTIONS = PROJECT_ROLES.map((r) => ({ value: r, label: r }))
 
 export function MembersPanel({ slug }: { slug: string }) {
   const members = useMembers(slug)
   const me = useMe()
-  const setRole = useSetMemberRole(slug)
+  const setMember = useSetMember(slug)
   const remove = useRemoveMember(slug)
   const toast = useToast()
   const [removing, setRemoving] = useState<MemberJson | null>(null)
   const [inviting, setInviting] = useState<{ email: string; role: ProjectRole } | null>(null)
   const [rowError, setRowError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const explain = (e: unknown, who: string) =>
     isApiError(e, 'last_admin')
@@ -49,6 +54,7 @@ export function MembersPanel({ slug }: { slug: string }) {
       <div className="mt-4 space-y-6">
         <AddMember slug={slug} onInvite={(email, role) => setInviting({ email, role })} />
         {rowError && <Alert tone="danger">{rowError}</Alert>}
+        {notice && <Alert tone="info">{notice}</Alert>}
         {members.isPending ? (
           <SkeletonRows rows={3} />
         ) : members.isError ? (
@@ -61,6 +67,7 @@ export function MembersPanel({ slug }: { slug: string }) {
               <tr>
                 <Th>Member</Th>
                 <Th>Role</Th>
+                <Th>Library editor</Th>
                 <Th>Added</Th>
                 <Th>
                   <span className="sr-only">Actions</span>
@@ -80,14 +87,43 @@ export function MembersPanel({ slug }: { slug: string }) {
                       hideLabel
                       value={m.role}
                       onChange={(e) => {
+                        const role = e.target.value as ProjectRole
                         setRowError(null)
-                        setRole.mutate(
-                          { userId: m.user.id, role: e.target.value as ProjectRole },
-                          { onError: (err) => setRowError(explain(err, m.user.email)) },
+                        setNotice(
+                          m.role === 'admin' && role !== 'admin' && m.library_editor !== true
+                            ? LEAVING_ADMIN_NOTICE
+                            : null,
+                        )
+                        setMember.mutate(
+                          { userId: m.user.id, role },
+                          {
+                            onError: (err) => {
+                              setNotice(null)
+                              setRowError(explain(err, m.user.email))
+                            },
+                          },
                         )
                       }}
                       options={ROLE_OPTIONS}
                       inputClassName="w-32"
+                    />
+                  </Td>
+                  <Td>
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-[var(--c-accent)]"
+                      aria-label={`Library editor ${m.user.email}`}
+                      title={m.role === 'admin' ? 'Admins can always edit the library' : undefined}
+                      checked={m.role === 'admin' || m.library_editor === true}
+                      disabled={m.role === 'admin'}
+                      onChange={(e) => {
+                        setRowError(null)
+                        setNotice(null)
+                        setMember.mutate(
+                          { userId: m.user.id, library_editor: e.target.checked },
+                          { onError: (err) => setRowError(explain(err, m.user.email)) },
+                        )
+                      }}
                     />
                   </Td>
                   <Td className="whitespace-nowrap">{dateTime(m.created_at)}</Td>
@@ -147,15 +183,17 @@ function AddMember({
   const toast = useToast()
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<ProjectRole>('editor')
+  const [libraryEditor, setLibraryEditor] = useState(false)
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!email.trim()) return
     add.mutate(
-      { email: email.trim(), role },
+      { email: email.trim(), role, ...(libraryEditor && role !== 'admin' ? { library_editor: true } : {}) },
       {
         onSuccess: (m) => {
           toast.success(`${m.user.email} added as ${m.role}.`)
           setEmail('')
+          setLibraryEditor(false)
         },
       },
     )
@@ -179,6 +217,14 @@ function AddMember({
           onChange={(e) => setRole(e.target.value as ProjectRole)}
           options={ROLE_OPTIONS}
         />
+        {role !== 'admin' && (
+          <Checkbox
+            className="mb-2"
+            label="Library editor"
+            checked={libraryEditor}
+            onChange={(e) => setLibraryEditor(e.target.checked)}
+          />
+        )}
         <Button type="submit" variant="primary" disabled={!email.trim()} loading={add.isPending}>
           Add member
         </Button>

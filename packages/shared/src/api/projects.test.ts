@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   descriptionSchema,
   looksLikeToken,
+  memberAddRequest,
+  memberRoleRequest,
+  memberUpdateRequest,
   projectCreateRequest,
   projectPatchRequest,
   projectSlugSchema,
@@ -35,6 +38,33 @@ describe('project request schemas', () => {
   it('description keeps newlines and drops other control characters', () => {
     expect(descriptionSchema.parse('a\nb\u0007‮')).toBe('a\nb')
     expect(descriptionSchema.safeParse('x'.repeat(2001)).success).toBe(false)
+  })
+})
+
+describe('member schemas', () => {
+  it('add: library_editor is optional', () => {
+    expect(memberAddRequest.parse({ email: 'a@b.cz', role: 'viewer' })).toEqual({
+      email: 'a@b.cz',
+      role: 'viewer',
+    })
+    expect(memberAddRequest.parse({ email: 'a@b.cz', role: 'viewer', library_editor: true })).toMatchObject({
+      library_editor: true,
+    })
+    expect(
+      memberAddRequest.safeParse({ email: 'a@b.cz', role: 'viewer', library_editor: 'yes' }).success,
+    ).toBe(false)
+  })
+  it('update: a role, the flag or both; at least one; strict', () => {
+    expect(memberUpdateRequest.parse({ role: 'editor' })).toEqual({ role: 'editor' })
+    expect(memberUpdateRequest.parse({ library_editor: false })).toEqual({ library_editor: false })
+    expect(memberUpdateRequest.parse({ role: 'viewer', library_editor: true })).toEqual({
+      role: 'viewer',
+      library_editor: true,
+    })
+    expect(memberUpdateRequest.safeParse({}).success).toBe(false)
+    expect(memberUpdateRequest.safeParse({ role: 'owner' }).success).toBe(false)
+    expect(memberUpdateRequest.safeParse({ role: 'editor', x: 1 }).success).toBe(false)
+    expect(memberRoleRequest).toBe(memberUpdateRequest)
   })
 })
 

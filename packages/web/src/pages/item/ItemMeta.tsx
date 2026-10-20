@@ -59,7 +59,9 @@ export function ItemMeta({ slug, item }: { slug: string; item: ItemJson }) {
       </h2>
       <dl className="divide-y divide-border">
         {item.type && <Row label="Type">{item.type}</Row>}
-        {(item.space !== 'docs' || item.status !== 'active') && <Row label="Status">{item.status}</Row>}
+        {((item.space !== 'docs' && item.space !== 'library') || item.status !== 'active') && (
+          <Row label="Status">{item.status}</Row>
+        )}
         {item.adr_number !== null && <Row label="ADR">{String(item.adr_number).padStart(4, '0')}</Row>}
         {item.decided_on && <Row label="Decided on">{item.decided_on}</Row>}
         {item.confidence && <Row label="Confidence">{item.confidence}</Row>}
@@ -113,9 +115,11 @@ export function ItemMeta({ slug, item }: { slug: string; item: ItemJson }) {
             'a human (or reviewed by one)'
           )}
         </Row>
-        <Row label="Last verified">
-          <When iso={item.last_verified_at} />
-        </Row>
+        {item.space !== 'library' && (
+          <Row label="Last verified">
+            <When iso={item.last_verified_at} />
+          </Row>
+        )}
         <Row label="Last used">
           <When iso={item.last_used_at} />
         </Row>

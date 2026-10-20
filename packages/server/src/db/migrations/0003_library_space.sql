@@ -1,0 +1,4 @@
+ALTER TABLE "items" DROP CONSTRAINT "items_space_check";--> statement-breakpoint
+ALTER TABLE "memberships" ADD COLUMN "library_editor" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "items" ADD CONSTRAINT "items_library_shape_check" CHECK ("items"."space" <> 'library' OR ("items"."source_path" IS NULL AND "items"."push_conflict_at" IS NULL AND "items"."pinned" = false AND "items"."expires_at" IS NULL AND "items"."stale_since" IS NULL AND "items"."lifecycle" IN ('active','archived') AND "items"."provenance" = 'human' AND "items"."status" = 'active'));--> statement-breakpoint
+ALTER TABLE "items" ADD CONSTRAINT "items_space_check" CHECK (space IN ('memories','decisions','docs','library'));

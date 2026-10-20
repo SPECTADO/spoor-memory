@@ -4,7 +4,7 @@
  * same thing everywhere.
  */
 import type { Space } from './frontmatter.js'
-import { canonicalRef } from './handles.js'
+import { canonicalRef, HANDLE_KIND_SPACE } from './handles.js'
 
 /** data-model.md section 3 wikilink grammar. */
 export const WIKILINK_RE = /\[\[(?:(shared):)?([^[\]|#\n]+)(?:#[^\]|\n]*)?(?:\|[^\]\n]*)?\]\]/g
@@ -59,23 +59,30 @@ export function extractWikilinks(body: string): Wikilink[] {
 
 /** What a canonical ref names: a handle form by number, or a slug. */
 export type RefTarget =
-  | { kind: 'memory' | 'doc' | 'decision'; number: number }
+  | { kind: 'memory' | 'doc' | 'decision' | 'library'; number: number }
   | { kind: 'slug'; slug: string }
+
+const HANDLE_LETTER_KIND = { m: 'memory', d: 'doc', l: 'library' } as const
 
 export function refTarget(ref: string): RefTarget {
   const adr = /^adr-(\d+)$/.exec(ref)
   if (adr) return { kind: 'decision', number: Number(adr[1]) }
-  const md = /^([md])(\d+)$/.exec(ref)
-  if (md) return { kind: md[1] === 'm' ? 'memory' : 'doc', number: Number(md[2]) }
+  const h = /^([mdl])(\d+)$/.exec(ref)
+  if (h) return { kind: HANDLE_LETTER_KIND[h[1] as 'm' | 'd' | 'l'], number: Number(h[2]) }
   return { kind: 'slug', slug: ref }
 }
 
 const SPACE_ORDER: Space[] = ['docs', 'decisions', 'memories']
 
-/** Slug precedence for a link from `srcSpace`: its own space first, then docs, decisions, memories. */
+/**
+ * Slug precedence for a link from `srcSpace` (lower wins): a library page first for every source (0), then
+ * the source's own space (1), then docs, decisions, memories (2 and up). The relative order of the three
+ * older spaces is what it was before the library existed.
+ */
 export function spaceRank(srcSpace: Space, space: Space): number {
-  if (space === srcSpace) return 0
-  return 1 + SPACE_ORDER.filter((s) => s !== srcSpace).indexOf(space)
+  if (space === 'library') return 0
+  if (space === srcSpace) return 1
+  return 2 + SPACE_ORDER.filter((s) => s !== srcSpace).indexOf(space)
 }
 
 export interface RefCandidate {
@@ -87,7 +94,9 @@ export interface RefCandidate {
 
 /**
  * The target of a canonical ref among the candidates of ONE project: handle forms by number, else the slug
- * with the precedence of `spaceRank`. The caller scopes the candidates (own project, or `_shared`).
+ * with the precedence of `spaceRank`. The caller scopes the candidates (own project, or `_shared`). A
+ * library source resolves like any other (ADR-0014: its outgoing links are a human choice at save time);
+ * only the rank differs.
  */
 export function pickRefTarget<T extends RefCandidate>(
   cands: Iterable<T>,
@@ -96,7 +105,7 @@ export function pickRefTarget<T extends RefCandidate>(
 ): T | null {
   const t = refTarget(ref)
   if (t.kind !== 'slug') {
-    const space: Space = t.kind === 'decision' ? 'decisions' : t.kind === 'memory' ? 'memories' : 'docs'
+    const space = HANDLE_KIND_SPACE[t.kind]
     for (const c of cands) {
       if (c.space === space && (t.kind === 'decision' ? c.adrNumber : c.number) === t.number) return c
     }

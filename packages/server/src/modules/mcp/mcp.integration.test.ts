@@ -17,6 +17,8 @@ import { createAppModules } from '../../app.js'
 import type { AuthContext } from '../../lib/auth-context.js'
 import { createRuntime } from '../../runtime.js'
 import type { AppEnv } from '../../types.js'
+import type { Caller } from '../items/index.js'
+import { LIBRARY_LINE } from './format.js'
 import { createMcpModule, type McpModule } from './index.js'
 import type { SessionStoreOptions } from './sessions.js'
 
@@ -876,5 +878,189 @@ describe('read tools', () => {
     expect(r.text).toContain('-32602')
     const extra = await call(client, 'spoor_search', { query: 'x', bogus: true })
     expect(extra.isError).toBe(true)
+  })
+})
+
+// ---- library pages (ADR-0014; plan section 3 matrix, MCP column) ----------------------------------------
+
+describe('library pages', () => {
+  type Setup = Awaited<ReturnType<typeof setup>>
+
+  /** A human with the library right in the web UI: the only writer of library pages. */
+  const webCaller = (s: Setup, shared = false): Caller => {
+    const p = shared ? s.shared : s.project
+    const ref = { id: p.id, slug: shared ? '_shared' : 'acme', kind: shared ? 'shared' : 'project' } as const
+    return {
+      ctx: {
+        user: {
+          id: s.admin.id,
+          email: s.admin.email,
+          name: s.admin.name,
+          isAdmin: true,
+          sharedEditor: false,
+        },
+        project: { ...ref, name: shared ? 'Shared' : 'Acme' },
+        role: 'admin',
+        via: 'cookie',
+      },
+      via: 'web',
+      project: ref,
+      rights: { item: true, library: true },
+    } as Caller
+  }
+
+  async function libraryPage(s: Setup, title: string, body: string, shared = false) {
+    const res = await s.modules.items.items.create(webCaller(s, shared), 'library', { title, body })
+    const item = res.item as NonNullable<typeof res.item>
+    expect(item.handle).toMatch(/^L\d+$/)
+    return item
+  }
+
+  const wikilinks = async (srcId: string) =>
+    Object.fromEntries(
+      (
+        await db().execute<{ dst_ref: string; dst_id: string | null }>(
+          sql`SELECT dst_ref, dst_id FROM edges WHERE src_id = ${srcId} AND kind = 'wikilink'`,
+        )
+      ).rows.map((r) => [r.dst_ref, r.dst_id]),
+    )
+
+  it('spoor_get L<n> and S:L<n> carry the library line; spoor_search space=library and the default find them', async () => {
+    const s = await setup()
+    const own = await libraryPage(s, 'Graphics guide', 'Use design tokens for every colour.')
+    const house = await libraryPage(s, 'House style', 'Plain English and design tokens everywhere.', true)
+    const { client } = await s.connect(s.tokens.viewer.secret)
+
+    const r = await call(client, 'spoor_get', { ids: [own.handle] })
+    expect(r.isError).toBe(false)
+    const lines = r.text.split('\n')
+    expect(lines[1]).toBe(`=== ${own.handle} r1 library/graphics-guide id=${own.id}`)
+    expect(lines[2]).toBe(LIBRARY_LINE)
+    expect(lines[3]).toBe('---')
+    const lower = await call(client, 'spoor_get', { ids: [own.handle.toLowerCase()] })
+    expect(lower.text).toContain(`=== ${own.handle} r1 library/graphics-guide`)
+    const sh = await call(client, 'spoor_get', { ids: [`S:${house.handle}`] })
+    expect(sh.text).toContain(`=== S:${house.handle} r1 library/house-style id=${house.id}\n${LIBRARY_LINE}`)
+
+    const lib = await call(client, 'spoor_search', { query: 'design tokens', space: 'library' })
+    expect(lib.isError).toBe(false)
+    const hits = lib.text.split('\n')
+    expect(hits[0]).toBe('2 results "design tokens"')
+    expect(hits.some((l) => l.startsWith(`${own.handle} r1 [lib] Graphics guide`))).toBe(true)
+    expect(hits.some((l) => l.startsWith(`S:${house.handle} r1 [lib] House style`))).toBe(true)
+    const all = await call(client, 'spoor_search', { query: 'design tokens' })
+    expect(all.text).toContain(`${own.handle} r1 [lib] Graphics guide`)
+    const ctx = await call(client, 'spoor_context', { budget: 1000 })
+    expect(ctx.text).toContain(`${own.handle} [lib] Graphics guide`)
+  })
+
+  it('every MCP write naming a library page is read_only_space and changes nothing', async () => {
+    const s = await setup()
+    const page = await libraryPage(s, 'Graphics guide', 'Use design tokens.')
+    const L = page.handle
+    const { client } = await s.connect(s.tokens.editor.secret)
+    const m = created(
+      await call(client, 'spoor_remember', { title: 'Buttons use the brand blue', type: 'fact' }),
+    )
+    await s.modules.items.items.relate(webCaller(s), L, 'refines', m.handle)
+    const ro = /^ERR read_only_space: /
+
+    expect(
+      (await call(client, 'spoor_remember', { id: L, revision: 1, title: 'Changed guide' })).text,
+    ).toMatch(ro)
+    expect(
+      (await call(client, 'spoor_doc_write', { id: L, revision: 1, title: 'X', body: 'changed' })).text,
+    ).toMatch(ro)
+    expect(
+      (await call(client, 'spoor_supersede', { old: L, new: { title: 'A newer graphics guide' } })).text,
+    ).toMatch(ro)
+    expect((await call(client, 'spoor_supersede', { old: m.handle, new_id: L })).text).toMatch(ro)
+    expect((await call(client, 'spoor_decide', { title: 'Drop the guide', supersedes: L })).text).toMatch(ro)
+    // relate from a library page (matrix rows 9, 10, 12), whatever the target
+    expect((await call(client, 'spoor_relate', { from: L, to: m.handle, kind: 'supports' })).text).toMatch(ro)
+    // row 10a: conflicts_with from the page is read_only_space too (the right is checked before the kind)
+    expect(
+      (await call(client, 'spoor_relate', { from: L, to: m.handle, kind: 'conflicts_with' })).text,
+    ).toMatch(ro)
+    expect(
+      (await call(client, 'spoor_relate', { from: L, to: m.handle, kind: 'refines', remove: true })).text,
+    ).toMatch(ro)
+    const v = await call(client, 'spoor_verify', { ids: [L, m.handle] })
+    expect(v.text).toBe(`OK verified ${m.handle} · skipped: ${L} read_only_space`)
+
+    const row = await itemRow(s.project.id, L)
+    expect(row).toMatchObject({ revision: 1, title: 'Graphics guide', status: 'active', provenance: 'human' })
+    const out = await db().execute<{ kind: string }>(sql`SELECT kind FROM edges WHERE src_id = ${page.id}`)
+    expect(out.rows.map((r) => r.kind)).toEqual(['refines'])
+  })
+
+  it('links into a library page are the agent’s own side: relate and remove are ok, conflicts_with is wrong_space', async () => {
+    const s = await setup()
+    const page = await libraryPage(s, 'Graphics guide', 'Use design tokens.')
+    const house = await libraryPage(s, 'House style', 'Plain English.', true)
+    const L = page.handle
+    const SL = `S:${house.handle}`
+    const { client } = await s.connect(s.tokens.editor.secret)
+    const m = created(
+      await call(client, 'spoor_remember', {
+        title: 'Icons follow the graphics guide',
+        type: 'procedure',
+        relations: [{ kind: 'supports', to: L }],
+      }),
+    )
+    expect((await call(client, 'spoor_relate', { from: m.handle, to: L, kind: 'refines' })).text).toBe(
+      `OK ${m.handle} refines ${L}`,
+    )
+    expect(
+      (await call(client, 'spoor_relate', { from: m.handle, to: L, kind: 'refines', remove: true })).text,
+    ).toBe(`OK removed ${m.handle} refines ${L}`)
+    expect((await call(client, 'spoor_relate', { from: m.handle, to: SL, kind: 'depends_on' })).text).toBe(
+      `OK ${m.handle} depends_on ${SL}`,
+    )
+    expect(
+      (await call(client, 'spoor_relate', { from: m.handle, to: L, kind: 'conflicts_with' })).text,
+    ).toMatch(/^ERR wrong_space: /)
+    // an edge a human made from the project side can be removed by the agent (matrix row 13)
+    await s.modules.items.items.relate(webCaller(s), m.handle, 'depends_on', L)
+    expect(
+      (await call(client, 'spoor_relate', { from: m.handle, to: L, kind: 'depends_on', remove: true })).text,
+    ).toBe(`OK removed ${m.handle} depends_on ${L}`)
+    const left = await db().execute<{ kind: string }>(
+      sql`SELECT kind FROM edges WHERE dst_id = ${page.id} ORDER BY kind`,
+    )
+    expect(left.rows.map((r) => r.kind)).toEqual(['supports'])
+  })
+
+  it('a library page’s links are never captured or taken over by an agent’s new item (matrix rows 21, 22)', async () => {
+    const s = await setup()
+    const { client } = await s.connect(s.tokens.editor.secret)
+    const m = created(
+      await call(client, 'spoor_remember', { title: 'Cache notes for designers', type: 'fact' }),
+    )
+    const memSlug = (await itemRow(s.project.id, m.handle)).slug as string
+    const page = await libraryPage(
+      s,
+      'Graphics guide',
+      `See [[deploy-runbook]], [[${memSlug}]] and [[${m.handle}]].`,
+    )
+    expect(await wikilinks(page.id)).toEqual({
+      'deploy-runbook': null,
+      [memSlug]: (await itemRow(s.project.id, m.handle)).id,
+      [m.handle]: (await itemRow(s.project.id, m.handle)).id,
+    })
+
+    // a doc with the dangling slug: created, the link stays dangling
+    created(
+      await call(client, 'spoor_doc_write', {
+        title: 'Deploy runbook',
+        body: 'Steps.',
+        slug: 'deploy-runbook',
+      }),
+    )
+    // a doc with the memory's slug ranks above a memory, yet does not take the resolved link over
+    created(await call(client, 'spoor_doc_write', { title: 'Cache notes doc', body: 'More.', slug: memSlug }))
+    const after = await wikilinks(page.id)
+    expect(after['deploy-runbook']).toBeNull()
+    expect(after[memSlug]).toBe((await itemRow(s.project.id, m.handle)).id)
   })
 })

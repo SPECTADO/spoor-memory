@@ -4,7 +4,10 @@
  * tools and the CLI push call the same methods with a `Caller` (`via` = web | mcp | cli).
  *
  * Rules that live here (not in the routes):
- * - shared-space writes: humans in the web UI with IA or `shared_editor` only (`assertWritable`);
+ * - shared-space writes: humans in the web UI with IA or `shared_editor` only; library pages: humans in the
+ *   web UI holding `library.write` only (`assertWritable`: a no-space entry check, then the space-aware
+ *   check on every resolved write target and every insert);
+ * - library pages are never pinned, verified or superseded (`wrong_space`), their status is `active`;
  * - every id goes through the project-scoped resolver (write positions: own project; reads and edge
  *   targets: own project plus `_shared`);
  * - content writes use the one content statement (`writeContent`), then wikilinks and chunks;
@@ -69,6 +72,7 @@ import {
   deriveSlug,
   ITEM_SLUG_CONSTRAINT,
   invalid,
+  libraryGuardError,
   pickSlug,
   provenanceOf,
   sameContent,
@@ -143,6 +147,12 @@ type Cursor = (string | number | null)[]
 /** Resolver refusals that skip one ref of a bulk action (`verifyMany`, `reviewBulk`) instead of failing. */
 const BULK_SKIPPED = ['not_found', 'read_only_space', 'ambiguous_id']
 
+/** Pin and verify on a library page (ADR-0014). */
+const libraryNotPinned = () =>
+  new ApiError('wrong_space', {
+    message: 'Library pages are always in the digest; they are not pinned or verified.',
+  })
+
 const TODAY = sql<string>`(now() AT TIME ZONE 'UTC')::date`
 const MEMORY_STATUSES = ['active', 'superseded']
 const DECISION_STATUSES = ['proposed', 'accepted', 'superseded', 'deprecated']
@@ -158,12 +168,19 @@ export class ItemService {
 
   // ---- shared helpers ---------------------------------------------------------------------------------
 
-  resolve(caller: Caller, ref: string, mode: ResolveMode) {
-    return resolveItemRef(
+  /**
+   * Resolve `ref` in the caller's scope. A write position also runs the space-aware write rule on the
+   * resolved item (`read_only_space` for a library page without the library right, `forbidden` for a
+   * flagged viewer on any other item), before any space or kind check of the caller.
+   */
+  async resolve(caller: Caller, ref: string, mode: ResolveMode) {
+    const r = await resolveItemRef(
       this.db,
       { projectId: caller.project.id, projectIsShared: caller.project.kind === 'shared', mode },
       ref,
     )
+    if (mode === 'write') assertWritable(caller, r.space)
+    return r
   }
 
   /** Resolve and load; `not_found` when the row vanished meanwhile. */
@@ -270,7 +287,7 @@ export class ItemService {
   }
 
   private checkStatus(space: Space, status: string, path = 'status') {
-    const ok = space === 'decisions' ? DECISION_STATUSES : MEMORY_STATUSES
+    const ok = space === 'decisions' ? DECISION_STATUSES : space === 'library' ? ['active'] : MEMORY_STATUSES
     if (!ok.includes(status)) throw invalid(path, `one of ${ok.join(', ')}`)
   }
 
@@ -282,6 +299,8 @@ export class ItemService {
    * caller's.
    */
   async insertNew(tx: Tx, caller: Caller, spec: NewItemSpec) {
+    // the backstop for every path that inserts rows (create, supersede, push)
+    assertWritable(caller, spec.space)
     const view = viewOf(caller.project)
     const actor = actorOf(caller)
     const alloc = await allocate(tx, caller.project, spec.space, spec.adr ?? { onTaken: 'error' }, view)
@@ -322,20 +341,25 @@ export class ItemService {
       .returning({ id: items.id })
     const id = (inserted[0] as { id: string }).id
     const row = (await loadItem(tx, id)) as LoadedItem
-    await tx.insert(itemRevisions).values({
-      itemId: id,
-      revision: 1,
-      title: row.title,
-      body: row.body,
-      status: row.status,
-      frontmatter: snapshotOf(row, contentOf(row)),
-      change: spec.change ?? 'create',
-      actorUserId: actor.userId,
-      actorLabel: actor.label,
-      tokenId: actor.tokenId,
-      via: actor.via,
-      clientName: actor.clientName,
-    })
+    await tx
+      .insert(itemRevisions)
+      .values({
+        itemId: id,
+        revision: 1,
+        title: row.title,
+        body: row.body,
+        status: row.status,
+        frontmatter: snapshotOf(row, contentOf(row)),
+        change: spec.change ?? 'create',
+        actorUserId: actor.userId,
+        actorLabel: actor.label,
+        tokenId: actor.tokenId,
+        via: actor.via,
+        clientName: actor.clientName,
+      })
+      .catch((err: unknown) => {
+        throw libraryGuardError(err)
+      })
     const sharedId = await sharedProjectId(tx)
     await claimWikilinks(tx, row)
     await rewriteWikilinks(tx, row, sharedId, actor)
@@ -354,8 +378,13 @@ export class ItemService {
     }
   }
 
-  /** Clean the create body into content fields (space rules of api.md section 5.1). */
+  /**
+   * Clean the create body into content fields (space rules of api.md section 5.1). Library pages take the
+   * docs rules, and are never pinned.
+   */
   cleanCreate(space: Space, input: ItemCreateRequest): ContentFields {
+    if (space === 'library' && input.pinned === true)
+      throw invalid('pinned', 'library pages are always in the digest; they are not pinned')
     if (space === 'memories') {
       if (!input.type) throw invalid('type', 'required for memories')
     } else {
@@ -429,7 +458,7 @@ export class ItemService {
     input: ItemCreateRequest,
     opts: { dedupe?: 'warn' | 'block' | 'off' } = {},
   ): Promise<CreateResult> {
-    assertWritable(caller)
+    assertWritable(caller, space)
     const fields = this.cleanCreate(space, input)
     const view = viewOf(caller.project)
     const explicitSlug = input.slug !== undefined
@@ -438,7 +467,14 @@ export class ItemService {
     // supersedes target: same project, same space; decisions and memories only
     let old: LoadedItem | null = null
     if (input.supersedes) {
-      if (space === 'docs') throw new ApiError('wrong_space', { message: 'Docs are edited, not superseded.' })
+      if (space === 'docs' || space === 'library') {
+        throw new ApiError('wrong_space', {
+          message:
+            space === 'docs'
+              ? 'Docs are edited, not superseded.'
+              : 'Library pages are edited, not superseded.',
+        })
+      }
       old = await this.load(caller, input.supersedes, 'write')
       if (old.space !== space) {
         throw new ApiError('wrong_space', { message: `${handleOf(old, view)} is not in the ${space} space.` })
@@ -849,6 +885,7 @@ export class ItemService {
    */
   pin(caller: Caller, ref: string, pinned: boolean, note?: string) {
     return this.operational(caller, ref, async (tx, item) => {
+      if (item.space === 'library') throw libraryNotPinned()
       const view = viewOf(caller.project)
       if (!pinned) {
         if (!item.pinned) return null
@@ -883,6 +920,7 @@ export class ItemService {
    */
   verify(caller: Caller, ref: string, note?: string) {
     return this.operational(caller, ref, async (tx, item) => {
+      if (item.space === 'library') throw libraryNotPinned()
       if (item.lifecycle === 'archived') {
         throw new ApiError('invalid_input', {
           message: 'Archived items cannot be verified.',
@@ -923,7 +961,13 @@ export class ItemService {
     for (const ref of refs) {
       let id: string
       try {
-        id = (await this.resolve(caller, ref, 'write')).id
+        const r = await this.resolve(caller, ref, 'write')
+        // library pages are never verified (they are always in the digest)
+        if (r.space === 'library') {
+          skipped.push({ ref, handle: r.handle, reason: 'wrong_space' })
+          continue
+        }
+        id = r.id
       } catch (err) {
         if (err instanceof ApiError && BULK_SKIPPED.includes(err.code)) {
           skipped.push({ ref, reason: err.code })
@@ -1033,6 +1077,12 @@ export class ItemService {
   ) {
     assertWritable(caller)
     const item = await this.load(caller, ref, 'write')
+    if (item.space === 'library' && body.promote_to_fact) {
+      throw new ApiError('wrong_space', {
+        message: 'Library pages are not memories; there is nothing to promote.',
+        hint: 'Restore without promote_to_fact.',
+      })
+    }
     if (item.lifecycle !== 'archived') return this.json(caller, item)
     const expiredIn = async (db: DbOrTx) => {
       const [{ expired } = { expired: false }] = await db
@@ -1206,7 +1256,9 @@ export class ItemService {
         hint:
           old.space === 'decisions'
             ? 'Put supersedes: ADR-NNNN in the new ADR file.'
-            : 'Docs are edited, not superseded.',
+            : old.space === 'library'
+              ? 'Library pages are edited, not superseded.'
+              : 'Docs are edited, not superseded.',
       })
     }
     let target: LoadedItem | null = null
@@ -1341,6 +1393,10 @@ export class ItemService {
       .where(and(eq(edges.id, edgeId), eq(edges.projectId, caller.project.id)))
       .limit(1)
     if (!e) throw new ApiError('not_found')
+    // the edge belongs to its source: removing it is a write on the source (library right, item right)
+    const source = await loadItem(this.db, e.srcId)
+    if (!source) throw new ApiError('not_found')
+    assertWritable(caller, source.space)
     if (!(TYPED_KINDS as readonly string[]).includes(e.kind)) {
       throw new ApiError('edge_not_editable', {
         message: `${e.kind} edges are maintained by the system.`,
@@ -1440,10 +1496,11 @@ export class ItemService {
   }
 
   /**
-   * `GET …/resolve?ref=`: wikilink text resolved exactly like stored links (canonical ref, handle forms,
-   * slug precedence docs → decisions → memories, `shared:` prefix).
+   * `GET …/resolve?ref=&from=`: wikilink text resolved exactly like stored links (canonical ref, handle
+   * forms, `shared:` prefix, slug precedence of `spaceRank` for a link written in a `from` item: library
+   * first, then `from`'s own space, then docs → decisions → memories). `from` only sets the precedence.
    */
-  async resolveText(caller: Caller, text: string) {
+  async resolveText(caller: Caller, text: string, from: Space = 'docs') {
     const t = text.trim()
     const isShared = /^shared:/.test(t)
     const ref = canonicalRef(isShared ? t.slice('shared:'.length) : t)
@@ -1451,7 +1508,7 @@ export class ItemService {
     const sharedId = await sharedProjectId(this.db)
     const map = await resolveWikilinks(
       this.db,
-      { id: null, projectId: caller.project.id, space: 'docs', shared: caller.project.kind === 'shared' },
+      { id: null, projectId: caller.project.id, space: from, shared: caller.project.kind === 'shared' },
       [link],
       sharedId,
     )

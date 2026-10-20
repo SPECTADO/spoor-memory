@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { extractWikilinks, pickRefTarget, spaceRank, stripCode } from './wikilinks.js'
+import { spaces } from './frontmatter.js'
+import { extractWikilinks, pickRefTarget, refTarget, spaceRank, stripCode } from './wikilinks.js'
 
 describe('extractWikilinks', () => {
   it('canonicalises targets and keeps shared: links apart', () => {
@@ -28,7 +29,7 @@ describe('extractWikilinks', () => {
 
 describe('resolution order', () => {
   const c = (
-    space: 'memories' | 'decisions' | 'docs',
+    space: 'memories' | 'decisions' | 'docs' | 'library',
     slug: string,
     number = 1,
     adrNumber: number | null = null,
@@ -47,7 +48,57 @@ describe('resolution order', () => {
     expect(pickRefTarget(cands, 'docs', 'm4')?.space).toBe('memories')
     expect(pickRefTarget(cands, 'docs', 'd2')?.space).toBe('docs')
     expect(pickRefTarget(cands, 'docs', 'm9')).toBeNull()
-    expect(spaceRank('memories', 'docs')).toBe(1)
-    expect(spaceRank('memories', 'decisions')).toBe(2)
+    // the own space, then docs, decisions, memories (rank 0 belongs to library, see below)
+    expect(spaceRank('memories', 'memories')).toBe(1)
+    expect(spaceRank('memories', 'docs')).toBe(2)
+    expect(spaceRank('memories', 'decisions')).toBe(3)
+    expect(spaceRank('docs', 'decisions')).toBeLessThan(spaceRank('docs', 'memories'))
+    expect(spaceRank('decisions', 'docs')).toBeLessThan(spaceRank('decisions', 'memories'))
+  })
+
+  it('refTarget reads library handles', () => {
+    expect(refTarget('l3')).toEqual({ kind: 'library', number: 3 })
+    expect(refTarget('lab')).toEqual({ kind: 'slug', slug: 'lab' })
+  })
+
+  it('a library page wins a slug over every other space, for every source space', () => {
+    for (const src of spaces) {
+      expect(spaceRank(src, 'library')).toBe(0)
+      const cands = [
+        c('docs', 'x', 2),
+        c('library', 'x', 5),
+        c('memories', 'x', 4),
+        c('decisions', 'x', 3, 7),
+      ]
+      expect(pickRefTarget(cands, src, 'x')?.space, src).toBe('library')
+    }
+  })
+
+  it('a library source resolves handles and slugs in any space (owner amendment, ADR-0014)', () => {
+    const cands = [
+      c('docs', 'some-doc', 2),
+      c('memories', 'm', 5),
+      c('decisions', 'd', 6, 7),
+      c('library', 'g', 8),
+    ]
+    expect(pickRefTarget(cands, 'library', 'some-doc')?.space).toBe('docs')
+    expect(pickRefTarget(cands, 'library', 'm5')?.space).toBe('memories')
+    expect(pickRefTarget(cands, 'library', 'd2')?.space).toBe('docs')
+    expect(pickRefTarget(cands, 'library', 'adr-7')?.space).toBe('decisions')
+    expect(pickRefTarget(cands, 'library', 'l8')?.space).toBe('library')
+    expect(pickRefTarget(cands, 'library', 'l5')).toBeNull()
+    expect(pickRefTarget(cands, 'library', 'missing')).toBeNull()
+    // from a library page: docs, decisions, memories after the library
+    const twins = [c('memories', 'y', 1), c('decisions', 'y', 2, 1), c('docs', 'y', 3)]
+    expect(pickRefTarget(twins, 'library', 'y')?.space).toBe('docs')
+    expect(pickRefTarget(twins.slice(0, 2), 'library', 'y')?.space).toBe('decisions')
+  })
+
+  it('[[L3]] in a body resolves to the library page', () => {
+    const [link] = extractWikilinks('see [[L3]]')
+    expect(link?.ref).toBe('l3')
+    expect(
+      pickRefTarget([c('library', 'guide', 3), c('docs', 'l3', 9)], 'docs', link?.ref ?? '')?.space,
+    ).toBe('library')
   })
 })

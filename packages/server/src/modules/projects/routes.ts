@@ -2,7 +2,12 @@
  * Cookie routes of projects and memberships, mounted at /api/v1 (api.md sections 4.1, 4.2).
  * Parsing and status codes only; visibility in access.ts, rules in the services.
  */
-import { memberAddRequest, memberRoleRequest, projectCreateRequest, projectPatchRequest } from '@spoor/shared'
+import {
+  memberAddRequest,
+  memberUpdateRequest,
+  projectCreateRequest,
+  projectPatchRequest,
+} from '@spoor/shared'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { ServerDeps } from '../../lib/deps.js'
@@ -45,12 +50,12 @@ export function projectRoutes(deps: ServerDeps, s: { projects: ProjectService; m
       .post('/projects/:slug/members', async (c) => {
         const a = await access(c)
         const body = await readJson(c, memberAddRequest)
-        return c.json(await s.members.add(a, body.email, body.role), 201)
+        return c.json(await s.members.add(a, body.email, body.role, body.library_editor), 201)
       })
       .put('/projects/:slug/members/:userId', async (c) => {
         const a = await access(c)
-        const body = await readJson(c, memberRoleRequest)
-        return c.json(await s.members.setRole(a, uuidOr404(c.req.param('userId')), body.role))
+        const body = await readJson(c, memberUpdateRequest)
+        return c.json(await s.members.update(a, uuidOr404(c.req.param('userId')), body))
       })
       .delete('/projects/:slug/members/:userId', async (c) => {
         const a = await access(c)

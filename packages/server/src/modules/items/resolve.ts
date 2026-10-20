@@ -5,12 +5,14 @@
  * - `read` scope (read ids, edge-target positions): the caller's project plus `_shared`.
  * A uuid or slug of another project is `not_found`, exactly like one that does not exist.
  *
- * Accepted forms, in order: `S:` prefix (selects `_shared`), `m<n>` / `d<n>` (number in that space),
- * `ADR-<n>` (case-insensitive, adr_number), uuid, otherwise a slug searched across the three spaces
- * (more than one hit is 409 `ambiguous_id` with `details.handles`). Wikilink text resolution (`[[…]]`,
- * `shared:` prefix, per-space precedence) is the items module's, built on top of this.
+ * Accepted forms, in order: `S:` prefix (selects `_shared`), `m<n>` / `d<n>` / `L<n>` (number in that
+ * space; `L` in either case), `ADR-<n>` (case-insensitive, adr_number), uuid, otherwise a slug searched
+ * across the spaces (more than one hit is 409 `ambiguous_id` with `details.handles`). A read slug that
+ * names one own item and also a `_shared` library page is `ambiguous_id` too, so a same-slug twin never
+ * silently replaces a shared library page. Wikilink text resolution (`[[…]]`, `shared:` prefix, per-space
+ * precedence) is the items module's, built on top of this.
  */
-import { formatHandle, type HandleKind, parseHandle, SLUG_RE } from '@spoor/shared'
+import { formatHandle, HANDLE_KIND_SPACE, parseHandle, SLUG_RE, SPACE_HANDLE_KIND } from '@spoor/shared'
 import { and, eq, type SQL, sql } from 'drizzle-orm'
 import { items, projects } from '../../db/schema.js'
 import type { DbOrTx } from '../../lib/db.js'
@@ -44,14 +46,15 @@ export interface ResolvedItem {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const REF_MAX = 200
 
-const SPACE_KIND: Record<Space, HandleKind> = { memories: 'memory', docs: 'doc', decisions: 'decision' }
-
-/** The handle of an item; `shared` adds the `S:` prefix (use it for shared items outside `_shared`). */
+/**
+ * The handle of an item (`m42`, `d7`, `L3`, `ADR-0007`); `shared` adds the `S:` prefix (use it for shared
+ * items outside `_shared`).
+ */
 export function itemHandle(
   item: { space: Space; number: number; adrNumber: number | null },
   shared = false,
 ): string {
-  const kind = SPACE_KIND[item.space]
+  const kind = SPACE_HANDLE_KIND[item.space]
   return formatHandle(kind, kind === 'decision' ? (item.adrNumber ?? item.number) : item.number, shared)
 }
 
@@ -137,17 +140,14 @@ export async function resolveItemRef(db: DbOrTx, scope: ResolveScope, ref: strin
     }
   }
 
-  // 2. handles: m<n>, d<n>, ADR-<n>, in the project the prefix names (no prefix: the caller's project)
+  // 2. handles: m<n>, d<n>, L<n>, ADR-<n>, in the project the prefix names (no prefix: the caller's project)
   const handle = parseHandle(body)
   if (handle && !handle.shared) {
     const project = inProjects(scope, target === 'allowed' ? 'own' : target)
     const cond =
       handle.kind === 'decision'
         ? eq(items.adrNumber, handle.number)
-        : and(
-            eq(items.space, handle.kind === 'memory' ? 'memories' : 'docs'),
-            eq(items.number, handle.number),
-          )
+        : and(eq(items.space, HANDLE_KIND_SPACE[handle.kind]), eq(items.number, handle.number))
     const [row] = await find(db, and(project, cond), 1)
     if (!row) throw notFound(text)
     return toResolved(row, scope)
@@ -161,7 +161,7 @@ export async function resolveItemRef(db: DbOrTx, scope: ResolveScope, ref: strin
     return toResolved(row, scope)
   }
 
-  // 4. slug across the three spaces: the caller's project first, then `_shared` (read scope only)
+  // 4. slug across the spaces: the caller's project first, then `_shared` (read scope only)
   const slug = body.toLowerCase()
   if (!SLUG_RE.test(slug) || slug.length > 80) throw notFound(text)
   const order: ('own' | 'shared')[] =
@@ -172,15 +172,29 @@ export async function resolveItemRef(db: DbOrTx, scope: ResolveScope, ref: strin
         : ['own', 'shared']
   for (const which of order) {
     const rows = await find(db, and(inProjects(scope, which), eq(items.slug, slug)), 3)
-    if (rows.length === 1) return toResolved(rows[0] as Row, scope)
-    if (rows.length > 1) {
-      const handles = rows.map((r) => toResolved(r, scope).handle)
-      throw new ApiError('ambiguous_id', {
-        message: `${JSON.stringify(slug)} names more than one item.`,
-        hint: `Use a handle: ${handles.join(', ')}.`,
-        details: { handles },
-      })
+    if (rows.length === 1) {
+      const own = rows[0] as Row
+      // an own non-library item with the slug of a `_shared` library page: name both (ADR-0014)
+      if (which === 'own' && order.includes('shared') && own.space !== 'library') {
+        const [lib] = await find(
+          db,
+          and(inProjects(scope, 'shared'), eq(items.space, 'library'), eq(items.slug, slug)),
+          1,
+        )
+        if (lib) throw ambiguous(slug, [own, lib], scope)
+      }
+      return toResolved(own, scope)
     }
+    if (rows.length > 1) throw ambiguous(slug, rows, scope)
   }
   throw notFound(text)
+}
+
+function ambiguous(slug: string, rows: Row[], scope: ResolveScope): ApiError {
+  const handles = rows.map((r) => toResolved(r, scope).handle)
+  return new ApiError('ambiguous_id', {
+    message: `${JSON.stringify(slug)} names more than one item.`,
+    hint: `Use a handle: ${handles.join(', ')}.`,
+    details: { handles },
+  })
 }

@@ -79,6 +79,14 @@ MCP codes (`wrong_space`, `mirrored_item`, `not_found`, …) keep their meaning 
 `mirrored_item` is not raised on REST (web edits of mirrored items are allowed and return a warning, §5.2).
 `revision_required` is a 400.
 
+Library pages (ADR-0014) use existing codes only: `read_only_space` (403) for any bearer write touching a library page and for a
+web user with `item.write` but not `library.write`; `forbidden` (403) for a web user with neither right, for a viewer holding
+only the library flag acting on a non-library item, and for a library editor who is not PA or IA hard-deleting; `wrong_space`
+(400) for an authorised human who pins, verifies or supersedes a library page, restores it with `promote_to_fact`, or draws a
+refused edge (`conflicts_with` with a non-library item, `supersedes` or `drafted_from` into a library page); `invalid_input` for
+`pinned: true` on a library page. A slug read naming both an own item and a `_shared` library page is 409 `ambiguous_id`. The DB
+backstops map `SPL01` to `wrong_space` and `SPL02` to `read_only_space`.
+
 ### 0.5 Pagination and lists
 
 Cursor pagination on every unbounded list: `?limit=` (default 50, max 200) and `?cursor=` (opaque). Response:
@@ -181,24 +189,24 @@ Only pending, unexpired codes can be looked up, approved or denied. Every 404 of
 
 | method | path | role | request | response |
 |---|---|---|---|---|
-| GET | `/api/v1/projects` | any | | 200 `{items:[{slug,name,description,role,counts:{memories,decisions,docs}, review_total}]}`. Members only; IA sees all. Not paginated. `counts` are items that are not archived; `review_total` is the sum of the review sections of [cleanup-and-jobs.md](cleanup-and-jobs.md) §6 (stale, archived in the last 30 days, observations expiring within 48 h, open conflicts, push conflicts) |
+| GET | `/api/v1/projects` | any | | 200 `{items:[{slug,name,description,role,counts:{memories,decisions,docs,library}, review_total}]}`. Members only; IA sees all. Not paginated. `counts` are items that are not archived; `review_total` is the sum of the review sections of [cleanup-and-jobs.md](cleanup-and-jobs.md) §6 (stale, archived in the last 30 days, observations expiring within 48 h, open conflicts, push conflicts); library pages are never counted in it |
 | POST | `/api/v1/projects` | IA | `{slug, name, description?, settings?}` | 201 project. 409 `slug_taken`. Slug rules in [data-model.md](data-model.md) §6. `settings` is a partial object as in PATCH; without `embedding.provider` the instance default provider is stored. Audited as the instance-level `project.create`. The creator gets no membership (an IA is project admin everywhere) |
-| GET | `/api/v1/projects/:slug` | member; any for `_shared` | | 200 `{id, slug, name, description, kind, settings, role, embedding:{model, target, remaining}, created_at}`. `settings` has every default filled in. `role` is the effective role (`admin` for IA); on `_shared` it is `admin` for IA, `editor` for SE and `viewer` for everyone else, for the SPA's role gates. `remaining` is the count of items without target chunks while a re-embed runs |
+| GET | `/api/v1/projects/:slug` | member; any for `_shared` | | 200 `{id, slug, name, description, kind, settings, role, can_edit_library, embedding:{model, target, remaining}, created_at}`. `can_edit_library` is the server's answer to `can('library.write')` (IA, PA, a member with the flag; on `_shared` IA and SE); the SPA gates every library control on it and never recomputes it. `settings` has every default filled in. `role` is the effective role (`admin` for IA); on `_shared` it is `admin` for IA, `editor` for SE and `viewer` for everyone else, for the SPA's role gates. `remaining` is the count of items without target chunks while a re-embed runs |
 | PATCH | `/api/v1/projects/:slug` | PA, IA (`_shared`: IA) | `{name?, description?, settings?}` | 200 project. `settings` is a partial object deep-merged and validated ([data-model.md](data-model.md) §2.1); issues are reported under `settings.…`. Changing `embedding.provider` sets `embedding_target` (response `embedding.target`) and nudges the `reembed` job; choosing the active model's provider again clears it; a provider not enabled on the instance is 400. The slug is immutable (sending it is 400). Audited as `project.update` (`data.fields`) and `project.settings` (`data.changed`, the patch) |
 | DELETE | `/api/v1/projects/:slug` | IA | `?confirm=<slug>` | 204. The shared project cannot be deleted (403 `forbidden`). One purge transaction: everything of the project cascades and its audit rows are removed with it; an instance-level `project.delete` row remains ([data-model.md](data-model.md) §4) |
-| GET | `/api/v1/projects/:slug/dashboard` | member; any for `_shared` | | 200 `{counts:{memories:{active,stale,archived},decisions:{…},docs:{…}}, review:{stale,archived,expiring,conflicts,push_conflicts}, recent:[{item:ItemSummary, change, actor:Actor, at}]}` (`DashboardResponse` in `@spoor/shared`). `counts`: items per lifecycle, archived included. `review`: the same numbers as `GET …/review` (all five sections, cleanup-and-jobs.md §6). `recent`: the last 15 content or lifecycle changes of items that still exist, newest first, read from the audit log; `change` is `create`, `update`, `supersede` (this item became superseded), `push`, `stale`, `archive`, `expire` or `restore` (verify and pin are not listed); `item` is the item as it is now |
+| GET | `/api/v1/projects/:slug/dashboard` | member; any for `_shared` | | 200 `{counts:{memories:{active,stale,archived},decisions:{…},docs:{…},library:{…}}, review:{stale,archived,expiring,conflicts,push_conflicts}, recent:[{item:ItemSummary, change, actor:Actor, at}]}` (`DashboardResponse` in `@spoor/shared`). `counts`: items per lifecycle, archived included (`library` is only ever active or archived). `review`: the same numbers as `GET …/review` (all five sections, cleanup-and-jobs.md §6). `recent`: the last 15 content or lifecycle changes of items that still exist, newest first, read from the audit log; `change` is `create`, `update`, `supersede` (this item became superseded), `push`, `stale`, `archive`, `expire` or `restore` (verify and pin are not listed); `item` is the item as it is now |
 | GET | `/api/v1/projects/:slug/context` | member; any for `_shared` | same query as §7.1 | the digest, so admins can preview what agents get (cookie twin of the bearer endpoint) |
 
 ### 4.2 Memberships
 
 | method | path | role | request | response |
 |---|---|---|---|---|
-| GET | `/api/v1/projects/:slug/members` | PA, IA | | 200 `{items:[{user:{id,email,name}, role, created_at}]}` |
-| POST | `/api/v1/projects/:slug/members` | PA, IA | `{email, role}` | 201 member. 404 `user_not_found` with `hint: "create an invite instead"`. 409 `already_exists`. Reveals whether an email has an account, to project admins only. Audited as `member.set` (`data.previous: null`) |
-| PUT | `/api/v1/projects/:slug/members/:userId` | PA, IA | `{role}` | 200 member. 409 `last_admin` when demoting the last project admin (this binds IA too). Audited as `member.set` with `data.previous` |
+| GET | `/api/v1/projects/:slug/members` | PA, IA | | 200 `{items:[{user:{id,email,name}, role, library_editor, created_at}]}`; `library_editor` is the stored value (false for admins) |
+| POST | `/api/v1/projects/:slug/members` | PA, IA | `{email, role, library_editor?}` | 201 member (`library_editor` defaults to false and is stored false for role admin). 404 `user_not_found` with `hint: "create an invite instead"`. 409 `already_exists`. Reveals whether an email has an account, to project admins only. Audited as `member.set` (`data.previous: null`) |
+| PUT | `/api/v1/projects/:slug/members/:userId` | PA, IA | `{role?, library_editor?}` (at least one; `memberRoleRequest` is an alias of `memberUpdateRequest`) | 200 member. 409 `last_admin` when demoting the last project admin (this binds IA too). The stored flag is false whenever the role is admin: promoting clears it, demoting an admin sets it to the body's `library_editor` (default false), a viewer/editor change keeps it. Audited as `member.set` with `data.previous`, `data.library_editor` and `data.previous_library_editor`; the summary says "(implied by role change)" when the flag changed without being asked |
 | DELETE | `/api/v1/projects/:slug/members/:userId` | PA, IA; a member may remove self | | 204. The user's tokens for the project are revoked in the same transaction (re-adding the user does not revive them), and a removed project admin's open invites into the project are revoked. 409 `last_admin`. Audited as `member.remove` (`data.tokens_revoked`, `data.invites_revoked`) |
 
-The shared project has no members: these routes return 404 for `_shared`.
+The shared project has no members: these routes return 404 for `_shared`, which also has no `library_editor` flag (its library is written by IA and SE).
 
 ### 4.3 Tokens
 
@@ -218,7 +226,7 @@ All under `/api/v1/projects/:slug`. Reads need `V` (or `any` for `_shared`), wri
 
 | method | path | notes |
 |---|---|---|
-| GET | `/spaces/:space/items` | filters: `type=fact,procedure`, `status=`, `lifecycle=active,stale` (default `active,stale`; `all`), `tag=` (repeat for AND), `pinned=true`, `anchor=<path>` (items whose anchors match that file, same matcher as the digest), `q_title=` (case-insensitive substring, for pickers), `sort=updated|created|verified|number` with `dir=asc|desc` (default `updated desc`). Returns `{items:ItemSummary[], next_cursor}` |
+| GET | `/spaces/:space/items` | `:space` is `memories`, `decisions`, `docs` or `library`. Filters: `type=fact,procedure`, `status=`, `lifecycle=active,stale` (default `active,stale`; `all`), `tag=` (repeat for AND), `pinned=true`, `anchor=<path>` (items whose anchors match that file, same matcher as the digest), `q_title=` (case-insensitive substring, for pickers), `sort=updated|created|verified|number` with `dir=asc|desc` (default `updated desc`). Returns `{items:ItemSummary[], next_cursor}` |
 | POST | `/spaces/:space/items` | create. Body below. 201 `{item, warnings}` |
 
 Create body (all spaces): `title`, `body?` (≤ 200,000 chars), `tags?`, `anchors?`, `pinned?`, `slug?`, `extra?`,
@@ -227,6 +235,7 @@ Create body (all spaces): `title`, `body?` (≤ 200,000 chars), `tags?`, `anchor
   never matches the item named in `supersedes`.
 - decisions: `status?` (default `proposed`), `adr_number?` (must be free, else 409 `already_exists` with `details.handle`), `decided_on?`. `supersedes` sets the other ADR to `superseded`.
 - docs: nothing extra.
+- library: nothing extra, but only for callers who hold `library.write` (IA, PA, a member with the flag; `_shared`: IA, SE): others get 403 `read_only_space`, or `forbidden` without `item.write`. `pinned: true` is 400 `invalid_input`; `supersedes` is 400 `wrong_space`. The handle is `L<n>`; the lifecycle is `active` or `archived`, never `stale`.
 
 `warnings` entries: `{code:"near_duplicate", handle, cos, title}` when the near-duplicate check hits (the web
 path never blocks, [search-and-digest.md](search-and-digest.md) §5), `{code:"embedding_pending"}`.
@@ -239,6 +248,8 @@ path never blocks, [search-and-digest.md](search-and-digest.md) §5), `{code:"em
 | GET | `/items/:ref` | | 200 `Item`. Does not bump `last_used_at` |
 | PATCH | `/items/:ref` | `{revision, title?, body?, type?, confidence?, status?, tags?, anchors?, extra?}` | 200 `{item, warnings}`. `revision` is required (400 `revision_required`). 409 `revision_conflict` with `details:{current_revision, current: Item}` and nothing written. Runs the complete content statement of [data-model.md](data-model.md) §3: a stale item returns to `active`, a type change to `observation` sets `expires_at = now() + observation_days`, `provenance` becomes `human`. `warnings` may hold `{code:"mirrored_item", source_path}`: the web edit is saved, and the next repo push will answer `pushed_over_spoor_edit` ([data-model.md](data-model.md) §7) |
 | DELETE | `/items/:ref?confirm=<handle>` | | 204. Hard delete, `PA`/`IA` (shared: `IA`/`SE`). `confirm` must equal the handle (400 otherwise). Runs in the purge transaction; the audit row remains |
+
+Library pages follow the same PATCH rules; `pinned` and a status other than `active` are 400 `invalid_input`.
 
 Immutable: `slug`, `space`, `number`, `adr_number` (400 `invalid_input` if sent).
 
@@ -253,11 +264,12 @@ Response 200 `{item}`.
   `expires_at` has passed the body must carry `{"promote_to_fact": true, "revision": n}`; otherwise 409
   `promote_required` (400 `revision_required` without `revision`). Promotion is a content revision through the
   §3 statement (`type='fact'`, `expires_at` cleared), checked against `revision`.
-- `pin`/`unpin` apply to every space. A human pin counts as verification: `pin` also sets `lifecycle='active'`,
+- `pin`/`unpin` and `verify` on a library page are 400 `wrong_space` ("Library pages are always in the digest; they are not pinned or verified."); `archive` and `restore` need `library.write` there, and `restore` with `promote_to_fact` is 400 `wrong_space`.
+- `pin`/`unpin` apply to every other space. A human pin counts as verification: `pin` also sets `lifecycle='active'`,
   `stale_since=NULL`, `last_verified_at=now()` and `provenance='human'` (a pinned archived item stays archived;
   restore it first).
 
-`POST /items/:ref/supersede`, role `E`, **memories only** (`wrong_space` 400 otherwise; decisions use `supersedes`
+`POST /items/:ref/supersede`, role `E`, **memories only** (`wrong_space` 400 otherwise, library pages in either position included; decisions use `supersedes`
 on the new ADR, docs are edited):
 `{new?: {title, body?, type?, confidence?, anchors?, tags?}, new_id?: ref, revision?, reason?}`, exactly one of
 `new` / `new_id`. `new_id` must resolve inside the path's project: a shared ref (`S:…`) is 403 `read_only_space`.
@@ -279,9 +291,9 @@ old snapshot into the editor and saves it as a new revision with `PATCH`.
 | method | path | role | notes |
 |---|---|---|---|
 | GET | `/items/:ref/edges` | V | `{outgoing:[Edge], incoming:[Edge]}`. `Edge = {id, kind, editable:boolean, other:ItemSummary|null, dst_ref?}`. Dangling wikilinks have `other:null` and `dst_ref`. On a shared item **both** lists (including symmetric `conflicts_with`, which is queried both ways) contain only edges whose other end is in `_shared` or in a project the caller is a member of (IA: all); on a project item all edges of that project plus its links to shared items |
-| POST | `/items/:ref/edges` | E | `{kind: refines|supports|depends_on|conflicts_with, to: ref|"S:handle"}` → 201 `{edge}`; idempotent (200 when it exists). `to` in `_shared` only from a project item, never the reverse (403 `read_only_space`) |
+| POST | `/items/:ref/edges` | E | `{kind: refines|supports|depends_on|conflicts_with, to: ref|"S:handle"}` → 201 `{edge}`; idempotent (200 when it exists). `to` in `_shared` only from a project item, never the reverse (403 `read_only_space`). An edge whose source is a library page needs `library.write` (else `read_only_space`) and may point at any item except `conflicts_with` to a non-library item; a project item may point at a library page with `refines`, `supports` or `depends_on`, but `conflicts_with` to one is 400 `wrong_space`. Removing an edge whose source is a library page needs `library.write` |
 | DELETE | `/edges/:id` | E | 204. Only the four typed kinds; `supersedes`, `drafted_from` and `wikilink` edges return 409 `edge_not_editable` |
-| GET | `/resolve?ref=<text>` | V | resolves wikilink text exactly as stored edges do: canonicalised ([data-model.md](data-model.md) §0: `ADR-0007` → `adr-7`, handles, slug; `shared:` prefix) and the same precedence → 200 `{item:ItemSummary}` or 404. Backs the SPA's `/projects/:slug/w/:ref` route |
+| GET | `/resolve?ref=<text>&from=<space>` | V | resolves wikilink text exactly as stored edges do (`from` is the space of the page the link sits in, default `docs`; for a library source it only sets the rank, it never refuses): canonicalised ([data-model.md](data-model.md) §0: `ADR-0007` → `adr-7`, handles, slug; `shared:` prefix) and the same precedence → 200 `{item:ItemSummary}` or 404. Backs the SPA's `/projects/:slug/w/:ref` route |
 
 ## 6. Search
 
@@ -289,8 +301,8 @@ old snapshot into the editor and saves it as a new revision with `PATCH`.
 |---|---|---|
 | GET | `/api/v1/projects/:slug/search?q=…` | V, or `any` for `_shared` |
 
-Query: `q` (1–500 chars, required), `space=`, `type=`, `tag=` (repeat, max 5), `limit` (1–50, default 20),
-`include_shared` (default true; ignored on `_shared`), `include_inactive` (default false).
+Query: `q` (1–500 chars, required), `space=` (`memories|decisions|docs|library`), `type=`, `tag=` (repeat, max 5), `limit` (1–50, default 20),
+`include_shared` (default true; ignored on `_shared`), `include_inactive` (default false). Without `space`, all four spaces are searched.
 Response, not paginated:
 ```json
 { "items": [ { "item": ItemSummary, "score": 0.0328, "snippet": "…sliding on last_seen_at…" } ],
@@ -362,7 +374,7 @@ Response 200:
 
 ## 8. Review queue
 
-Role: read `V` (or `any` for `_shared`); actions `E` (hard delete `PA`; shared `IA`/`SE`). Semantics:
+Role: read `V` (or `any` for `_shared`); actions `E` (hard delete `PA`; shared `IA`/`SE`). Library pages are never listed in any section or count; bulk archive of an authorised library ref is allowed only for holders of `item.write` and `library.write` (a viewer with the flag is `forbidden`). Semantics:
 [cleanup-and-jobs.md](cleanup-and-jobs.md) §6.
 
 | method | path | response |
@@ -370,7 +382,7 @@ Role: read `V` (or `any` for `_shared`); actions `E` (hard delete `PA`; shared `
 | GET | `/api/v1/projects/:slug/review` | `{counts:{stale, archived, expiring, conflicts, push_conflicts}}` |
 | GET | `/api/v1/projects/:slug/review/:section` | `section` = `stale | archived | expiring | conflicts | push_conflicts`; `{items:[…], next_cursor}`. Row = `ItemSummary` plus: stale → `days_to_archive`, `used_since_stale`; archived → `archive_reason` (already on the summary), only the last 30 days; expiring → `expires_in_s`; conflicts → `{edge_id, a:ItemSummary, b:ItemSummary}` instead (on `_shared` only edges whose two ends are shared); push_conflicts → mirrored items with `push_conflict_at` set, plus `edited_by` of the Spoor edit |
 | GET | `/api/v1/projects/:slug/decisions/undrafted` | `?since=<ISO>&mine=true|false` (default `false`: every member's). The cookie twin of the bearer list (§7.2) for the review queue's "Undrafted decisions" tab: 200 `{items:[{handle, spoor_id, title, body, tags, anchors, confidence, created_at}]}`, decision memories created in the last 14 days (the floor of `since`) that no non-superseded ADR was drafted from, oldest first, at most 200. Read-only for every member (`V`). Types: `UndraftedDecisionsResponse` in `@spoor/shared` (review-log-phase5 gap a) |
-| POST | `/api/v1/projects/:slug/review/bulk` | `{action:"verify"|"archive", refs:[…≤100]}` → 200 `{done:[handle], skipped:[{handle, reason}]}`. One transaction and one audit row per item, in request order; a skipped ref is never an error. `reason`: `not_found`, `ambiguous_id`, `read_only_space` (a shared ref from a project), `archived` (verify: restore first), `already_archived` (archive). `handle` is the ref as sent when it did not resolve. Schemas: `reviewBulkRequest`, `ReviewBulkResponse` in `@spoor/shared` |
+| POST | `/api/v1/projects/:slug/review/bulk` | `{action:"verify"|"archive", refs:[…≤100]}` → 200 `{done:[handle], skipped:[{handle, reason}]}`. One transaction and one audit row per item, in request order; a skipped ref is never an error. `reason`: `not_found`, `ambiguous_id`, `read_only_space` (a shared ref from a project), `archived` (verify: restore first), `already_archived` (archive), `wrong_space` (verify of a library page; an authorised library ref is skipped, never an error). `handle` is the ref as sent when it did not resolve. Schemas: `reviewBulkRequest`, `ReviewBulkResponse` in `@spoor/shared` |
 
 Individual actions reuse §5: **Verify** `POST …/verify`, **Edit** `PATCH`, **Supersede** `POST …/supersede`,
 **Archive now** `POST …/archive`, **Restore** `POST …/restore` (with `promote_to_fact` when required),
@@ -384,9 +396,9 @@ running `spoor adr push --force <file>` (or `docs push`) or by bringing the repo
 
 | method | path | role | notes |
 |---|---|---|---|
-| GET | `/api/v1/projects/:slug/export` | PA, IA (shared: IA) | `200 application/zip`, `Content-Disposition: attachment; filename="spoor-<slug>-<YYYYMMDD>.zip"`. Layout and manifest: [data-model.md](data-model.md) §8. `?history=0` leaves out `revisions/` and `audit.jsonl` and sets `manifest.history=false` (smaller, history not kept; import synthesises one revision per item). Built on the request thread inside one REPEATABLE READ transaction, with caps: more than 200 MB uncompressed (the same as the import cumulative cap, so every export re-imports), or an entry over 5 MB, or more than 20,000 entries → 413 `payload_too_large` with `hint` to use `history=0`; one import or export at a time per instance (503 `busy`) |
+| GET | `/api/v1/projects/:slug/export` | PA, IA (shared: IA) | `200 application/zip` (library pages go to `library/<slug>.md`; the format stays `spoor-export/1`), `Content-Disposition: attachment; filename="spoor-<slug>-<YYYYMMDD>.zip"`. Layout and manifest: [data-model.md](data-model.md) §8. `?history=0` leaves out `revisions/` and `audit.jsonl` and sets `manifest.history=false` (smaller, history not kept; import synthesises one revision per item). Built on the request thread inside one REPEATABLE READ transaction, with caps: more than 200 MB uncompressed (the same as the import cumulative cap, so every export re-imports), or an entry over 5 MB, or more than 20,000 entries → 413 `payload_too_large` with `hint` to use `history=0`; one import or export at a time per instance (503 `busy`) |
 | POST | `/api/v1/projects/import` | IA | `multipart/form-data`: `file` (zip), `slug`, `name`, `remap_ids` (`true|false`). Creates a new project from the archive |
-| POST | `/api/v1/projects/:slug/import` | PA, IA (shared: IA) | multipart: `file`, `remap_ids`. The target must be empty (409 `project_not_empty`), except for manifest-less archives, which may target a non-empty project |
+| POST | `/api/v1/projects/:slug/import` | PA, IA (shared: IA) | multipart: `file`, `remap_ids`. The target must be empty (409 `project_not_empty`), except for manifest-less archives, which may target a non-empty project. An archive that contains library pages also needs `library.write`; the rows are normalised and refused edge kinds are dropped and listed ([data-model.md](data-model.md) §8) |
 
 Import response 200:
 ```json

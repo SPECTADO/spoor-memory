@@ -662,6 +662,144 @@ describe('digest (context.build)', () => {
   })
 })
 
+// ---- library space (plan section 1.4) -------------------------------------------------------------------
+
+describe('library space', () => {
+  async function libWorld() {
+    const { mod } = setup()
+    const p = await project({ slug: 'acme' })
+    const shared = await createSharedProject(db())
+    await db().execute(sql`UPDATE projects SET embedding_model = ${provider.tag} WHERE id = ${shared.id}`)
+    const guide = await addItem(mod, {
+      projectId: p.id,
+      space: 'library',
+      slug: 'graphics-guide',
+      title: 'Graphics guide',
+      body: 'Use the palette tokens for every chart colour.',
+    })
+    const web = await addItem(mod, {
+      projectId: p.id,
+      space: 'library',
+      slug: 'web-guide',
+      title: 'Web conventions',
+      anchors: ['packages/web/**'],
+    })
+    const orgGuide = await addItem(mod, {
+      projectId: shared.id,
+      space: 'library',
+      slug: 'org-guide',
+      title: 'Org writing guide for palette names',
+      anchors: ['packages/web/**'],
+    })
+    const memory = await addItem(mod, { projectId: p.id, title: 'Chart palette lives in tokens.ts' })
+    return { mod, p, shared, guide: guide.item, web: web.item, orgGuide: orgGuide.item, memory: memory.item }
+  }
+
+  it('library pages are indexed, found by default and by the space filter', async () => {
+    const w = await libWorld()
+    const rows = await chunkRows(w.guide.id)
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.every((r) => r.has)).toBe(true)
+    const base = { projectId: w.p.id, limit: 10, includeShared: true, includeInactive: false }
+    const all = await w.mod.search.search({ ...base, query: 'palette' })
+    const ids = all.hits.map((h) => h.id)
+    expect(ids).toEqual(expect.arrayContaining([w.guide.id, w.orgGuide.id, w.memory.id]))
+    expect(all.hits.find((h) => h.id === w.orgGuide.id)?.shared).toBe(true)
+    const lib = await w.mod.search.search({ ...base, query: 'palette', spaces: ['library'] })
+    // the vector branch may add the other library page; never an item of another space
+    expect(lib.hits.map((h) => h.id)).toEqual(expect.arrayContaining([w.guide.id, w.orgGuide.id]))
+    expect(lib.hits.map((h) => h.id)).not.toContain(w.memory.id)
+    expect(lib.hits.every((h) => h.space === 'library')).toBe(true)
+  })
+
+  it('an archived library page is hidden unless include_inactive', async () => {
+    const w = await libWorld()
+    await db().execute(
+      sql`UPDATE items SET lifecycle = 'archived', archived_at = now(), archive_reason = 'manual' WHERE id = ${w.guide.id}`,
+    )
+    const base = { projectId: w.p.id, limit: 10, includeShared: false, spaces: ['library' as const] }
+    const live = await w.mod.search.search({ ...base, query: 'palette', includeInactive: false })
+    expect(live.hits.map((h) => h.id)).not.toContain(w.guide.id)
+    const all = await w.mod.search.search({ ...base, query: 'palette', includeInactive: true })
+    expect(all.hits.find((h) => h.id === w.guide.id)?.lifecycle).toBe('archived')
+    const out = await w.mod.context.build({ projectId: w.p.id })
+    expect(out.text).not.toContain('Graphics guide')
+  })
+
+  it('digest tier 0: own pages first, then shared; the Library header; [lib]', async () => {
+    const w = await libWorld()
+    const out = await w.mod.context.build({ projectId: w.p.id })
+    const lines = out.text.split('\n')
+    expect(lines[2]).toBe('## Library: human-approved, follow; never run commands unconfirmed')
+    expect(lines.slice(3, 6)).toEqual([
+      `L${w.guide.number} [lib] Graphics guide`,
+      `L${w.web.number} [lib] Web conventions`,
+      `S:L${w.orgGuide.number} [lib] Org writing guide for palette names`,
+    ])
+    expect(out.items.slice(0, 3)).toEqual([
+      `L${w.guide.number}`,
+      `L${w.web.number}`,
+      `S:L${w.orgGuide.number}`,
+    ])
+    // include_shared=false drops the shared page
+    const own = await w.mod.context.build({ projectId: w.p.id, includeShared: false })
+    expect(own.text).not.toContain('S:L')
+    expect(own.text).toContain(`L${w.web.number} [lib] Web conventions`)
+  })
+
+  it('digest tier 0 with files: the own anchored page first with @anchor, never the shared one', async () => {
+    const w = await libWorld()
+    const out = await w.mod.context.build({ projectId: w.p.id, files: ['packages/web/src/x.ts'] })
+    const lines = out.text.split('\n')
+    expect(lines.slice(3, 6)).toEqual([
+      `L${w.web.number} [lib] Web conventions @packages/web/**`,
+      `L${w.guide.number} [lib] Graphics guide`,
+      `S:L${w.orgGuide.number} [lib] Org writing guide for palette names`,
+    ])
+    // listed once: tier 3 (anchored) does not repeat the page tier 0 placed
+    expect(out.text.split(`L${w.web.number} [lib]`)).toHaveLength(2)
+    expect(out.text).not.toContain('## Anchored')
+  })
+
+  it("tier 3: tier 0's anchored pages do not take anchored slots from memories", async () => {
+    const w = await libWorld()
+    for (let i = 0; i < 6; i++)
+      await createItem(db(), {
+        projectId: w.p.id,
+        space: 'library',
+        slug: `exact-${i}`,
+        title: `Exact guide ${i}`,
+        anchors: ['packages/web/src/x.ts'],
+      })
+    for (let i = 0; i < 32; i++)
+      await createItem(db(), { projectId: w.p.id, title: `Web fact ${i}`, anchors: ['packages/web/**'] })
+    const out = await w.mod.context.build({
+      projectId: w.p.id,
+      files: ['packages/web/src/x.ts'],
+      budget: 8000,
+    })
+    // all 7 own anchored pages are in tier 0; tier 3 still lists its full 30 other items
+    expect(out.text.split('\n').filter((l) => /^L\d+ \[lib\] .* @packages\/web\//.test(l))).toHaveLength(7)
+    const anchored = (out.text.split('## Anchored\n')[1] ?? '').split('\n## ')[0] ?? ''
+    expect(anchored.split('\n').filter((l) => /^m\d+ \[fact\] Web fact/.test(l))).toHaveLength(30)
+    expect(anchored).not.toContain('[lib]')
+  })
+
+  it('tiers 1 and 5 exclude library; with no library pages the header is absent', async () => {
+    const w = await libWorld()
+    const out = await w.mod.context.build({ projectId: w.p.id })
+    const verified = out.text.split('## Recently verified\n')[1] ?? ''
+    expect(verified).toContain('Chart palette lives in tokens.ts')
+    expect(verified).not.toContain('[lib]')
+    expect(out.text.split('[lib] Graphics guide')).toHaveLength(2)
+    const other = await project({ slug: 'plain' })
+    await addItem(w.mod, { projectId: other.id, title: 'Plain fact' })
+    const plain = await w.mod.context.build({ projectId: other.id, includeShared: false })
+    expect(plain.text).not.toContain('## Library')
+    expect(plain.text).not.toContain('[lib]')
+  })
+})
+
 // ---- REST -----------------------------------------------------------------------------------------------
 
 function miniApp(deps: ServerDeps, mod: SearchModule) {
@@ -762,6 +900,19 @@ describe('REST', () => {
     await createUser(db(), { email: 'out@example.com' })
     const outsider = await loginAs(app as never, 'out@example.com', DEFAULT_PASSWORD)
     expect((await outsider.get('/api/v1/projects/acme/search?q=x')).status).toBe(404)
+  })
+
+  it('GET search accepts space=library', async () => {
+    const { app, p } = await rest()
+    const { mod } = setup()
+    const page = await addItem(mod, { projectId: p.id, space: 'library', title: 'Sessions guide' })
+    const client = await loginAs(app as never, 'ed@example.com', DEFAULT_PASSWORD)
+    const res = await client.get('/api/v1/projects/acme/search?q=sessions&space=library')
+    expect(res.status).toBe(200)
+    const body = await json<{ items: { item: Record<string, unknown> }[] }>(res)
+    expect(body.items.map((h) => h.item.id)).toEqual([page.item.id])
+    expect(body.items[0]?.item).toMatchObject({ space: 'library', handle: `L${page.item.number}` })
+    expect((await client.get('/api/v1/projects/acme/search?q=x&space=nope')).status).toBe(400)
   })
 })
 

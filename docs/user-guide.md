@@ -17,9 +17,12 @@ mode. Terms are defined in [GLOSSARY.md](../GLOSSARY.md). Agents have their own 
 |---|---|---|
 | viewer | one project | read everything in it, search, preview the digest |
 | editor | one project | also create and edit items, pin, verify, archive, restore, relate, use the review queue; create their own tokens |
-| admin (project) | one project | also hard-delete items, members, service tokens, invites for the project, settings, export and import |
+| admin (project) | one project | also hard-delete items, members, service tokens, invites for the project, settings, export and import; always edit the library; grant the library editor flag |
 | instance admin | whole instance | everything, plus users, projects, invites, jobs and the shared space |
 | shared editor | right on a user | write the shared space without being an instance admin |
+| library editor | flag on a membership | create and edit **library pages** of that project; any non-admin role can hold it, a viewer too |
+
+The library editor flag is granted by project admins on the Members page. Admins always hold the right, so their flag is not shown as a choice; demoting an admin removes it unless you tick it during the demotion. A viewer with the flag can edit library pages but nothing else.
 
 A project you are not a member of does not exist for you (404). Buttons you cannot use are hidden; the server enforces the rules.
 
@@ -27,13 +30,13 @@ A project you are not a member of does not exist for you (404). Buttons you cann
 
 **Projects** lists the projects you can see as cards with item counts, a review badge and your role, plus a card for the shared
 knowledge. Instance admins create projects (New project: name, description, slug; the slug is permanent and becomes part of every
-URL and handle). The **dashboard** of a project shows counts per space (active, stale, archived), the five review sections, the last
+URL and handle). The **dashboard** of a project shows counts per space (active, stale, archived; the library never stale), the five review sections, the last
 15 changes, and for project admins the install hint (`/p/<slug>/install.md`). **Preview digest** shows what an agent would receive,
 optionally for a query and a list of files, with the token estimate.
 
 ## 4. Spaces and items
 
-Each project has three spaces, listed in the navigation:
+Each project has four spaces, listed in the navigation:
 
 - **Memories**: one atomic claim each, with a type (`decision`, `fact`, `procedure`, `observation`) and a confidence. Handle `m42`.
   Mostly written by agents; you may add your own. A memory of type `decision` is a quick note, not an ADR.
@@ -41,6 +44,14 @@ Each project has three spaces, listed in the navigation:
   Mostly mirrored from `docs/adr/*.md` in the repository, or written here. A `proposed` ADR (for example one drafted by an agent's
   machine) waits for you: **Accept** it on the item page.
 - **Docs**: long-form pages (architecture, domain model, runbooks). Handle `d7`.
+- **Library**: guides and conventions that agents must follow, such as a graphics guide or an architecture guide. Handle `L3`.
+  Only people with the library right (instance admins, project admins and library editors) can create or change a page, and only
+  in the web UI. Agents see every active page in their digest and can read it, but never change it (`read_only_space`). A page has
+  no status, pin, verify or supersede; it is active or archived, and it is never stale and never expires. Only people with the
+  right edit, archive and restore a page; deleting needs a project admin. Without the right you can read a page and see a notice.
+  A library page may link to any item with `[[slug]]` or a typed link (a link to a slug that does not exist yet stays unresolved
+  until a new library page takes that slug); `conflicts_with` is not available on library pages. Other items link to a library
+  page with `refines`, `supports`, `depends_on` or a wikilink. Library pages are not part of the review queue.
 
 Lists filter by type, status, lifecycle, tags and anchor path, sort by date, and keep their filters in the URL, so you can paste a
 link. Rows have quick actions for editors: Pin, Verify, Archive. **Search** (box in the top bar) is hybrid full-text plus meaning
@@ -56,7 +67,7 @@ Item URLs use handles (`/projects/acme/i/m42`), so they stay valid and are safe 
 
 ## 5. Item lifecycle: active, stale, archived
 
-Lifecycle is separate from status. Every project has three settings (project Settings, defaults in brackets): `stale_days` (30),
+Lifecycle is separate from status. Library pages are only active or archived and are never stale. Every project has three settings (project Settings, defaults in brackets): `stale_days` (30),
 `archive_days` (90) and `observation_days` (7).
 
 1. **Active**: in the digest, in search.
@@ -142,7 +153,7 @@ agent changed what, via which channel, filterable).
 
 ## 9. Shared space
 
-`Shared knowledge` (`/shared`) is the org-wide space, with the same three spaces and the same pages. Rules:
+`Shared knowledge` (`/shared`) is the org-wide space, with the same four spaces (including a shared **Library**, handles `S:L3`, written by instance admins and shared editors) and the same pages. Rules:
 
 - Everyone who can sign in can read it, and every project token can read it (agents see it in digests and searches; handles carry
   an `S:` prefix, `S:d3`).

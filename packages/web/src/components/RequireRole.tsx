@@ -22,5 +22,8 @@ export function useCan(gate: Gate, slugOverride?: string): { allowed: boolean; p
   const slug = gate === 'ia' ? undefined : (slugOverride ?? current ?? undefined)
   const project = useProject(slug)
   if (me.isPending || (slug && project.isPending)) return { allowed: false, pending: true }
-  return { allowed: passes(gate, me.data, project.data?.role), pending: false }
+  return {
+    allowed: passes(gate, me.data, project.data?.role, project.data?.can_edit_library === true),
+    pending: false,
+  }
 }

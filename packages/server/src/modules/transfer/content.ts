@@ -37,6 +37,8 @@ export const STATUSES: Record<Space, readonly string[]> = {
   memories: ['active', 'superseded'],
   docs: ['active', 'superseded'],
   decisions: ['proposed', 'accepted', 'superseded', 'deprecated'],
+  // library pages are never superseded (ADR-0014): archived is a lifecycle, not a status
+  library: ['active'],
 }
 
 function fail(path: string, message: string): never {

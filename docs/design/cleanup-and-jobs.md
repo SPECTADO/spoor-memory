@@ -11,7 +11,7 @@ Two separate axes:
 - `lifecycle` is housekeeping: `active`, `stale` or `archived`.
 
 Only memories become stale automatically. Decisions and docs change lifecycle only by hand, and
-otherwise are only superseded (BRIEF.md).
+otherwise are only superseded (BRIEF.md). Library pages (ADR-0014) are `active` or `archived` and move between the two only by a human with the library right: they are never stale, never expire, are not pinned or verified, and are outside every cleanup predicate (the job predicates are memories-only; a scenario test keeps an old, unused library page active). Their `status` is always `active`.
 
 ```
             job: P_stale                     job: P_archive
@@ -161,7 +161,7 @@ FROM s;
 
 ## 6. Review queue
 
-Page `/projects/:slug/review`. The dashboard shows a count for each section. Every action is audited
+Page `/projects/:slug/review`. The dashboard shows a count for each section. Library pages are excluded everywhere in the queue: from the stale and archived sections, from the counts and from the project list's review total. Every action is audited
 (`via='web'`). Shown to project members; actions need editor or above (hard delete: PA or IA; in
 shared: SE or IA).
 

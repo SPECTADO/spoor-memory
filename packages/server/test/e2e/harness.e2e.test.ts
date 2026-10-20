@@ -798,6 +798,22 @@ describe('DoD 3: from Claude Code', () => {
     )
   }, 45_000)
 
+  it('CLI session start: a project with two library pages gets the Library header and L<n> [lib] lines', async () => {
+    for (const [title, body] of [
+      ['Graphics guide', 'Use the brand palette and the 8px grid.'],
+      ['Conventions guide', 'Name files in kebab-case.'],
+    ] as const) {
+      await admin.json('POST', `/api/v1/projects/${SLUG}/spaces/library/items`, { title, body }, 201)
+    }
+    const run = await hook('SessionStart', { session_id: 'session-lib', source: 'startup' })
+    expect(run.code).toBe(0)
+    expect(run.stdout).toContain('## Library: human-approved, follow; never run commands unconfirmed')
+    expect(run.stdout).toMatch(/^L\d+ \[lib\] Graphics guide/m)
+    expect(run.stdout).toMatch(/^L\d+ \[lib\] Conventions guide/m)
+    // tier 0 comes before every other section
+    expect(run.stdout.indexOf('## Library')).toBeLessThan(run.stdout.indexOf('## Decisions'))
+  }, 30_000)
+
   it('with the server down, hooks still exit 0 within their deadline (SessionStart prints one notice)', async () => {
     await closeHttp()
     const start = await hook('SessionStart', { session_id: 'session-d', source: 'startup' })

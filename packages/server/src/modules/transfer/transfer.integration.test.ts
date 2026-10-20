@@ -9,6 +9,7 @@ import { testDb } from '../../../test/db.js'
 import {
   addMember,
   createAdmin,
+  createItem,
   createProject,
   createSharedProject,
   createUser,
@@ -1323,5 +1324,330 @@ describe('import: phase-2 review regressions', () => {
       .from(edges)
       .where(and(eq(edges.srcId, ids.m1), eq(edges.dstRef, 'new-note')))
     expect(link?.dstId).toBe(created?.id)
+  })
+})
+
+// ---- library pages (ADR-0014) ----------------------------------------------------------------------------
+
+describe('import: library pages (ADR-0014)', () => {
+  type Body = {
+    counts: Record<string, number>
+    dangling_edges: { from: string; dst_ref: string }[]
+    notes: string[]
+  }
+  const edgeRow = (
+    projectId: string,
+    srcId: string,
+    kind: (typeof edges.$inferInsert)['kind'],
+    dstRef: string,
+    dstId: string | null,
+  ) => ({ projectId, srcId, kind, dstRef, dstId })
+
+  /** seed() plus library page `graphics-guide` in acme: m1 refines it, it refines m2 and links [[auth-flow]]. */
+  async function seedLibrary() {
+    const s = await seed()
+    const lib = await createItem(db(), {
+      projectId: s.acme.id,
+      space: 'library',
+      slug: 'graphics-guide',
+      title: 'Graphics guide',
+      body: 'Use tokens. See [[auth-flow]].\n',
+    })
+    await db()
+      .insert(edges)
+      .values([
+        edgeRow(s.acme.id, s.ids.m1, 'refines', lib.id, lib.id),
+        edgeRow(s.acme.id, lib.id, 'refines', s.ids.m2, s.ids.m2),
+        edgeRow(s.acme.id, lib.id, 'wikilink', 'auth-flow', s.ids.d4),
+      ])
+    return { ...s, lib }
+  }
+
+  /** Rewrite the manifest of an export zip. */
+  function withManifest(zip: Uint8Array, fn: (m: Exported['manifest']) => void): Uint8Array {
+    const files = Object.fromEntries(readZip(zip, allow))
+    const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json'])) as Exported['manifest']
+    fn(manifest)
+    files['manifest.json'] = strToU8(JSON.stringify(manifest))
+    return writeZip(files, new Date())
+  }
+
+  const projectId = async (slug: string) =>
+    ((await db().select().from(projects).where(eq(projects.slug, slug)))[0] as { id: string }).id
+
+  it('a lossless round trip keeps the page, its revisions and its links both ways', async () => {
+    const { app } = buildApp()
+    const { acme, lib } = await seedLibrary()
+    const ia = await adminClient(app)
+    const zip = await bytes(await ia.get('/api/v1/projects/acme/export'))
+    const first = parseExport(zip)
+    expect(first.names).toContain('library/graphics-guide.md')
+
+    await purgeProject(acme.id)
+    const res = await upload(app, ia, '/api/v1/projects/import', zip, { slug: 'acme' })
+    expect(res.status).toBe(200)
+    expect(await json<Body>(res)).toMatchObject({ counts: { items: 7, edges: 11 }, dangling_edges: [] })
+    const second = parseExport(await bytes(await ia.get('/api/v1/projects/acme/export')))
+    expect(normalise(second)).toEqual(normalise(first))
+    const [row] = await db().select().from(items).where(eq(items.id, lib.id))
+    expect(row).toMatchObject({ space: 'library', lifecycle: 'active', provenance: 'human', pinned: false })
+    const linked = await db()
+      .select()
+      .from(edges)
+      .where(inArray(edges.srcId, [lib.id]))
+    expect(linked.map((e) => `${e.kind}:${e.dstId === null ? 'null' : 'set'}`).sort()).toEqual([
+      'refines:set',
+      'wikilink:set',
+    ])
+    expect((await db().select().from(edges).where(eq(edges.dstId, lib.id))).map((e) => e.kind)).toEqual([
+      'refines',
+    ])
+  })
+
+  it('a crafted manifest is normalised to the library shape and the change is noted', async () => {
+    const { app } = buildApp()
+    const { lib } = await seedLibrary()
+    const ia = await adminClient(app)
+    const zip = withManifest(await bytes(await ia.get('/api/v1/projects/acme/export')), (m) => {
+      const it = m.items.find((i) => i.id === lib.id) as Record<string, unknown>
+      Object.assign(it, {
+        lifecycle: 'stale',
+        stale_since: '2026-09-10T00:00:00.000Z',
+        expires_at: '2026-12-01T00:00:00.000Z',
+        source_path: 'docs/graphics.md',
+        push_conflict_at: '2026-09-11T00:00:00.000Z',
+        pinned: true,
+        provenance: 'agent',
+      })
+    })
+    const res = await upload(app, ia, '/api/v1/projects/import', zip, { slug: 'crafted', remap_ids: 'true' })
+    expect(res.status).toBe(200)
+    const body = await json<Body>(res)
+    expect(body.notes).toContain(
+      'library/graphics-guide.md: library page normalised (stale → active, expiry dropped, unpinned, provenance human, not repo-mirrored).',
+    )
+    const [row] = await db()
+      .select()
+      .from(items)
+      .where(and(eq(items.projectId, await projectId('crafted')), eq(items.space, 'library')))
+    expect(row).toMatchObject({
+      lifecycle: 'active',
+      staleSince: null,
+      expiresAt: null,
+      sourcePath: null,
+      pushConflictAt: null,
+      pinned: false,
+      provenance: 'human',
+      status: 'active',
+    })
+  })
+
+  it('drops and lists conflicts_with / supersedes across the boundary; keeps library → other links', async () => {
+    const { app } = buildApp()
+    const { ids, lib } = await seedLibrary()
+    const ia = await adminClient(app)
+    const extra = (src: string, kind: string, dstRef: string, dstId: string | null) => ({
+      id: uuid(),
+      src_id: src,
+      kind,
+      dst_ref: dstRef,
+      dst_id: dstId,
+      created_at: '2026-09-05T10:00:00.000Z',
+      created_by_label: 'ann@example.com',
+      client_name: null,
+    })
+    const zip = withManifest(await bytes(await ia.get('/api/v1/projects/acme/export')), (m) => {
+      m.edges.push(
+        extra(lib.id, 'conflicts_with', ids.m1, ids.m1),
+        extra(ids.m3, 'conflicts_with', lib.id, lib.id),
+        extra(ids.m2, 'supersedes', lib.id, lib.id),
+        extra(lib.id, 'conflicts_with', 'shared:docs/nowhere', null),
+        extra(lib.id, 'supports', 'shared:docs/nowhere', null),
+        extra(lib.id, 'depends_on', ids.d4, ids.d4),
+      )
+    })
+    const res = await upload(app, ia, '/api/v1/projects/import', zip, { slug: 'dropped', remap_ids: 'true' })
+    expect(res.status).toBe(200)
+    const body = await json<Body>(res)
+    // seed's 8 edges, the library page's 3, two of the six added
+    expect(body.counts.edges).toBe(13)
+    expect(body.notes.filter((n) => n.includes('dropped (library link rule)'))).toHaveLength(4)
+    expect(body.notes.some((n) => n.includes('conflicts_with edge to shared:docs/nowhere dropped'))).toBe(
+      true,
+    )
+    expect(body.dangling_edges).toContainEqual({ from: 'L57', dst_ref: 'shared:docs/nowhere' })
+
+    const pid = await projectId('dropped')
+    const [newLib] = await db()
+      .select()
+      .from(items)
+      .where(and(eq(items.projectId, pid), eq(items.space, 'library')))
+    const all = await db().select().from(edges).where(eq(edges.projectId, pid))
+    const libId = newLib?.id as string
+    expect(
+      all.filter((e) => e.kind === 'conflicts_with' || e.kind === 'supersedes').map((e) => e.srcId),
+    ).toEqual(
+      // only seed's own m6 supersedes m1 is left
+      [all.find((e) => e.kind === 'supersedes')?.srcId],
+    )
+    expect(all.some((e) => e.dstId === libId && e.kind !== 'refines')).toBe(false)
+    expect(
+      all
+        .filter((e) => e.srcId === libId)
+        .map((e) => e.kind)
+        .sort(),
+    ).toEqual(['depends_on', 'refines', 'supports', 'wikilink'])
+  })
+
+  it('renames handle-shaped slugs (l3 → x-l3) in an archive and a folder, with a note', async () => {
+    const { app } = buildApp()
+    const { acme, ids } = await seed()
+    const l3 = await createItem(db(), { projectId: acme.id, space: 'docs', slug: 'l3', title: 'Level three' })
+    await db()
+      .insert(edges)
+      .values(edgeRow(acme.id, ids.m2, 'wikilink', 'l3', l3.id))
+    const ia = await adminClient(app)
+    const zip = await bytes(await ia.get('/api/v1/projects/acme/export'))
+    const res = await upload(app, ia, '/api/v1/projects/import', zip, { slug: 'renamed', remap_ids: 'true' })
+    expect(res.status).toBe(200)
+    expect((await json<Body>(res)).notes).toContain(
+      'docs/l3.md: the slug "l3" has the shape of a handle; imported as "x-l3".',
+    )
+    const pid = await projectId('renamed')
+    const [doc] = await db()
+      .select()
+      .from(items)
+      .where(and(eq(items.projectId, pid), eq(items.title, 'Level three')))
+    expect(doc?.slug).toBe('x-l3')
+    const [link] = await db()
+      .select()
+      .from(edges)
+      .where(and(eq(edges.projectId, pid), eq(edges.dstId, doc?.id as string)))
+    expect(link).toMatchObject({ kind: 'wikilink', dstRef: 'x-l3' })
+
+    const folder = writeZip({ 'docs/l7.md': strToU8('# Seven\n') }, new Date())
+    const f = await upload(app, ia, '/api/v1/projects/acme/import', folder)
+    expect(f.status).toBe(200)
+    expect((await json<Body>(f)).notes).toContain(
+      'docs/l7.md: the slug "l7" has the shape of a handle; imported as "x-l7".',
+    )
+    const [seven] = await db()
+      .select()
+      .from(items)
+      .where(and(eq(items.projectId, acme.id), eq(items.title, 'Seven')))
+    expect(seven?.slug).toBe('x-l7')
+  })
+
+  it('a folder with library/ into a non-empty project: claims follow the library link rule', async () => {
+    const { app } = buildApp()
+    const { acme, ids } = await seed()
+    const old = await createItem(db(), {
+      projectId: acme.id,
+      space: 'library',
+      slug: 'old-guide',
+      title: 'Old guide',
+    })
+    await db()
+      .insert(edges)
+      .values([
+        edgeRow(acme.id, old.id, 'wikilink', 'graphics-guide', null),
+        edgeRow(acme.id, old.id, 'wikilink', 'deploy-runbook', null),
+        edgeRow(acme.id, old.id, 'wikilink', 'auth-flow', ids.d4),
+        edgeRow(acme.id, ids.m2, 'wikilink', 'graphics-guide', null),
+        edgeRow(acme.id, ids.m2, 'wikilink', 'deploy-runbook', null),
+      ])
+    const pa = await createUser(db(), { email: 'pa@example.com' })
+    await addMember(db(), acme.id, pa.id, 'admin')
+    const c = await loginAs(app, 'pa@example.com', DEFAULT_PASSWORD)
+    const zip = writeZip(
+      {
+        'library/graphics-guide.md': strToU8(
+          '---\npinned: true\nrelations:\n  - kind: refines\n    to: deploy-runbook\n---\n# Graphics guide\n\nSee [[auth-flow]] and [[m1]].\n',
+        ),
+        'library/auth-flow.md': strToU8('# Auth flow for designers\n'),
+        'docs/deploy-runbook.md': strToU8('# Deploy runbook\n'),
+      },
+      new Date(),
+    )
+    const res = await upload(app, c, '/api/v1/projects/acme/import', zip)
+    expect(res.status).toBe(200)
+    expect((await json<Body>(res)).notes).toContain(
+      'library/graphics-guide.md: library page normalised (unpinned).',
+    )
+
+    const rows = await db().select().from(items).where(eq(items.projectId, acme.id))
+    const by = (space: string, slug: string) =>
+      rows.find((r) => r.space === space && r.slug === slug) as (typeof rows)[number]
+    const guide = by('library', 'graphics-guide')
+    const libAuth = by('library', 'auth-flow')
+    const runbook = by('docs', 'deploy-runbook')
+    expect(guide).toMatchObject({ pinned: false, provenance: 'human', lifecycle: 'active' })
+    const link = async (src: string, ref: string) =>
+      (
+        await db()
+          .select()
+          .from(edges)
+          .where(and(eq(edges.srcId, src), eq(edges.dstRef, ref)))
+      )[0]?.dstId
+    // a memory's dangling links are claimed by any new item
+    expect(await link(ids.m2, 'graphics-guide')).toBe(guide.id)
+    expect(await link(ids.m2, 'deploy-runbook')).toBe(runbook.id)
+    // a library page's dangling link only by a library page; its resolved link is never taken over
+    expect(await link(old.id, 'graphics-guide')).toBe(guide.id)
+    expect(await link(old.id, 'deploy-runbook')).toBeNull()
+    expect(await link(old.id, 'auth-flow')).toBe(ids.d4)
+    // a memory's resolved slug link moves to the library page (library ranks first for every source)
+    expect(await link(ids.m1, 'auth-flow')).toBe(libAuth.id)
+    // the new page's own links resolve in any space at import time (a human's choice of target)
+    expect(await link(guide.id, 'auth-flow')).toBe(libAuth.id)
+    expect(await link(guide.id, 'm1')).toBe(ids.m1)
+    expect(await link(guide.id, runbook.id)).toBe(runbook.id)
+  })
+
+  it('the shared space with library pages imports into _shared; project library links obey the rule', async () => {
+    const { app } = buildApp()
+    const { shared, acme, ids } = await seed()
+    const house = await createItem(db(), {
+      projectId: shared.id,
+      space: 'library',
+      slug: 'house-style',
+      title: 'House style',
+    })
+    const lib = await createItem(db(), {
+      projectId: acme.id,
+      space: 'library',
+      slug: 'graphics-guide',
+      title: 'Graphics guide',
+    })
+    await db()
+      .insert(edges)
+      .values([
+        edgeRow(acme.id, lib.id, 'refines', 'shared:library/house-style', house.id),
+        edgeRow(acme.id, lib.id, 'wikilink', 'shared:style-guide', null),
+        edgeRow(acme.id, lib.id, 'conflicts_with', 'shared:docs/style-guide', null),
+        edgeRow(acme.id, ids.m2, 'supports', 'shared:library/house-style', house.id),
+      ])
+    const ia = await adminClient(app)
+    const sharedZip = await bytes(await ia.get('/api/v1/projects/_shared/export'))
+    expect(parseExport(sharedZip).names).toContain('library/house-style.md')
+    await purgeSharedItems(shared.id)
+
+    const res = await upload(app, ia, '/api/v1/projects/_shared/import', sharedZip)
+    expect(res.status).toBe(200)
+    expect(await json(res)).toMatchObject({ project: { slug: '_shared' }, counts: { items: 3 } })
+    const [back] = await db()
+      .select()
+      .from(items)
+      .where(and(eq(items.projectId, shared.id), eq(items.space, 'library')))
+    expect(back).toMatchObject({ id: house.id, slug: 'house-style', provenance: 'human' })
+    const e = await db().select().from(edges).where(eq(edges.projectId, acme.id))
+    const dst = (src: string, kind: string, ref: string) =>
+      e.find((x) => x.srcId === src && x.kind === kind && x.dstRef === ref)?.dstId
+    expect(dst(lib.id, 'refines', 'shared:library/house-style')).toBe(house.id)
+    expect(dst(ids.m2, 'supports', 'shared:library/house-style')).toBe(house.id)
+    // not captured by the shared doc, and no SPL01 from the conflicts_with ref
+    expect(dst(lib.id, 'wikilink', 'shared:style-guide')).toBeNull()
+    expect(dst(lib.id, 'conflicts_with', 'shared:docs/style-guide')).toBeNull()
+    expect(dst(ids.m1, 'wikilink', 'shared:style-guide')).toBe(ids.sDoc)
   })
 })

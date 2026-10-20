@@ -8,7 +8,7 @@
  * Provenance in the archive is untrusted text. Here every actor label becomes `imported: <label>` and the
  * original `{via, actor_label, token_id, client_name}` is kept in `imported_from`; no user id exists.
  */
-import { cleanLine, frontmatterSchemas } from '@spoor/shared'
+import { cleanLine, frontmatterSchemas, spaces } from '@spoor/shared'
 import type { Space } from '../../ports.js'
 import { canonicalFrontmatter, sameContent } from '../items/index.js'
 import { readMarkdown, sha256Hex } from './canonical.js'
@@ -29,7 +29,7 @@ import {
 export const ENTRY_ALLOWLIST: RegExp[] = [
   /^manifest\.json$/,
   /^audit\.jsonl$/,
-  /^(?:memories|docs)\/[a-z0-9-]{1,80}\.md$/,
+  /^(?:memories|docs|library)\/[a-z0-9-]{1,80}\.md$/,
   /^decisions\/\d{4,5}-[a-z0-9-]{1,80}\.md$/,
   /^revisions\/[0-9a-f-]{36}\.jsonl$/,
 ]
@@ -191,6 +191,41 @@ function checkState(m: ManifestItem, c: Content): void {
   if (m.pinned && m.lifecycle === 'stale') bad('a pinned item cannot be stale')
 }
 
+/**
+ * Library pages have one shape (ADR-0014, the DB's `items_library_shape_check`): never stale, pinned,
+ * expiring, agent-written or repo-mirrored. A crafted manifest is brought into that shape, not refused, and
+ * every change is listed in the import notes.
+ */
+export function normaliseLibraryItem(m: ManifestItem, notes: string[]): ManifestItem {
+  if (m.space !== 'library') return m
+  const changed: string[] = []
+  const out: ManifestItem = { ...m }
+  if (out.lifecycle === 'stale') {
+    out.lifecycle = 'active'
+    changed.push('stale → active')
+  }
+  if (out.stale_since !== null) out.stale_since = null
+  if (out.expires_at !== null) {
+    out.expires_at = null
+    changed.push('expiry dropped')
+  }
+  if (out.pinned) {
+    out.pinned = false
+    changed.push('unpinned')
+  }
+  if (out.provenance !== 'human') {
+    out.provenance = 'human'
+    changed.push('provenance human')
+  }
+  if (out.source_path !== null || out.push_conflict_at !== null) {
+    out.source_path = null
+    out.push_conflict_at = null
+    changed.push('not repo-mirrored')
+  }
+  if (changed.length > 0) notes.push(`${m.path}: library page normalised (${changed.join(', ')}).`)
+  return out
+}
+
 function provenanceOfRevision(
   l: RevisionLine,
 ): Pick<PlannedRevision, 'actorLabel' | 'via' | 'clientName' | 'importedFrom'> {
@@ -228,8 +263,8 @@ function parseLossless(entries: Map<string, Uint8Array>): LosslessArchive {
   }
   const parsed = manifestSchema.safeParse(json)
   if (!parsed.success) throw invalidArchive('manifest.json is invalid.', issuesOf(parsed.error, 'manifest'))
-  const manifest = parsed.data
   const notes: string[] = []
+  const manifest = { ...parsed.data, items: parsed.data.items.map((m) => normaliseLibraryItem(m, notes)) }
 
   // uniqueness inside the manifest (the DB would reject these; report them as an archive problem)
   const ids = new Set<string>()
@@ -515,6 +550,11 @@ function parseFiles(entries: Map<string, Uint8Array>): FilesArchive {
       ])
     }
     const space = name.split('/')[0] as Space
+    if (!(spaces as readonly string[]).includes(space)) {
+      throw invalidArchive('An entry is not in a known space directory.', [
+        { path: shortName(name), message: 'unknown directory' },
+      ])
+    }
     const file = name.slice(space.length + 1, -'.md'.length)
     let slug = file
     let adr: number | null = null
@@ -539,13 +579,16 @@ function parseFiles(entries: Map<string, Uint8Array>): FilesArchive {
       defaultStatus: space === 'decisions' ? 'accepted' : 'active',
     })
     const lv = typeof typed.last_verified === 'string' ? new Date(typed.last_verified) : null
+    // a library page is never pinned (ADR-0014); the flag of a file is dropped, not refused
+    const pinned = typed.pinned === true && space !== 'library'
+    if (typed.pinned === true && !pinned) notes.push(`${name}: library page normalised (unpinned).`)
     files.push({
       path: name,
       space,
       slug,
       adr,
       content,
-      pinned: typed.pinned === true,
+      pinned,
       lastVerified: lv && !Number.isNaN(lv.getTime()) ? lv : null,
       decidedOn: space === 'decisions' && typeof typed.date === 'string' ? typed.date : null,
       spoorId: typeof typed.spoor_id === 'string' ? typed.spoor_id.toLowerCase() : null,

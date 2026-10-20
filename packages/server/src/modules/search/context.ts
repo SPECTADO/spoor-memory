@@ -1,5 +1,5 @@
 /**
- * The digest's candidate queries (docs/design/search-and-digest.md section 7, deviation I11): five bounded
+ * The digest's candidate queries (docs/design/search-and-digest.md section 7, deviation I11): six bounded
  * queries plus at most one `embedQuery` (tier 4), then the pure builder in digest.ts. Nothing here bumps
  * `last_used_at` (cleanup-and-jobs.md section 3).
  */
@@ -9,15 +9,29 @@ import type { ServerDeps } from '../../lib/deps.js'
 import type { Space } from '../../ports.js'
 import { itemHandle } from '../items/index.js'
 import { resolveSettings } from '../projects/index.js'
-import { buildDigest, type DigestCandidate, type DigestResult, type TierId } from './digest.js'
+import { buildDigest, type DigestCandidate, type DigestResult, orderLibrary, type TierId } from './digest.js'
 import type { SearchService } from './service.js'
 import { DIGEST_ELIGIBLE, inList, type ProjectModels, projectModels, sharedProjectModels } from './sql.js'
 
 export const BUDGET_MIN = 200
 export const BUDGET_MAX = 8000
-const CAP = { pinned: 50, decisions: 20, anchored: 30, relevant: 15, verified: 60 } as const
+const CAP = { library: 100, pinned: 50, decisions: 20, anchored: 30, relevant: 15, verified: 60 } as const
 /** Anchored items read per project for in-process matching (items_anchored_idx rows). */
 const ANCHORED_SCAN_MAX = 5000
+
+/**
+ * Keep the first `cap` rows of the ordered anchored tier, but let rows tier 0 already lists with an anchor (the
+ * caller's matched library pages) pass without taking a slot: buildDigest skips them where tier 0 showed them,
+ * so they would otherwise push anchored memories and docs out (a rolled-up page still surfaces here).
+ */
+export function capAnchored<T extends { id: string }>(
+  ordered: readonly T[],
+  inTier0: ReadonlySet<string>,
+  cap: number,
+): T[] {
+  let slots = cap
+  return ordered.filter((r) => inTier0.has(r.id) || slots-- > 0)
+}
 
 export interface ContextParams {
   projectId: string
@@ -94,9 +108,23 @@ export class ContextService {
       anchor: anchor ?? null,
     })
 
-    // 1. pinned (project + shared): decisions, docs, memories; then updated_at desc
+    // 0. library (project + shared): own pages first, then number; own pages matching `files` move to the front
+    const libraryRows = await this.#rows(
+      sql`i.project_id IN ${inList(scopeIds)} AND i.space = 'library'`,
+      sql`(i.project_id = ${project.id}) DESC, i.number, i.id`,
+      CAP.library,
+    )
+    const library = orderLibrary(
+      libraryRows.map((r) => ({
+        candidate: toCandidate(r),
+        own: r.project_id === project.id,
+        anchors: r.anchors,
+      })),
+      files,
+    )
+    // 1. pinned (project + shared, never library): decisions, docs, memories; then updated_at desc
     const pinned = await this.#rows(
-      sql`i.project_id IN ${inList(scopeIds)} AND i.pinned`,
+      sql`i.project_id IN ${inList(scopeIds)} AND i.pinned AND i.space <> 'library'`,
       sql`CASE i.space WHEN 'decisions' THEN 0 WHEN 'docs' THEN 1 ELSE 2 END, i.updated_at DESC, i.id`,
       CAP.pinned,
     )
@@ -107,7 +135,8 @@ export class ContextService {
       sql`i.decided_on DESC, i.adr_number DESC, i.id`,
       CAP.decisions,
     )
-    // 3. anchored (project only): match strength desc, more matched files, last_verified_at desc
+    // 3. anchored (project only, library included; tier 0 already placed most of those): match strength desc,
+    //    more matched files, last_verified_at desc; tier 0's anchored pages do not count against the cap
     let anchored: DigestCandidate[] = []
     if (files.length > 0) {
       const rows = await this.#rows(
@@ -115,8 +144,8 @@ export class ContextService {
         sql`i.last_verified_at DESC, i.id`,
         ANCHORED_SCAN_MAX,
       )
-      anchored = rows
-        .map((r) => ({ r, s: scoreAnchors(r.anchors, files) }))
+      const scored = rows
+        .map((r) => ({ id: r.id, r, s: scoreAnchors(r.anchors, files) }))
         .filter((x) => x.s.strength > 0)
         .sort(
           (a, b) =>
@@ -124,10 +153,10 @@ export class ContextService {
             b.s.matchedFiles - a.s.matchedFiles ||
             new Date(b.r.last_verified_at).getTime() - new Date(a.r.last_verified_at).getTime(),
         )
-        .slice(0, CAP.anchored)
-        .map((x) => toCandidate(x.r, x.s.anchor))
+      const inTier0 = new Set(library.filter((c) => c.anchor).map((c) => c.id))
+      anchored = capAnchored(scored, inTier0, CAP.anchored).map((x) => toCandidate(x.r, x.s.anchor))
     }
-    // 4. relevant: hybrid search restricted to eligible items (project + shared)
+    // 4. relevant: hybrid search restricted to eligible items (project + shared, every space)
     let relevant: DigestCandidate[] = []
     if (query) {
       const res = await this.search.search({
@@ -151,14 +180,15 @@ export class ContextService {
         expiresAt: h.expiresAt,
       }))
     }
-    // 5. recently verified (project only, all spaces)
+    // 5. recently verified (project only, every space but library)
     const verified = await this.#rows(
-      sql`i.project_id = ${project.id}`,
+      sql`i.project_id = ${project.id} AND i.space <> 'library'`,
       sql`i.last_verified_at DESC, i.id`,
       CAP.verified,
     )
 
     const tiers: Record<TierId, DigestCandidate[]> = {
+      0: library,
       1: pinned.map((r) => toCandidate(r)),
       2: decisions.map((r) => toCandidate(r)),
       3: anchored,

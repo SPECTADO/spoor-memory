@@ -205,21 +205,22 @@ A slug-scoped public API with no OAuth client registration:
 ## 7. Permission matrix
 
 Legend: IA instance admin · PA project admin · E editor · V viewer · SE `shared_editor` right ·
-U any logged-in user · ST service token (role in brackets) · UT user token (effective role).
+LE member with the `library_editor` flag · U any logged-in user · ST service token (role in brackets) · UT user token (effective role).
 
 | action | web (cookie) | REST bearer `/p/:slug/api` | MCP |
 |---|---|---|---|
 | read project items, search, history, backlinks, audit log | IA, PA, E, V | UT any, ST any (`context`, `whoami`, `undrafted`) | UT any, ST any |
 | create / edit project items, pin, verify, archive, restore, relate | IA, PA, E | UT ≥E, ST[editor] (`push`, `adr/import`) | UT ≥E, ST[editor] (no pin/archive tools) |
-| hard-delete project item | IA, PA | — | — |
+| create / edit / archive / restore library pages, relate from them (`library.write`) | IA, PA, LE (editor or viewer with the `library_editor` flag) | — (`read_only_space`) | — (`read_only_space`) |
+| hard-delete project item (library pages included) | IA, PA | — | — |
 | review-queue actions (§ cleanup doc) | IA, PA, E | — | — |
 | read shared space | U | any project token (via `context`) | any project token |
-| write shared space (create, edit, pin, archive, restore, relate) | IA, SE | — | — |
+| write shared space (create, edit, pin, archive, restore, relate; its library pages too) | IA, SE | — | — |
 | hard-delete shared item | IA, SE | — | — |
 | create own user token / look up, approve or deny a device code for a project | member (any role), IA | — | — |
 | revoke own token | owner, PA, IA | — | — |
 | service tokens: create / revoke | PA, IA | — | — |
-| memberships and roles of a project | PA, IA | — | — |
+| memberships, roles and the `library_editor` flag of a project | PA, IA | — | — |
 | project settings (cleanup days, embedding provider) | PA, IA | — | — |
 | export / import project | PA, IA | — | — |
 | create project | IA | — | — |
@@ -235,6 +236,15 @@ nothing else; `permissions.test.ts` checks every row for every caller (IA, PA, E
 role, service tokens) on every surface. Refusals are 403 `forbidden` on the web, and 403 `forbidden_role` (or
 `read_only_space` for a shared write) on bearer surfaces. Visibility comes first: a project the caller cannot see is 404.
 
+Library rules (ADR-0014):
+- `library.write` is `ia || pa || libraryEditor` on a project and the shared-writer rule on `_shared`. Bearer callers never hold it
+  (`read_only_space`). The right is independent of the role: a viewer with the flag edits library pages and nothing else; an editor
+  without it edits everything but the library (`read_only_space`). A viewer with the flag is refused (`forbidden`) on memories,
+  decisions and docs, because the item right (`item.write`) is separate. Hard delete of a library page stays PA or IA.
+- The flag is stored false for admins (the role implies the right). Demoting an admin clears it unless the request sets it, so the
+  right never survives a demotion unseen; every implicit change is audited (`member.set` carries `library_editor` and
+  `previous_library_editor`).
+
 Rules:
 - The effective project role is `admin` for an IA without a membership.
 - PA cannot demote or remove the last project admin.
@@ -244,7 +254,25 @@ Rules:
   `user.update` (`data.fields`), `user.delete`, `user.password_change`, `user.password_reset`, `invite.create`,
   `invite.revoke`. Logins and logouts are not audited.
 
-## 8. Shared-space rules
+## 8. Human-only spaces (shared and library)
+
+Two spaces are written only by a logged-in human in the web UI: `_shared` (ADR-0005) and each project's `library` (ADR-0014). They
+follow one rule, `humanOnlyZone(kind, space)` in `modules/items/writes.ts`, applied by `assertWritable(caller, space?)`:
+- **Space unknown** (entry-level calls before the item is resolved): only the shared check runs, as before.
+- **Space known** (write-mode resolution, create, `insertNew`, edge removal): zone `shared` needs a web caller with a user and IA or
+  SE; zone `library` needs a web caller with a user and `caller.rights.library`; any other zone refuses a web caller whose
+  `rights.item` is false (`forbidden`, the viewer with the flag). MCP, REST bearer and mirror callers never carry `rights`, so deny is
+  the default, answered `read_only_space` before any `wrong_space` check.
+- Error names: `read_only_space` for a caller without the right (library wording: "Library pages are read-only here."),
+  `forbidden` for a web user with neither right, `wrong_space` (400) for an authorised human who pins, verifies or supersedes a
+  library page or draws a refused edge. DB backstops: `SPL01` (edge rule) and `SPL02` (a library revision via `mcp`/`cli`).
+- **Wikilink side effect.** Creating a library page retargets the project's matching dangling and lower-ranked wikilinks, because library pages outrank every other item. This holds even when the creator is a viewer with the library flag, who cannot write the source items; the sources' own next save would resolve the same way.
+- **Stated boundary.** "Human-only" means a request made with a logged-in web session by a user who holds the right. The origin check
+  (§4) defends against CSRF, not against non-browser clients. A browser-automation agent that drives a logged-in session (for example a
+  browser-extension MCP) is indistinguishable from the human; `_shared` has had the same exposure since ADR-0005. Spoor does not claim
+  more. Step-up authentication for library writes (password re-entry, WebAuthn) is a recorded follow-up, not built.
+
+### Shared-space rules
 
 - Stored as the `kind='shared'` project. It has no memberships and no tokens.
 - Read: any logged-in user in the web UI, and any valid project token over MCP or REST. A viewer token
@@ -262,6 +290,9 @@ Rules:
   two ends are both in `_shared`.
 - Id resolution is project-scoped everywhere (data-model.md §0): a uuid of another project is
   `not_found`.
+- `_shared` has its own library (`S:L<n>`), written by IA and SE. A project item may link to it with `refines`, `supports`,
+  `depends_on` or a wikilink; `conflicts_with`, `supersedes` and `drafted_from` into a library page are refused. A slug read that
+  matches both an own item and a shared library page answers `ambiguous_id`, so an agent-written twin cannot shadow it.
 
 ## 9. Zip import hardening (reader in `modules/transfer/zip.ts`; fflate 0.8.3 writes)
 
@@ -368,6 +399,11 @@ in the threat model:
 - **Provenance per line.** Items whose last content write came through MCP and that no human has since
   edited, verified or pinned (`items.provenance='agent'`) carry a `~` after the handle in the digest,
   in search results and in `spoor_get` (`m42~`). Repo pushes count as human: the file went through git.
+- **Library pages.** They are human-approved guidance: the digest tier and `spoor_get` tell agents to follow them, but they are still
+  never a source of commands to run unconfirmed (the framing line is unchanged). Any library editor, a viewer with the flag included,
+  writes text that lands in every agent's digest, so grant the flag as deliberately as editor. Agents cannot change, redirect or contradict a page:
+  writes are refused, links into a page are limited to `refines`, `supports`, `depends_on` and wikilinks, and a library link
+  cannot be captured by a later same-slug item.
 - **Shape.** Titles stay single-line (CHECK) and have control and bidi characters stripped on write, like
   tags and client names (data-model.md §0), so a title cannot fake extra digest lines or hide text.
 - **Least privilege.** Service tokens default to `viewer` in the UI; writes need an explicit `editor`.

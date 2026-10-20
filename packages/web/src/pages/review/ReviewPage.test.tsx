@@ -147,6 +147,42 @@ describe('ReviewPage', () => {
     expect(screen.getByText(/m2 \(archived/)).toBeInTheDocument()
   })
 
+  it('words the read_only_space and wrong_space skips', async () => {
+    mockApi({
+      ...base,
+      'GET /api/v1/projects/acme': [200, project('editor')],
+      'GET /api/v1/projects/acme/review': [200, counts({ stale: 2 })],
+      'GET /api/v1/projects/acme/review/stale': [
+        200,
+        {
+          items: [
+            { ...item(1), days_to_archive: 10, used_since_stale: false },
+            { ...item(2), days_to_archive: 5, used_since_stale: false },
+          ],
+          next_cursor: null,
+        },
+      ],
+      'POST /api/v1/projects/acme/review/bulk': [
+        200,
+        {
+          done: [],
+          skipped: [
+            { handle: 'm1', reason: 'read_only_space' },
+            { handle: 'm2', reason: 'wrong_space' },
+          ],
+        },
+      ],
+    })
+    renderReview('/projects/acme/review?section=stale')
+    await userEvent.click(await screen.findByLabelText('Select m1'))
+    await userEvent.click(screen.getByLabelText('Select m2'))
+    await userEvent.click(
+      within(screen.getByRole('region', { name: 'Bulk actions' })).getByRole('button', { name: 'Verify' }),
+    )
+    expect(await screen.findByText(/m1 \(read-only here \(shared or library\)/)).toBeInTheDocument()
+    expect(screen.getByText(/m2 \(not applicable to this item/)).toBeInTheDocument()
+  })
+
   it('confirms the action on the last row although its section unmounts at once', async () => {
     mockApi({
       ...base,

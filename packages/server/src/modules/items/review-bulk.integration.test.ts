@@ -148,3 +148,49 @@ describe('POST /api/v1/projects/:slug/review/bulk', () => {
     expect((await row(sh.id))?.lifecycle).toBe('active')
   })
 })
+
+describe('library pages in the review queue (ADR-0014)', () => {
+  it('bulk refs to a library page are skipped: read_only_space without the right, wrong_space with it', async () => {
+    const page = await createItem(db(), { projectId: s.acme.id, space: 'library' }) // L1
+    const mem = await createItem(db(), { projectId: s.acme.id })
+    await setStale(mem.id)
+    expect(await bulk(ed, { action: 'verify', refs: ['L1', handle(mem)] })).toEqual({
+      done: [handle(mem)],
+      skipped: [{ handle: 'L1', reason: 'read_only_space' }],
+    })
+    expect(await bulk(ed, { action: 'archive', refs: ['L1'] })).toEqual({
+      done: [],
+      skipped: [{ handle: 'L1', reason: 'read_only_space' }],
+    })
+    const pa = await createUser(db())
+    await addMember(db(), s.acme.id, pa.id, 'admin')
+    const admin = await s.login(pa)
+    expect(await bulk(admin, { action: 'verify', refs: ['L1'] })).toEqual({
+      done: [],
+      skipped: [{ handle: 'L1', reason: 'wrong_space' }],
+    })
+    expect((await row(page.id))?.lifecycle).toBe('active')
+    expect(await bulk(admin, { action: 'archive', refs: ['L1'] })).toEqual({ done: ['L1'], skipped: [] })
+    expect((await row(page.id))?.lifecycle).toBe('archived')
+  })
+
+  it('a viewer with the library flag is refused by the route', async () => {
+    const lv = await createUser(db())
+    await addMember(db(), s.acme.id, lv.id, 'viewer', { libraryEditor: true })
+    await createItem(db(), { projectId: s.acme.id, space: 'library' })
+    const r = await (await s.login(lv)).post(`${P}/review/bulk`, { action: 'archive', refs: ['L1'] })
+    expect(r.status).toBe(403)
+    expect((await json<{ error: string }>(r)).error).toBe('forbidden')
+  })
+
+  it('an archived library page is in no review list and no count', async () => {
+    const page = await createItem(db(), { projectId: s.acme.id, space: 'library' })
+    await setArchived(page.id)
+    const mem = await createItem(db(), { projectId: s.acme.id })
+    await setArchived(mem.id)
+    const counts = await json<{ counts: Record<string, number> }>(await ed.get(`${P}/review`))
+    expect(counts.counts.archived).toBe(1)
+    const list = await json<{ items: { id: string }[] }>(await ed.get(`${P}/review/archived`))
+    expect(list.items.map((i) => i.id)).toEqual([mem.id])
+  })
+})

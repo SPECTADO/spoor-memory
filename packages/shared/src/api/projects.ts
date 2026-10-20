@@ -48,7 +48,7 @@ export interface ProjectListItem {
   /** Effective role: `admin` for an instance admin without a membership. */
   role: ProjectRole
   /** Items that are not archived, per space. */
-  counts: { memories: number; decisions: number; docs: number }
+  counts: { memories: number; decisions: number; docs: number; library: number }
   /** Sum of the review-queue sections (cleanup-and-jobs.md section 6). */
   review_total: number
 }
@@ -71,6 +71,11 @@ export interface ProjectJson {
    * instance admin, `editor` for a shared editor, `viewer` for everyone else.
    */
   role: ProjectRole
+  /**
+   * The caller may create, edit, archive and restore library pages here (`library.write`): project admins,
+   * instance admins and library editors; on `_shared`, shared writers. The SPA gates on this, never on role.
+   */
+  can_edit_library: boolean
   embedding: { model: string; target: string | null; remaining: number }
   created_at: string
 }
@@ -101,7 +106,12 @@ export type DashboardChange = (typeof DASHBOARD_CHANGES)[number]
 
 /** `GET /api/v1/projects/:slug/dashboard` (api.md 4.1). */
 export interface DashboardResponse {
-  counts: { memories: LifecycleCounts; decisions: LifecycleCounts; docs: LifecycleCounts }
+  counts: {
+    memories: LifecycleCounts
+    decisions: LifecycleCounts
+    docs: LifecycleCounts
+    library: LifecycleCounts
+  }
   /** The review-queue counts (the same numbers as `GET …/review`). */
   review: Record<ReviewSection, number>
   /** The last 15 content or lifecycle changes of items that still exist, newest first. */
@@ -110,12 +120,34 @@ export interface DashboardResponse {
 
 // ---- memberships (api.md 4.2) -------------------------------------------------------------------------
 
-export const memberAddRequest = z.strictObject({ email: emailSchema, role: z.enum(PROJECT_ROLES) })
-export const memberRoleRequest = z.strictObject({ role: z.enum(PROJECT_ROLES) })
+/** `library_editor` defaults to false and is ignored (stored false) for an admin: admin implies the right. */
+export const memberAddRequest = z.strictObject({
+  email: emailSchema,
+  role: z.enum(PROJECT_ROLES),
+  library_editor: z.boolean().optional(),
+})
+
+/**
+ * `PUT …/members/:userId`: a role, the library-editor flag, or both. Promoting to admin clears the stored
+ * flag; demoting from admin sets it to `library_editor ?? false` (auth-and-security.md section 7).
+ */
+export const memberUpdateRequest = z
+  .strictObject({
+    role: z.enum(PROJECT_ROLES).optional(),
+    library_editor: z.boolean().optional(),
+  })
+  .refine((v) => v.role !== undefined || v.library_editor !== undefined, {
+    message: 'send role, library_editor or both',
+  })
+export type MemberUpdateRequest = z.input<typeof memberUpdateRequest>
+/** The older name of `memberUpdateRequest`. */
+export const memberRoleRequest = memberUpdateRequest
 
 export interface MemberJson {
   user: { id: string; email: string; name: string }
   role: ProjectRole
+  /** The stored flag: always false for an admin (the role implies the right). */
+  library_editor: boolean
   created_at: string
 }
 

@@ -11,6 +11,8 @@ import { wikiPath } from './paths'
 export interface WikiLinkOptions {
   /** Project whose resolver the links point at (`_shared` for the shared space). */
   slug: string
+  /** Space of the page holding the link; the resolver uses it only to rank candidates. */
+  from?: string
 }
 
 export interface ParsedWikilink {
@@ -33,11 +35,12 @@ export function parseWikilink(match: string): ParsedWikilink | null {
   return { ref, heading, label: alias || target.trim() }
 }
 
-export function wikilinkHref(slug: string, link: ParsedWikilink): string {
-  return `${wikiPath(slug, link.ref)}${link.heading ? `#${encodeURIComponent(link.heading)}` : ''}`
+export function wikilinkHref(slug: string, link: ParsedWikilink, from?: string): string {
+  const query = from ? `?from=${encodeURIComponent(from)}` : ''
+  return `${wikiPath(slug, link.ref)}${query}${link.heading ? `#${encodeURIComponent(link.heading)}` : ''}`
 }
 
-function splitText(node: Text, slug: string): PhrasingContent[] {
+function splitText(node: Text, slug: string, from?: string): PhrasingContent[] {
   const re = new RegExp(WIKILINK_RE.source, 'g')
   const out: PhrasingContent[] = []
   let last = 0
@@ -48,7 +51,7 @@ function splitText(node: Text, slug: string): PhrasingContent[] {
     if (at > last) out.push({ type: 'text', value: node.value.slice(last, at) })
     const link: Link = {
       type: 'link',
-      url: wikilinkHref(slug, parsed),
+      url: wikilinkHref(slug, parsed, from),
       children: [{ type: 'text', value: parsed.label }],
       data: { hProperties: { className: ['wikilink'], 'data-wikilink': parsed.ref } },
     }
@@ -60,13 +63,14 @@ function splitText(node: Text, slug: string): PhrasingContent[] {
   return out
 }
 
-function walk(parent: Parent, slug: string) {
+function walk(parent: Parent, slug: string, from?: string) {
   const next: RootContent[] = []
   for (const child of parent.children as RootContent[]) {
     if (child.type === 'text') {
-      next.push(...splitText(child, slug))
+      next.push(...splitText(child, slug, from))
     } else {
-      if (child.type !== 'link' && child.type !== 'linkReference' && 'children' in child) walk(child, slug)
+      if (child.type !== 'link' && child.type !== 'linkReference' && 'children' in child)
+        walk(child, slug, from)
       next.push(child)
     }
   }
@@ -74,5 +78,5 @@ function walk(parent: Parent, slug: string) {
 }
 
 export function remarkWikiLinks(options: WikiLinkOptions) {
-  return (tree: Root) => walk(tree, options.slug)
+  return (tree: Root) => walk(tree, options.slug, options.from)
 }

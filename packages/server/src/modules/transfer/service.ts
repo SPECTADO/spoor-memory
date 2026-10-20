@@ -55,23 +55,39 @@ export class TransferService {
   /** `POST /projects/import`: a new project from an archive. Instance admins only. */
   importNew(ctx: UserContext, input: ImportInput & { slug: string; name?: string }): Promise<ImportResponse> {
     assertCan(webPrincipal(ctx.user, null), 'project.create')
-    return this.#run(ctx, input, (name) => ({ kind: 'new', slug: input.slug, name: input.name ?? name }))
+    return this.#run(
+      ctx,
+      input,
+      (name) => ({ kind: 'new', slug: input.slug, name: input.name ?? name }),
+      () => assertCan(webPrincipal(ctx.user, null), 'library.write'),
+    )
   }
 
   /** `POST /projects/:slug/import`: into an empty project (or the shared space). PA, IA (shared: IA). */
   importInto(access: ProjectAccess, input: ImportInput): Promise<ImportResponse> {
     access.assert('project.transfer')
-    return this.#run(access.ctx, input, () => ({ kind: 'existing', project: access.project }))
+    return this.#run(
+      access.ctx,
+      input,
+      () => ({ kind: 'existing', project: access.project }),
+      () => access.assert('library.write'),
+    )
   }
 
   #run(
     ctx: UserContext,
     input: ImportInput,
     target: (defaultName: string) => ImportTarget,
+    assertLibrary: () => void,
   ): Promise<ImportResponse> {
     return this.#exclusive(async () => {
       const entries = readZip(input.file, entryAllowed)
       const parsed = parseArchive(entries)
+      // library pages are written by humans with the library right (ADR-0014). `project.transfer` implies it
+      // today; the explicit check keeps the rule if that ever changes.
+      const spacesIn =
+        parsed.kind === 'lossless' ? parsed.items.map((i) => i.m.space) : parsed.files.map((f) => f.space)
+      if (spacesIn.includes('library')) assertLibrary()
       const defaultName = parsed.kind === 'lossless' ? parsed.manifest.project.name : 'Imported'
       const outcome = await importArchive(this.deps, {
         parsed,

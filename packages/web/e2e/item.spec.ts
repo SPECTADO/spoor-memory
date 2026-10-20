@@ -93,7 +93,7 @@ async function mockApi(
               name: 'Acme',
               description: '',
               role: 'editor',
-              counts: { memories: 1, decisions: 0, docs: 0 },
+              counts: { memories: 1, decisions: 0, docs: 0, library: 0 },
               review_total: 0,
             },
           ],
@@ -260,4 +260,49 @@ test('phone width: item view and editor have no horizontal scroll; editor uses W
   await expect(page.getByRole('region', { name: 'Preview' })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Preview' }).locator('strong')).toHaveText('Redis')
   expect(await overflow()).toBeLessThanOrEqual(0)
+})
+
+test('a library page shows Edit but no Pin or Verify controls', async ({ page }) => {
+  await mockApi(page, {})
+  // routes registered later win over mockApi's catch-all
+  await page.route('**/api/v1/projects/acme', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...project, role: 'viewer', can_edit_library: true }),
+    }),
+  )
+  await page.route('**/api/v1/projects/acme/items/L1', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        item({
+          id: 'id-l1',
+          handle: 'L1',
+          space: 'library',
+          number: 1,
+          slug: 'graphics-guide',
+          title: 'Graphics guide',
+          type: null,
+          confidence: null,
+          body: 'Use the brand palette.\n',
+        }),
+      ),
+    }),
+  )
+  await page.route('**/api/v1/projects/acme/items/L1/edges', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ outgoing: [], incoming: [] }),
+    }),
+  )
+  await page.goto('/projects/acme/i/L1')
+  await expect(page.getByRole('heading', { level: 1, name: 'Graphics guide' })).toBeVisible()
+  await expect(page.getByText('Library · human-maintained')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Edit' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Pin' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Unpin' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Verify' })).toHaveCount(0)
 })

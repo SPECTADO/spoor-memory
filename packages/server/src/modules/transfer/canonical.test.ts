@@ -209,3 +209,48 @@ describe('exportFrontmatter', () => {
     ])
   })
 })
+
+describe('library frontmatter (ADR-0014)', () => {
+  const base = { path: 'library/guide.md', body: 'b', defaultStatus: 'active' }
+  it('reads like a doc: no type or confidence, status active only, unknown keys are extras', () => {
+    const c = contentFrom('library', { title: 'Guide', owner: 'design', type: 'fact' }, base)
+    expect(c).toMatchObject({ title: 'Guide', status: 'active', type: null, confidence: null })
+    expect(c.extras).toMatchObject({ owner: 'design' })
+    expect(() => contentFrom('library', { title: 'Guide', status: 'superseded' }, base)).toThrow(ApiError)
+  })
+
+  it('exports in the canonical key order without a status while active, and splits back unchanged', () => {
+    const fm = exportFrontmatter({
+      id: 'i',
+      space: 'library',
+      title: 'Guide',
+      tags: ['ui'],
+      anchors: ['packages/web/**'],
+      pinned: false,
+      lastVerifiedAt: new Date('2026-01-01T00:00:00Z'),
+      type: null,
+      confidence: null,
+      status: 'active',
+      expiresAt: null,
+      adrNumber: null,
+      decidedOn: null,
+      extras: { owner: 'design' },
+      relations: [{ kind: 'refines', to: 'shared:library/house-style' }],
+      supersedes: null,
+      supersededBy: null,
+      draftedFrom: [],
+    })
+    expect(Object.keys(fm)).toEqual([
+      'spoor_id',
+      'title',
+      'tags',
+      'anchors',
+      'pinned',
+      'last_verified',
+      'relations',
+      'owner',
+    ])
+    const text = renderMarkdown(fm, 'Use tokens.\n')
+    expect(splitMarkdown(text, 'library/guide.md')).toEqual({ fm, body: 'Use tokens.\n' })
+  })
+})

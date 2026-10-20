@@ -59,13 +59,15 @@ export interface MarkdownViewProps {
   source: string
   /** Project the wikilinks resolve in (`_shared` on shared items). */
   slug: string
+  /** Space of the page the Markdown belongs to; sent as `from` when a wikilink is resolved (sets the rank only). */
+  from?: string
   className?: string
 }
 
-export const MarkdownView = memo(function MarkdownView({ source, slug, className }: MarkdownViewProps) {
+export const MarkdownView = memo(function MarkdownView({ source, slug, from, className }: MarkdownViewProps) {
   const remarkPlugins = useMemo(
-    () => [remarkGfm, [remarkWikiLinks, { slug }]] as ComponentProps<typeof Markdown>['remarkPlugins'],
-    [slug],
+    () => [remarkGfm, [remarkWikiLinks, { slug, from }]] as ComponentProps<typeof Markdown>['remarkPlugins'],
+    [slug, from],
   )
   return (
     <div className={cx('md', className)}>

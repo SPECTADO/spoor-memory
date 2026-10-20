@@ -59,6 +59,7 @@ import {
   contentOf,
   deriveSlug,
   invalid,
+  readOnlySpace,
   sameContent,
   stickyStatus,
   writeContent,
@@ -282,6 +283,8 @@ export class PushService {
         .limit(1)
       if (row) match = (await loadItem(this.db, row.id)) ?? null
     }
+    // a library page is never pushed (humans edit it in the web UI): read_only_space before wrong_space
+    if (match?.space === 'library') throw readOnlySpace('library')
     if (match && match.space !== space) {
       throw new ApiError('wrong_space', {
         message: `${handleOf(match, view)} is in the ${match.space} space, not ${space}.`,

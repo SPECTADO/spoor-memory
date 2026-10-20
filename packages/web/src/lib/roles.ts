@@ -7,7 +7,8 @@ import type { MeResponse, ProjectRole } from '@spoor/shared'
 
 const RANK: Record<ProjectRole, number> = { viewer: 0, editor: 1, admin: 2 }
 
-export type Gate = 'member' | 'editor' | 'admin' | 'ia'
+/** `library` is the library right (`ProjectJson.can_edit_library`), never derived from the role here. */
+export type Gate = 'member' | 'editor' | 'admin' | 'ia' | 'library'
 
 export function hasRole(role: ProjectRole | null | undefined, min: ProjectRole): boolean {
   return role != null && RANK[role] >= RANK[min]
@@ -20,6 +21,7 @@ export function passes(
   gate: Gate,
   me: MeResponse | undefined,
   role: ProjectRole | null | undefined,
+  canEditLibrary = false,
 ): boolean {
   switch (gate) {
     case 'ia':
@@ -28,6 +30,8 @@ export function passes(
       return isInstanceAdmin(me) || hasRole(role, 'admin')
     case 'editor':
       return isInstanceAdmin(me) || hasRole(role, 'editor')
+    case 'library':
+      return canEditLibrary
     case 'member':
       return isInstanceAdmin(me) || role != null
   }

@@ -26,3 +26,24 @@ describe('RefIndex', () => {
     expect(idx.rowOf('a3')?.slug).toBe('use-postgres')
   })
 })
+
+describe('RefIndex with library pages', () => {
+  const idx = new RefIndex([
+    { id: 'm1', space: 'memories', number: 1, adrNumber: null, slug: 'guide' },
+    { id: 'd2', space: 'docs', number: 2, adrNumber: null, slug: 'runbook' },
+    { id: 'l3', space: 'library', number: 3, adrNumber: null, slug: 'guide' },
+  ])
+  it('resolves l3 / L3 to the library page, never m3 or d3', () => {
+    expect(idx.resolveWikilink('l3', 'memories')).toBe('l3')
+    expect(idx.resolveWikilink('L3', 'docs')).toBe('l3')
+    expect(idx.resolveWikilink('l1', 'docs')).toBeUndefined()
+    expect(idx.resolveWikilink('m3', 'library')).toBeUndefined()
+  })
+  it('a library page wins a slug for every source; a library source resolves any space', () => {
+    expect(idx.resolveWikilink('guide', 'memories')).toBe('l3')
+    expect(idx.resolveWikilink('guide', 'library')).toBe('l3')
+    expect(idx.resolveWikilink('runbook', 'library')).toBe('d2')
+    expect(idx.resolveWikilink('m1', 'library')).toBe('m1')
+    expect(idx.bySpaceSlug('library/guide')).toBe('l3')
+  })
+})

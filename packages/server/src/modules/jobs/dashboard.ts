@@ -45,7 +45,7 @@ export class DashboardService {
       .from(items)
       .where(eq(items.projectId, p))
       .groupBy(items.space, items.lifecycle)
-    const counts = { memories: zero(), decisions: zero(), docs: zero() }
+    const counts = { memories: zero(), decisions: zero(), docs: zero(), library: zero() }
     for (const g of grouped) {
       const space = counts[g.space as keyof typeof counts]
       if (space && g.lifecycle in space) space[g.lifecycle as keyof LifecycleCounts] = g.n

@@ -362,3 +362,105 @@ test('the export re-imports into a new, empty project from the settings page (Do
   await admin.goto('/projects/acme-copy/memories')
   await expect(admin.getByRole('link', { name: new RegExp(WORD, 'i') }).first()).toBeVisible()
 })
+
+// ---------------------------------------------------------------- library (ADR-0014) ----
+
+const LIB_WORD = 'quillfeather'
+const ADMIN2 = { email: 'admin2@example.com', name: 'Second Admin', password: 'admin2-password-e2e-1' }
+let admin2Context: BrowserContext
+let admin2: Page
+
+test('the admin creates a library page and sees it in the nav, the list, the search and four dashboard cards', async () => {
+  await admin.goto(`/projects/${SLUG}`)
+  await admin.getByRole('navigation', { name: 'Project' }).getByRole('link', { name: 'Library' }).click()
+  await expect(admin).toHaveURL(`/projects/${SLUG}/library`)
+  await expect(admin.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible()
+  await admin.getByRole('link', { name: 'New page' }).first().click()
+  await admin.getByLabel('Title').fill(`Graphics ${LIB_WORD} guide`)
+  await typeBody(admin, `Use the ${LIB_WORD} palette for every diagram.`)
+  await admin.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(admin.getByRole('heading', { level: 1, name: `Graphics ${LIB_WORD} guide` })).toBeVisible()
+  const handle = decodeURIComponent(admin.url().split('/i/')[1] ?? '')
+  expect(handle).toMatch(/^L\d+$/)
+  // no pin or verify on a library page
+  await expect(admin.getByRole('button', { name: 'Pin' })).toHaveCount(0)
+  await expect(admin.getByRole('button', { name: 'Verify' })).toHaveCount(0)
+
+  await admin.goto(`/projects/${SLUG}/library`)
+  await expect(admin.getByRole('link', { name: `Graphics ${LIB_WORD} guide` })).toBeVisible()
+
+  await admin.getByRole('searchbox', { name: 'Search this project' }).fill(LIB_WORD)
+  await admin.keyboard.press('Enter')
+  const results = admin.getByRole('list', { name: 'Search results' })
+  await expect(results.getByRole('link', { name: `Graphics ${LIB_WORD} guide` })).toBeVisible()
+
+  await admin.goto(`/projects/${SLUG}`)
+  const cards = admin.getByRole('region', { name: 'Items per space' })
+  await expect(cards.getByRole('listitem')).toHaveCount(4)
+  // the card's text runs together ("Library1activenever stale..."), so assert on the active-count line itself
+  const libCard = cards
+    .getByRole('listitem')
+    .filter({ has: admin.getByRole('link', { name: 'Library', exact: true }) })
+  await expect(libCard.locator('p').first()).toHaveText(/^1\s*active$/)
+})
+
+test('an editor without the library flag sees the page but no New button', async () => {
+  await dev.goto(`/projects/${SLUG}/library`)
+  await expect(dev.getByRole('link', { name: `Graphics ${LIB_WORD} guide` })).toBeVisible()
+  await expect(dev.getByRole('link', { name: 'New page' })).toHaveCount(0)
+})
+
+test('after the admin ticks the Library editor flag the editor sees New', async () => {
+  await admin.goto(`/projects/${SLUG}/members`)
+  const saved = admin.waitForResponse(
+    (r) => r.request().method() === 'PUT' && r.url().includes('/members/') && r.ok(),
+  )
+  await admin.getByLabel(`Library editor ${DEV.email}`).click()
+  await saved
+  await expect(admin.getByLabel(`Library editor ${DEV.email}`)).toBeChecked()
+  await dev.reload()
+  await expect(dev.getByRole('link', { name: 'New page' })).toBeVisible()
+})
+
+test('demoting a second admin to editor removes New for that user', async ({ browser }) => {
+  // the last project admin cannot be demoted (even by an instance admin), so the project needs two
+  async function inviteAdmin(who: { email: string; name: string; password: string }) {
+    const invite = await admin.request.post('/api/v1/invites', {
+      headers: { origin: BASE_URL },
+      data: { email: who.email, grants: [{ project: SLUG, role: 'admin' }] },
+    })
+    expect(invite.status()).toBe(201)
+    const { token } = (await invite.json()) as { token: string }
+    const context = await browser.newContext({ baseURL: BASE_URL })
+    const accepted = await context.request.post('/api/v1/invites/accept', {
+      headers: { origin: BASE_URL },
+      data: { token, name: who.name, password: who.password },
+    })
+    expect(accepted.status()).toBe(201)
+    return context
+  }
+  const keeper = await inviteAdmin({
+    email: 'admin3@example.com',
+    name: 'Third Admin',
+    password: 'admin3-password-e2e-1',
+  })
+  await keeper.close()
+  admin2Context = await inviteAdmin(ADMIN2)
+  admin2 = await admin2Context.newPage()
+  await admin2.goto(`/projects/${SLUG}/library`)
+  await expect(admin2.getByRole('link', { name: 'New page' })).toBeVisible()
+
+  await admin.goto(`/projects/${SLUG}/members`)
+  const demoted = admin.waitForResponse(
+    (r) => r.request().method() === 'PUT' && r.url().includes('/members/') && r.ok(),
+  )
+  await admin.getByLabel(`Role of ${ADMIN2.email}`).selectOption('editor')
+  await demoted
+  await expect(admin.getByLabel(`Role of ${ADMIN2.email}`)).toHaveValue('editor')
+  await expect(admin.getByLabel(`Library editor ${ADMIN2.email}`)).not.toBeChecked()
+
+  await admin2.reload()
+  await expect(admin2.getByRole('link', { name: `Graphics ${LIB_WORD} guide` })).toBeVisible()
+  await expect(admin2.getByRole('link', { name: 'New page' })).toHaveCount(0)
+  await admin2Context.close()
+})

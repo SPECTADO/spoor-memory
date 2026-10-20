@@ -93,6 +93,9 @@ describe('GET /api/v1/projects/:slug/review', () => {
       oldArchived.id,
       sql`lifecycle = 'archived', archived_at = ${ago(31)}, archive_reason = 'manual'`,
     )
+    // an archived library page never reaches the review queue
+    const lib = await createItem(db(), { projectId: p.id, space: 'library' })
+    await setItem(lib.id, sql`lifecycle = 'archived', archived_at = ${ago(1)}, archive_reason = 'manual'`)
     const obs = await createItem(db(), { projectId: p.id, type: 'observation' })
     await setItem(obs.id, sql`expires_at = now() + interval '20 hours'`)
     await createItem(db(), { projectId: p.id, type: 'observation' }) // 7 days left: not expiring
@@ -182,6 +185,8 @@ describe('GET /api/v1/projects/:slug/review/:section', () => {
     await setItem(b.id, sql`lifecycle = 'archived', archived_at = ${ago(1)}, archive_reason = 'stale'`)
     const c = await createItem(db(), { projectId: p.id, title: 'C' })
     await setItem(c.id, sql`lifecycle = 'archived', archived_at = ${ago(40)}, archive_reason = 'manual'`)
+    const lib = await createItem(db(), { projectId: p.id, space: 'library', title: 'Guide' })
+    await setItem(lib.id, sql`lifecycle = 'archived', archived_at = ${ago(1)}, archive_reason = 'manual'`)
     const vi = await login('vi@example.com')
     const body = await json<Page>(await vi.get('/api/v1/projects/acme/review/archived'))
     expect(body.items.map((i) => [i.title, i.archive_reason])).toEqual([

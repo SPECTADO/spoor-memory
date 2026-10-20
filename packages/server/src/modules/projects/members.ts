@@ -30,6 +30,7 @@ async function memberJson(db: DbOrTx, projectId: string, userId: string): Promis
       email: users.email,
       name: users.name,
       role: memberships.role,
+      libraryEditor: memberships.libraryEditor,
       createdAt: memberships.createdAt,
     })
     .from(memberships)
@@ -40,6 +41,7 @@ async function memberJson(db: DbOrTx, projectId: string, userId: string): Promis
   return {
     user: { id: row.id, email: row.email, name: row.name },
     role: row.role as ProjectRole,
+    library_editor: row.libraryEditor,
     created_at: row.createdAt.toISOString(),
   }
 }
@@ -69,6 +71,7 @@ export class MemberService {
         email: users.email,
         name: users.name,
         role: memberships.role,
+        libraryEditor: memberships.libraryEditor,
         createdAt: memberships.createdAt,
       })
       .from(memberships)
@@ -79,16 +82,24 @@ export class MemberService {
       items: rows.map((r) => ({
         user: { id: r.id, email: r.email, name: r.name },
         role: r.role as ProjectRole,
+        library_editor: r.libraryEditor,
         created_at: r.createdAt.toISOString(),
       })),
     }
   }
 
   /** Add an existing user by email: 404 `user_not_found` (create an invite instead), 409 `already_exists`. */
-  async add(access: ProjectAccess, email: string, role: ProjectRole): Promise<MemberJson> {
+  async add(
+    access: ProjectAccess,
+    email: string,
+    role: ProjectRole,
+    libraryEditor = false,
+  ): Promise<MemberJson> {
     requireRegularProject(access)
     access.assert('members.manage')
     const { ctx, project } = access
+    // the stored flag is false whenever role = admin (admin implies the right)
+    const flag = role === 'admin' ? false : libraryEditor
     return withTx(this.deps.db, async (tx) => {
       const [user] = await tx
         .select({ id: users.id, email: users.email })
@@ -102,7 +113,9 @@ export class MemberService {
         })
       }
       try {
-        await tx.insert(memberships).values({ projectId: project.id, userId: user.id, role })
+        await tx
+          .insert(memberships)
+          .values({ projectId: project.id, userId: user.id, role, libraryEditor: flag })
       } catch (err) {
         if (isUniqueViolation(err)) {
           throw new ApiError('already_exists', { message: `${user.email} is already a member.` })
@@ -112,14 +125,19 @@ export class MemberService {
       await writeAudit(tx, webActor(ctx), {
         projectId: project.id,
         action: 'member.set',
-        summary: `${ctx.user.email} added ${user.email} as ${role}`,
-        data: { user_id: user.id, role, previous: null },
+        summary: `${ctx.user.email} added ${user.email} as ${role}${flag ? ' with library editing' : ''}`,
+        data: { user_id: user.id, role, library_editor: flag, previous: null, previous_library_editor: null },
       })
       return (await memberJson(tx, project.id, user.id)) as MemberJson
     })
   }
 
-  async setRole(access: ProjectAccess, userId: string, role: ProjectRole): Promise<MemberJson> {
+  /** Change the role, the library-editor flag, or both; the flag is false whenever the role is admin. */
+  async update(
+    access: ProjectAccess,
+    userId: string,
+    patch: { role?: ProjectRole; library_editor?: boolean },
+  ): Promise<MemberJson> {
     requireRegularProject(access)
     access.assert('members.manage')
     const { ctx, project } = access
@@ -127,25 +145,43 @@ export class MemberService {
       await lockProject(tx, project.id)
       const cur = await memberJson(tx, project.id, userId)
       if (!cur) throw memberNotFound()
-      if (cur.role === role) return cur
-      if (cur.role === 'admin' && (await adminCount(tx, project.id)) <= 1) throw lastAdmin()
+      const role = patch.role ?? cur.role
+      let flag: boolean
+      if (role === 'admin') flag = false
+      else if (cur.role === 'admin') flag = patch.library_editor ?? false
+      else flag = patch.library_editor ?? cur.library_editor
+      if (cur.role === role && cur.library_editor === flag) return cur
+      if (cur.role === 'admin' && role !== 'admin' && (await adminCount(tx, project.id)) <= 1) {
+        throw lastAdmin()
+      }
       await tx
         .update(memberships)
-        .set({ role })
+        .set({ role, libraryEditor: flag })
         .where(and(eq(memberships.projectId, project.id), eq(memberships.userId, userId)))
-      const invitesRevoked = cur.role === 'admin' ? await revokeUnbackedInvites(tx, userId) : 0
+      const invitesRevoked =
+        cur.role === 'admin' && role !== 'admin' ? await revokeUnbackedInvites(tx, userId) : 0
+      const parts: string[] = []
+      if (cur.role !== role) parts.push(`changed ${cur.user.email} from ${cur.role} to ${role}`)
+      if (cur.library_editor !== flag) {
+        const implied = patch.library_editor === undefined || role === 'admin'
+        parts.push(
+          `${flag ? 'granted' : 'revoked'} library editing for ${cur.user.email}${implied ? ' (implied by role change)' : ''}`,
+        )
+      }
       await writeAudit(tx, webActor(ctx), {
         projectId: project.id,
         action: 'member.set',
-        summary: `${ctx.user.email} changed ${cur.user.email} from ${cur.role} to ${role}`,
+        summary: `${ctx.user.email} ${parts.join(' and ')}`,
         data: {
           user_id: userId,
           role,
           previous: cur.role,
+          library_editor: flag,
+          previous_library_editor: cur.library_editor,
           ...(invitesRevoked ? { invites_revoked: invitesRevoked } : {}),
         },
       })
-      return { ...cur, role }
+      return { ...cur, role, library_editor: flag }
     })
   }
 

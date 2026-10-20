@@ -17,6 +17,7 @@ export const projectRoutes: RouteObject[] = [
   { path: 'memories', lazy: page(() => import('./pages/SpaceListPage'), 'SpaceListPage') },
   { path: 'decisions', lazy: page(() => import('./pages/SpaceListPage'), 'SpaceListPage') },
   { path: 'docs', lazy: page(() => import('./pages/SpaceListPage'), 'SpaceListPage') },
+  { path: 'library', lazy: page(() => import('./pages/SpaceListPage'), 'SpaceListPage') },
   { path: ':space/new', element: <P.EditorNewPage /> },
   { path: 'i/:ref', element: <P.ItemPage /> },
   { path: 'i/:ref/edit', element: <P.ItemEditPage /> },

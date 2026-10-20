@@ -28,6 +28,8 @@ export interface ProjectAccess {
   shared: boolean
   /** The caller's membership (never one on `_shared`). */
   membership: ProjectRole | null
+  /** The membership's library flag (`library_editor`); always false on `_shared` and without a membership. */
+  libraryEditor: boolean
   /**
    * Effective role for display (`GET /projects/:slug`, the SPA's role gates): projects, the membership or
    * `admin` for an instance admin; `_shared`, `admin` for an instance admin, `editor` for a shared editor,
@@ -46,9 +48,10 @@ export function accessFor(
   ctx: UserContext,
   project: ProjectRow,
   membership: ProjectRole | null,
+  libraryEditor = false,
 ): ProjectAccess {
   const shared = project.kind === 'shared'
-  const principal = webPrincipal(ctx.user, shared ? null : membership)
+  const principal = webPrincipal(ctx.user, shared ? null : membership, !shared && libraryEditor)
   const role: ProjectRole = ctx.user.isAdmin
     ? 'admin'
     : shared
@@ -61,6 +64,7 @@ export function accessFor(
     project,
     shared,
     membership: shared ? null : membership,
+    libraryEditor: principal.libraryEditor,
     role,
     principal,
     can: (action, target = {}) => can(principal, action, { ...target, shared }),
@@ -71,7 +75,7 @@ export function accessFor(
 /** Load `slug` for a logged-in user: 404 when it does not exist or the user may not see it. */
 export async function loadProjectAccess(db: DbOrTx, ctx: UserContext, slug: string): Promise<ProjectAccess> {
   const [row] = await db
-    .select({ project: projects, membership: memberships.role })
+    .select({ project: projects, membership: memberships.role, libraryEditor: memberships.libraryEditor })
     .from(projects)
     .leftJoin(memberships, and(eq(memberships.projectId, projects.id), eq(memberships.userId, ctx.user.id)))
     .where(eq(projects.slug, slug))
@@ -79,7 +83,7 @@ export async function loadProjectAccess(db: DbOrTx, ctx: UserContext, slug: stri
   if (!row) throw projectNotFound()
   const membership = (row.membership ?? null) as ProjectRole | null
   if (row.project.kind === 'project' && membership === null && !ctx.user.isAdmin) throw projectNotFound()
-  return accessFor(ctx, row.project, membership)
+  return accessFor(ctx, row.project, membership, row.libraryEditor === true)
 }
 
 /** Member and token routes do not exist on `_shared` (api.md 4.2, 4.3): 404 there. */

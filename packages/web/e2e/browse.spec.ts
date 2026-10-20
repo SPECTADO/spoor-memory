@@ -71,6 +71,7 @@ async function mockApi(page: Page) {
             memories: { active: 2, stale: 1, archived: 0 },
             decisions: { active: 1, stale: 0, archived: 0 },
             docs: { active: 0, stale: 0, archived: 0 },
+            library: { active: 0, stale: 0, archived: 0 },
           },
           review: { stale: 1, archived: 0, expiring: 0, conflicts: 0, push_conflicts: 0 },
           recent: [

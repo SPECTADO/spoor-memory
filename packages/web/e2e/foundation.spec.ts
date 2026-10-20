@@ -15,7 +15,7 @@ const projects = {
       name: 'Acme',
       description: 'Main app',
       role: 'admin',
-      counts: { memories: 3, decisions: 1, docs: 2 },
+      counts: { memories: 3, decisions: 1, docs: 2, library: 0 },
       review_total: 1,
     },
   ],

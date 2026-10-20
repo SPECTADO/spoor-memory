@@ -126,10 +126,15 @@ export const getContextPreview = (slug: string, params: ContextParams = {}, o: S
 // ---- 4.2 memberships ---------------------------------------------------------------------------------
 
 export const listMembers = (slug: string, o: Sig = {}) => api<ItemsOf<MemberJson>>(`${P(slug)}/members`, o)
-export const addMember = (slug: string, body: { email: string; role: ProjectRole }) =>
-  api<MemberJson>(`${P(slug)}/members`, { body })
-export const setMemberRole = (slug: string, userId: string, role: ProjectRole) =>
-  api<MemberJson>(`${P(slug)}/members/${seg(userId)}`, { method: 'PUT', body: { role } })
+export const addMember = (
+  slug: string,
+  body: { email: string; role: ProjectRole; library_editor?: boolean },
+) => api<MemberJson>(`${P(slug)}/members`, { body })
+export const setMember = (
+  slug: string,
+  userId: string,
+  patch: { role?: ProjectRole; library_editor?: boolean },
+) => api<MemberJson>(`${P(slug)}/members/${seg(userId)}`, { method: 'PUT', body: patch })
 export const removeMember = (slug: string, userId: string) =>
   api<void>(`${P(slug)}/members/${seg(userId)}`, { method: 'DELETE' })
 
@@ -197,8 +202,8 @@ export const addEdge = (slug: string, ref: string, body: { kind: RelationKind; t
   api<{ edge: EdgeJson }>(`${I(slug, ref)}/edges`, { body })
 export const removeEdge = (slug: string, edgeId: string) =>
   api<void>(`${P(slug)}/edges/${seg(edgeId)}`, { method: 'DELETE' })
-export const resolveRef = (slug: string, ref: string, o: Sig = {}) =>
-  api<{ item: ItemSummary }>(`${P(slug)}/resolve`, { query: { ref }, ...o })
+export const resolveRef = (slug: string, ref: string, o: Sig = {}, from?: string) =>
+  api<{ item: ItemSummary }>(`${P(slug)}/resolve`, { query: from ? { ref, from } : { ref }, ...o })
 
 // ---- 6. search ---------------------------------------------------------------------------------------
 

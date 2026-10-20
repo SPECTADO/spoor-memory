@@ -36,9 +36,9 @@ export function slugify(title: string): string {
   return cut === '' ? 'item' : cut
 }
 
-/** True for slug shapes that would shadow handles: m42, d7, adr-7, uuid. */
+/** True for slug shapes that would shadow handles: m42, d7, l3, adr-7, uuid. */
 export function isReservedSlugShape(slug: string): boolean {
-  return /^[md]\d+$/.test(slug) || /^adr-\d+$/.test(slug) || UUID_RE.test(slug)
+  return /^[md]\d+$/.test(slug) || /^l\d+$/.test(slug) || /^adr-\d+$/.test(slug) || UUID_RE.test(slug)
 }
 
 /** slugify plus the `x-` prefix for reserved shapes (so the result never shadows a handle). */

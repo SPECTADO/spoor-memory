@@ -6,13 +6,19 @@ import { fromNow } from '../../lib/format'
 import { itemPath } from '../../lib/paths'
 import { Badge, type BadgeTone } from '../../ui'
 
-export const SPACE_LABEL: Record<Space, string> = { memories: 'memory', decisions: 'decision', docs: 'doc' }
+export const SPACE_LABEL: Record<Space, string> = {
+  memories: 'memory',
+  decisions: 'decision',
+  docs: 'doc',
+  library: 'library page',
+}
 export const SPACE_TITLE: Record<Space, string> = {
   memories: 'Memories',
   decisions: 'Decisions',
   docs: 'Docs',
+  library: 'Library',
 }
-export const SPACES: readonly Space[] = ['memories', 'decisions', 'docs']
+export const SPACES: readonly Space[] = ['memories', 'decisions', 'docs', 'library']
 export const isSpace = (s: string | undefined): s is Space => !!s && (SPACES as readonly string[]).includes(s)
 
 /** Path of an item seen in a list or an edge: its own project (an `S:` handle lives under /shared). */
@@ -57,7 +63,7 @@ export function ItemBadges({ item, showSpace = true }: { item: ItemSummary; show
       {showSpace && <Badge>{SPACE_LABEL[item.space]}</Badge>}
       {item.type && <Badge>{item.type}</Badge>}
       {item.confidence && <Badge>confidence: {item.confidence}</Badge>}
-      {item.space !== 'docs' || item.status !== 'active' ? (
+      {(item.space !== 'docs' && item.space !== 'library') || item.status !== 'active' ? (
         <Badge tone={statusTone(item.status)}>{item.status}</Badge>
       ) : null}
       {life && <Badge tone={item.lifecycle === 'stale' ? 'warning' : 'danger'}>{life}</Badge>}
