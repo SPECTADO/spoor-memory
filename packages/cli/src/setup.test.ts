@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { VERSION } from './ctx.js'
 import {
   deadUrl,
   type FakeServer,
@@ -252,7 +253,7 @@ describe('spoor login', () => {
     expect(r.out).toContain('Next: spoor adr import && spoor docs import\n')
     expect(sleeps).toEqual([5000, 5000, 12000])
     const code = srv.requests.find((q) => q.path === '/p/acme/device/code')
-    expect(code?.body).toEqual({ client_name: 'spoor-cli/0.0.0 on testhost' })
+    expect(code?.body).toEqual({ client_name: `spoor-cli/${VERSION} on testhost` })
     const tok = srv.requests.find((q) => q.path === '/p/acme/device/token')
     expect(tok?.body).toEqual({
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
