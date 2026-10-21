@@ -49,11 +49,12 @@ curl -s localhost:3000/healthz   # {"status":"ok",...} once migrations ran and t
 | tag | what it is |
 |---|---|
 | `x.y.z`, `x.y` (e.g. `0.2.0`, `0.2`) | a release, pushed by a `v*` tag. Use this in production |
-| `latest` | the newest commit on `main` that passed CI, not the last release. Between releases it reports the last released version while running newer code |
+| `latest` | the highest release (the same image as the newest `x.y.z`) |
+| `develop` | the newest commit on `main` that passed CI. Between releases it reports the last released version while running newer code |
 | `sha-<short>` | one specific `main` build, for pinning or rolling back |
 
-A `main` build is pushed only once the CLI of its server version is on npm, so a version bump gets `latest` from its release
-([ADR-0017](docs/adr/0017-latest-image-follows-main.md)).
+A `main` build is pushed only once the CLI of its server version is on npm, so a version bump gets `develop` from its release
+([ADR-0019](docs/adr/0019-develop-image-follows-main.md)).
 
 1. **First login.** Open `SPOOR_PUBLIC_URL`, log in with `SPOOR_ADMIN_EMAIL` and `SPOOR_ADMIN_PASSWORD`. The bootstrap admin is
    created only while the user table is empty.
@@ -99,7 +100,7 @@ with a clear message when it is unreachable; `pnpm --filter @spoor/server test:e
 `pnpm e2e` builds and runs the Playwright browser tests (once: `pnpm --filter @spoor/web exec playwright install chromium`).
 `pnpm --filter "spoor-memory..." build && pnpm --filter spoor-memory test:pack` checks the npm package as it would be published.
 Releases are cut with a `v*` tag ([operations §10](docs/operations.md), ADR 0013); every green push to `main` also publishes
-the `latest` image (ADR 0017).
+the `develop` image (ADR 0019).
 Package notes: [server](packages/server/README.md), [web](packages/web/README.md), [CLI](packages/cli/README.md).
 
 ## Licence

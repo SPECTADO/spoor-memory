@@ -24,8 +24,8 @@ docker compose ps        # app should become "healthy" (start period up to 2 min
 - Compose builds the image from the repository (`build:` in the app service). To use a published image instead set `SPOOR_IMAGE`
   to a version tag (`ghcr.io/spectado/spoor-memory:0.1.0`, owner in lowercase: Docker refuses upper-case repository names) and
   run `docker compose pull && docker compose up -d`. The default `spoor-memory:local` is the tag of the local build. Version tags
-  are pushed to GHCR by `.github/workflows/release.yml` when a `v*` tag is pushed (section 10). `latest` and `sha-<short>` follow
-  every green push to `main` (ADR-0017). Pin a version tag in production.
+  are pushed to GHCR by `.github/workflows/release.yml` when a `v*` tag is pushed (section 10). `latest` is the highest release;
+  `develop` and `sha-<short>` follow every green push to `main` (ADR-0019). Pin a version tag in production.
 - Startup order: the server listens at once and answers 503 `starting` to everything except `/healthz`, then runs migrations
   (forward-only, under a Postgres advisory lock, so two containers never migrate at once), seeds the `_shared` space, creates the
   bootstrap admin if the user table is empty, loads the embedding model (about 5 s) and starts the job scheduler 30 s later.
@@ -232,10 +232,11 @@ A release is one `v*` tag. `.github/workflows/release.yml` (ADR 0013) then:
    `spoor --help` and `--version`, then `npm publish <tarball> --provenance --access public` (dist-tag `next` for a pre-release
    such as `v0.2.0-rc.1`, `latest` otherwise). A version already on npm is skipped, so a re-run after a failed image job is safe;
 4. after npm, pushes the multi-arch image (`linux/amd64`, `linux/arm64`) to `ghcr.io/spectado/spoor-memory` with tags `x.y.z` and
-   `x.y` (a pre-release gets only `x.y.z-…`), plus `latest` when the tagged commit is still the head of `main`.
+   `x.y` (a pre-release gets only `x.y.z-…`), plus `latest` when this is the highest `vX.Y.Z` tag (a pre-release or a patch on an older line never moves it), and `develop`
+   and `sha-<short>` when the tagged commit is still the head of `main`.
 
-Between releases, `ci.yml` pushes the image of every green push to `main` as `latest` and `sha-<short>` (ADR-0017). It skips that
-push while the server's version is not on npm yet, so a bump commit gets `latest` from its release.
+Between releases, `ci.yml` pushes the image of every green push to `main` as `develop` and `sha-<short>` (ADR-0019). It skips that
+push while the server's version is not on npm yet, so a bump commit gets `develop` from its release.
 
 **Before the first release** (review-log-phase5 A1, D2): the npm name `spoor-memory` is unregistered today. Register it for the
 project's npm account now (a placeholder `0.0.1` is enough), or switch the CLI to a scoped name the organisation controls, before any

@@ -1,5 +1,5 @@
 # CI: lint, unit, server integration, server e2e, Playwright e2e, CLI package smoke test, compose smoke test, image build
-# (pushed as `latest` from main, ADR-0017).
+# (pushed as `develop` from main, ADR-0019).
 # Design: docs/design/deployment.md section 6.1. Actions are pinned by commit SHA (section 9 lists the releases).
 # release.yml calls this workflow on v* tags (workflow_call) before it publishes anything.
 name: ci
@@ -146,8 +146,8 @@ jobs:
         run: docker compose down -v
 
   image:
-    # a push to main publishes the image as `latest` and `sha-<short>` once every other job passed (ADR-0017);
-    # pull requests only build it (proves the linux/arm64 build); release.yml pushes the version tags itself
+    # a push to main publishes the image as `develop` and `sha-<short>` once every other job passed (ADR-0019);
+    # pull requests only build it (proves the linux/arm64 build); release.yml pushes the version tags and `latest` itself
     needs: [lint, unit, integration, e2e-server, e2e-web, compose-smoke]
     if: ${{ !inputs.skip_image }}
     runs-on: ubuntu-24.04
@@ -163,7 +163,7 @@ jobs:
             if [ "$(npm view "spoor-memory@$version" version 2>/dev/null)" = "$version" ]; then
               push=true
             else
-              echo "::notice::spoor-memory@$version is not on npm yet; building only (the v$version release moves latest)"
+              echo "::notice::spoor-memory@$version is not on npm yet; building only (the v$version release moves develop)"
             fi
           fi
           echo "push=$push" >> "$GITHUB_OUTPUT"
@@ -178,7 +178,7 @@ jobs:
           images: ghcr.io/${{ github.repository }} # lowercased by the action
           flavor: latest=false
           tags: |
-            type=raw,value=latest
+            type=raw,value=develop
             type=sha
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

@@ -3,7 +3,7 @@ spoor_id: 996798d5-a87e-4c45-b398-ecd0220caf87
 ---
 # ADR-0017: The `latest` image follows `main`; version tags stay on `v*` releases
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0019
 - **Date:** 2026-10-20
 - **Deciders:** Ladislav Soukup (owner), Claude (Opus 5.5)
 - **Tags:** release, ci, image

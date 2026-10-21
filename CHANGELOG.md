@@ -4,6 +4,11 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **Image tags** (ADR-0019, supersedes ADR-0017): `latest` is again the highest release, pushed only by a `v*` release that is
+  the highest `vX.Y.Z` tag. The newest green commit on `main` is now `develop` (plus `sha-<short>`). Version tags are unchanged.
+
 ## [0.3.0] - 2026-10-21
 
 ### Added
