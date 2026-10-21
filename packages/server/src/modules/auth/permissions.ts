@@ -50,6 +50,8 @@ export const ACTIONS = [
   'invite.instance',
   /** Job status, re-embed progress. */
   'jobs.read',
+  /** The agent request log of a project (ADR-0018). Never on `_shared`: tokens never target it. */
+  'requests.read',
 ] as const
 export type Action = (typeof ACTIONS)[number]
 
@@ -106,6 +108,7 @@ function canWeb(p: WebPrincipal, action: Action, t: Target): boolean {
     case 'service_token.manage':
     case 'members.manage':
     case 'invite.project':
+    case 'requests.read':
       return !shared && pa
     case 'settings.manage':
     case 'project.transfer':

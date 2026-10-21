@@ -24,10 +24,10 @@ const setup = (
   extra: Record<string, [number, unknown]> = {},
 ) =>
   mockApi({
-    ...extra,
     'GET /api/v1/me': [200, meFixture({}, [{ project: { id: 'p-acme', slug: 'acme', name: 'Acme' }, role }])],
     'GET /api/v1/projects/acme': [200, projectFixture('acme', role)],
     'GET /api/v1/projects/acme/dashboard': [200, dashboard(review)],
+    ...extra,
   })
 
 describe('reviewCounts', () => {
@@ -53,7 +53,6 @@ describe('DashboardPage', () => {
     expect(recent).toHaveAttribute('href', '/projects/acme/i/m9')
     expect(within(recent.closest('li') as HTMLElement).getByText('created')).toBeInTheDocument()
     expect(screen.getByText(/via claude-code\/2.1/)).toBeInTheDocument()
-    expect(screen.queryByText('Connect a repository')).not.toBeInTheDocument()
   })
 
   it('shows a fourth Library card that is never stale', async () => {
@@ -69,14 +68,81 @@ describe('DashboardPage', () => {
     expect(within(counts).getAllByRole('listitem')).toHaveLength(4)
   })
 
-  it('shows the install hint to project admins', async () => {
-    setup('admin')
+  it('shows every member how to connect, with this server and CLI version in the commands', async () => {
+    setup('viewer', undefined, {
+      'GET /api/v1/instance': [
+        200,
+        {
+          version: '0.2.0',
+          public_url: 'https://spoor.example.com',
+          providers: [],
+          default_provider: 'local',
+        },
+      ],
+    })
     renderApp('/projects/acme')
-    const guide = await screen.findByRole('link', { name: /Install guide/ })
-    expect(guide).toHaveAttribute('href', '/p/acme/install.md')
-    expect(screen.getByRole('link', { name: 'Create a token' })).toHaveAttribute(
+    const connect = await screen.findByRole('region', { name: 'Connect' })
+    expect(await within(connect).findByDisplayValue('npm i -g spoor-memory@0.2.0')).toBeInTheDocument()
+    expect(
+      within(connect).getByDisplayValue('spoor login --server https://spoor.example.com --project acme'),
+    ).toBeInTheDocument()
+    expect(within(connect).getByRole('link', { name: /Install guide/ })).toHaveAttribute(
+      'href',
+      '/p/acme/install.md',
+    )
+    expect(within(connect).getByRole('link', { name: 'Create a token instead' })).toHaveAttribute(
       'href',
       '/projects/acme/tokens',
+    )
+    expect(within(connect).getByText(/Ask a project admin to add them/)).toBeInTheDocument()
+    expect(within(connect).queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
+  })
+
+  it('points project admins to Members for a new teammate', async () => {
+    setup('admin')
+    renderApp('/projects/acme')
+    const connect = await screen.findByRole('region', { name: 'Connect' })
+    expect(within(connect).getByRole('link', { name: 'Members' })).toHaveAttribute(
+      'href',
+      '/projects/acme/members',
+    )
+  })
+
+  it('shows the last agent read and write to every member, and the log link to admins', async () => {
+    const last = {
+      read: {
+        at: '2026-10-19T08:00:00Z',
+        surface: 'mcp',
+        operation: 'spoor_search',
+        actor: { label: 'ann@example.com', client_name: 'claude-code/2.1' },
+      },
+      write: null,
+    }
+    const withLast = (role: 'viewer' | 'admin') =>
+      setup(role, undefined, {
+        'GET /api/v1/projects/acme/dashboard': [
+          200,
+          {
+            ...dashboard({ stale: 0, archived: 0, expiring: 0, conflicts: 0, push_conflicts: 0 }),
+            last_requests: last,
+          },
+        ],
+      })
+    withLast('viewer')
+    const { unmount } = renderApp('/projects/acme')
+    const activity = await screen.findByRole('region', { name: 'Agent activity' })
+    expect(within(activity).getByText('spoor_search')).toBeInTheDocument()
+    expect(within(activity).getByText('ann@example.com via claude-code/2.1')).toBeInTheDocument()
+    expect(within(activity).getByText('None in the last 14 days.')).toBeInTheDocument()
+    expect(within(activity).queryByRole('link', { name: /Request log/ })).not.toBeInTheDocument()
+    unmount()
+
+    withLast('admin')
+    renderApp('/projects/acme')
+    const forAdmin = await screen.findByRole('region', { name: 'Agent activity' })
+    expect(within(forAdmin).getByRole('link', { name: /Request log/ })).toHaveAttribute(
+      'href',
+      '/projects/acme/requests',
     )
   })
 

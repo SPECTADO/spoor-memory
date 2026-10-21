@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { testDb } from '../../../test/db.js'
 import { createProject, createUser } from '../../../test/factories.js'
 import { testConfig } from '../../../test/http.js'
-import { deviceCodes, invites, jobLocks, jobRuns, sessions } from '../../db/schema.js'
+import { deviceCodes, invites, jobLocks, jobRuns, requestLog, sessions } from '../../db/schema.js'
 import { randomSecret, sha256 } from '../../lib/crypto.js'
 import { createScheduler } from './index.js'
 import { PgJobStore } from './store.js'
@@ -138,6 +138,11 @@ describe('purge-ephemeral', () => {
     await db().execute(sql`INSERT INTO job_runs (name, started_at, finished_at, status) VALUES
       ('cleanup', now() - interval '31 days', now() - interval '31 days', 'ok'),
       ('cleanup', now() - interval '29 days', now() - interval '29 days', 'ok')`)
+    // the agent request log keeps 14 days (ADR-0018)
+    await db().execute(sql`INSERT INTO request_log
+        (at, project_id, kind, surface, operation, actor_label, outcome, duration_ms) VALUES
+      (now() - interval '13 days', ${project.id}, 'read', 'mcp', 'spoor_search', 'a@example.com', 'ok', 3),
+      (now() - interval '15 days', ${project.id}, 'write', 'cli', 'POST /push', 'a@example.com', 'ok', 9)`)
   }
 
   it('deletes only rows past their fixed cutoffs and reports the counts', async () => {
@@ -152,12 +157,13 @@ describe('purge-ephemeral', () => {
     expect(await db().select().from(sessions)).toHaveLength(1)
     expect(await db().select().from(deviceCodes)).toHaveLength(2)
     expect(await db().select().from(invites)).toHaveLength(3)
+    expect((await db().select().from(requestLog)).map((r) => r.operation)).toEqual(['spoor_search'])
     const runs = await db().select().from(jobRuns).orderBy(jobRuns.startedAt)
     // the 29-day-old cleanup row and this purge run itself remain
     expect(runs.map((r) => r.name)).toEqual(['cleanup', 'purge-ephemeral'])
     expect(runs[1]).toMatchObject({
       status: 'ok',
-      stats: { sessions: 2, device_codes: 1, invites: 3, job_runs: 1 },
+      stats: { sessions: 2, device_codes: 1, invites: 3, job_runs: 1, request_log: 1 },
     })
   })
 })

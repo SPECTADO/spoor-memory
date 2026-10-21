@@ -504,6 +504,32 @@ CREATE TABLE job_runs (                 -- history for the admin UI; pruned to 3
 );
 CREATE INDEX job_runs_name_idx ON job_runs (name, started_at DESC);
 ```
+```sql
+CREATE TABLE request_log (              -- agent requests, kept 14 days (ADR-0018); not append-only
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  at            timestamptz NOT NULL DEFAULT now(),
+  project_id    uuid NOT NULL REFERENCES projects ON DELETE CASCADE,
+  kind          text NOT NULL CHECK (kind IN ('read','write')),
+  surface       text NOT NULL CHECK (surface IN ('mcp','cli')),
+  operation     text NOT NULL,          -- tool name 'spoor_search' or 'GET /context'
+  actor_user_id uuid,                   -- snapshots, no FKs (like audit_log)
+  actor_label   text NOT NULL,          -- email or 'service:<token name>'
+  token_id      uuid,
+  token_name    text,
+  token_prefix  text,
+  client_name   text,                   -- MCP initialize client or CLI user agent
+  space         text,                   -- targeted or written, when one
+  memory_type   text,
+  handles       text[] NOT NULL DEFAULT '{}',  -- read or written, at most 50
+  query         text CHECK (length(query) <= 200),
+  outcome       text NOT NULL,          -- 'ok' or the error code
+  duration_ms   integer NOT NULL,
+  data          jsonb NOT NULL DEFAULT '{}'    -- digest files, tags, budget, HTTP status
+);
+CREATE INDEX request_log_project_idx ON request_log (project_id, id DESC);
+CREATE INDEX request_log_project_kind_idx ON request_log (project_id, kind, id DESC);
+CREATE INDEX request_log_at_idx ON request_log (at);  -- purge-ephemeral
+```
 Project deletion (instance admin, UI only) sets `spoor.allow_purge` and cascades everything.
 `audit_log` rows of the project are kept (no FK) and are purged only by that same transaction.
 

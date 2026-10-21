@@ -37,6 +37,7 @@ import type {
   ProjectPatchRequest,
   ProjectRole,
   RelationKind,
+  RequestFilters,
   RestoreBody,
   ReviewBulkBody,
   ReviewRowOf,
@@ -749,6 +750,16 @@ export const useInstanceAudit = (filters: Omit<AuditFilters, 'cursor' | 'item'> 
   useInfiniteQuery({
     queryKey: qk.instanceAudit(filters),
     queryFn: ({ pageParam, signal }) => E.listInstanceAudit({ ...filters, cursor: pageParam }, { signal }),
+    initialPageParam: undefined as Cursor,
+    getNextPageParam: nextCursor,
+  })
+
+/** The agent request log of a project (admins). */
+export const useProjectRequests = (slug: string, filters: Omit<RequestFilters, 'cursor'> = {}) =>
+  useInfiniteQuery({
+    queryKey: qk.requests(slug, filters),
+    queryFn: ({ pageParam, signal }) =>
+      E.listProjectRequests(slug, { ...filters, cursor: pageParam }, { signal }),
     initialPageParam: undefined as Cursor,
     getNextPageParam: nextCursor,
   })

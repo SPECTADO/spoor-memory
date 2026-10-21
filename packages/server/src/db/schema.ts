@@ -7,6 +7,7 @@
  *   0003_library_space.sql      generated: the `library` space, memberships.library_editor, library shape check
  *   0004_library_guards.sql     library edge rules (SQLSTATE SPL01), no mcp/cli library revisions (SPL02),
  *                               reserved `l<n>` slug backfill
+ *   0005_request_log.sql        generated: the agent request log (ADR-0018)
  * Enum-like columns are `text` + CHECK (as in the design), not Postgres enum types, so adding a value
  * is a one-line migration. The value lists are exported for the services and for zod schemas.
  */
@@ -57,6 +58,8 @@ export const EDGE_KINDS = [
   'wikilink',
 ] as const
 export const JOB_STATUSES = ['running', 'ok', 'error'] as const
+export const REQUEST_KINDS = ['read', 'write'] as const
+export const REQUEST_SURFACES = ['mcp', 'cli'] as const
 
 // ---- custom column types -------------------------------------------------------------------------
 
@@ -514,6 +517,46 @@ export const jobRuns = pgTable(
   ],
 )
 
+/**
+ * Agent requests (ADR-0018): one row per MCP tool call and per CLI call on `/p/:slug/api`. Not the audit
+ * log: reads are here too, rows are deleted after 14 days (`purge-ephemeral`) and with their project.
+ * Actor and token columns are snapshots without FKs, like `audit_log`.
+ */
+export const requestLog = pgTable(
+  'request_log',
+  {
+    id: bigint({ mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    at: tstz().notNull().defaultNow(),
+    projectId: uuid()
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    kind: text({ enum: REQUEST_KINDS }).notNull(),
+    surface: text({ enum: REQUEST_SURFACES }).notNull(),
+    operation: text().notNull(), // 'spoor_search' | 'GET /context'
+    actorUserId: uuid(),
+    actorLabel: text().notNull(),
+    tokenId: uuid(),
+    tokenName: text(),
+    tokenPrefix: text(),
+    clientName: text(),
+    space: text(),
+    memoryType: text(),
+    handles: text().array().notNull().default(sql`'{}'::text[]`),
+    query: text(),
+    outcome: text().notNull(), // 'ok' or the error code
+    durationMs: integer().notNull(),
+    data: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  },
+  (t) => [
+    index('request_log_project_idx').on(t.projectId, t.id.desc()),
+    index('request_log_project_kind_idx').on(t.projectId, t.kind, t.id.desc()),
+    index('request_log_at_idx').on(t.at),
+    check('request_log_kind_check', inList('kind', REQUEST_KINDS)),
+    check('request_log_surface_check', inList('surface', REQUEST_SURFACES)),
+    check('request_log_query_check', raw('length(query) <= 200')),
+  ],
+)
+
 export const TABLES = {
   users,
   sessions,
@@ -529,4 +572,5 @@ export const TABLES = {
   auditLog,
   jobLocks,
   jobRuns,
+  requestLog,
 } as const

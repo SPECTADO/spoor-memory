@@ -26,6 +26,7 @@ export const projectRoutes: RouteObject[] = [
   { path: 'search', lazy: page(() => import('./pages/SearchPage'), 'SearchPage') },
   { path: 'review', element: <P.ReviewPage /> },
   { path: 'audit', element: <P.AuditPage /> },
+  { path: 'requests', lazy: page(() => import('./pages/RequestLogPage'), 'RequestLogPage') },
   { path: 'tokens', element: <P.TokensPage /> },
   {
     path: 'members',

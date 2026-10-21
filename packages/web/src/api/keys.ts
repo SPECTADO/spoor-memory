@@ -8,6 +8,7 @@ import type {
   ContextParams,
   InviteFilters,
   ItemListFilters,
+  RequestFilters,
   ReviewSection,
   SearchParams,
   Space,
@@ -56,6 +57,8 @@ export const qk = {
   undrafted: (slug: string) => ['review', slug, 'undrafted'] as const,
   audit: (slug: string, filters?: Omit<AuditFilters, 'cursor'>) =>
     filters ? (['audit', slug, filters] as const) : (['audit', slug] as const),
+  requests: (slug: string, filters?: Omit<RequestFilters, 'cursor'>) =>
+    filters ? (['requests', slug, filters] as const) : (['requests', slug] as const),
 
   users: (filters?: Omit<UserFilters, 'cursor'>) =>
     filters ? (['users', filters] as const) : (['users'] as const),

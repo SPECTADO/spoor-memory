@@ -77,6 +77,8 @@ review queue until a human runs the push with `--force` or aligns the file.
 
 **Observation**: A **memory** of type `observation`: a short-lived note with a hard expiry (default 7 days) that cannot be extended by verifying. It leaves reads at once when expired and is archived by the cleanup job.
 
+**Request log**: The record of agent requests: one row per MCP tool call and per spoor CLI call, read or write, with the person, token, agent, items and query. Kept 14 days, readable by project and instance admins (ADR-0018). Not the audit log, which keeps every change forever and holds no reads.
+
 **Backlink**: The incoming side of an **edge**, shown on the target item (who links here). On a shared item only the viewer's own projects' links are shown.
 
 **Chunk**: A piece of an item's text (about 400 tokens, 60 overlap, code fences kept whole) with a vector tagged by embedding model; search runs over chunks and scores an item by its best chunk.

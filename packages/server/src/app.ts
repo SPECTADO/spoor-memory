@@ -17,6 +17,7 @@ import { createJobsModule, type Scheduler } from './modules/jobs/index.js'
 import { createMcpModule } from './modules/mcp/index.js'
 import { createMirrorModule } from './modules/mirror/index.js'
 import { createProjectsModule } from './modules/projects/index.js'
+import { createRequestsModule } from './modules/requests/index.js'
 import { createSearchModule, type SearchModule } from './modules/search/index.js'
 import { createTokensModule } from './modules/tokens/index.js'
 import { createTransferModule } from './modules/transfer/index.js'
@@ -53,6 +54,7 @@ export function createAppModules(
 ) {
   const items = createItemsModule(deps)
   const search = shared.search ?? createSearchModule(deps)
+  const requests = createRequestsModule(deps)
   return {
     auth: createAuthModule(deps),
     projects: createProjectsModule(deps),
@@ -60,12 +62,18 @@ export function createAppModules(
     audit: createAuditModule(deps),
     items,
     search,
-    jobs: createJobsModule(deps, { scheduler: shared.scheduler }),
+    requests,
+    jobs: createJobsModule(deps, { scheduler: shared.scheduler, requests: requests.service }),
     transfer: createTransferModule(deps),
     device: createDeviceModule(deps, shared.device),
     install: createInstallModule(deps, { version: shared.installVersion }),
     mirror: createMirrorModule(deps, items),
-    mcp: createMcpModule(deps, { items: items.items, search: search.search, context: search.context }),
+    mcp: createMcpModule(deps, {
+      items: items.items,
+      search: search.search,
+      context: search.context,
+      requests: requests.log,
+    }),
   }
 }
 
@@ -160,6 +168,7 @@ export function createApp({ config, logger, state, ports, pingDb, modules: m }: 
   api.route('/', m.projects.routes)
   api.route('/', m.tokens.routes)
   api.route('/', m.audit.routes)
+  api.route('/', m.requests.routes)
   api.route('/', m.items.routes)
   api.route('/', m.search.routes)
   api.route('/', m.jobs.routes)
@@ -170,7 +179,7 @@ export function createApp({ config, logger, state, ports, pingDb, modules: m }: 
 
   // ---- /p/:slug/api: bearer surface for the CLI and hooks (cookies ignored) ----
   const bearerApi = new Hono<AppEnv>()
-  bearerApi.use('*', ...m.auth.bearerApiGuards)
+  bearerApi.use('*', ...m.auth.bearerApiGuards, m.requests.bearerMiddleware)
   bearerApi.route('/', m.tokens.bearerRoutes)
   bearerApi.route('/', m.items.bearerRoutes)
   bearerApi.route('/', m.search.bearerRoutes)

@@ -194,7 +194,7 @@ Only pending, unexpired codes can be looked up, approved or denied. Every 404 of
 | GET | `/api/v1/projects/:slug` | member; any for `_shared` | | 200 `{id, slug, name, description, kind, settings, role, can_edit_library, embedding:{model, target, remaining}, created_at}`. `can_edit_library` is the server's answer to `can('library.write')` (IA, PA, a member with the flag; on `_shared` IA and SE); the SPA gates every library control on it and never recomputes it. `settings` has every default filled in. `role` is the effective role (`admin` for IA); on `_shared` it is `admin` for IA, `editor` for SE and `viewer` for everyone else, for the SPA's role gates. `remaining` is the count of items without target chunks while a re-embed runs |
 | PATCH | `/api/v1/projects/:slug` | PA, IA (`_shared`: IA) | `{name?, description?, settings?}` | 200 project. `settings` is a partial object deep-merged and validated ([data-model.md](data-model.md) §2.1); issues are reported under `settings.…`. Changing `embedding.provider` sets `embedding_target` (response `embedding.target`) and nudges the `reembed` job; choosing the active model's provider again clears it; a provider not enabled on the instance is 400. The slug is immutable (sending it is 400). Audited as `project.update` (`data.fields`) and `project.settings` (`data.changed`, the patch) |
 | DELETE | `/api/v1/projects/:slug` | IA | `?confirm=<slug>` | 204. The shared project cannot be deleted (403 `forbidden`). One purge transaction: everything of the project cascades and its audit rows are removed with it; an instance-level `project.delete` row remains ([data-model.md](data-model.md) §4) |
-| GET | `/api/v1/projects/:slug/dashboard` | member; any for `_shared` | | 200 `{counts:{memories:{active,stale,archived},decisions:{…},docs:{…},library:{…}}, review:{stale,archived,expiring,conflicts,push_conflicts}, recent:[{item:ItemSummary, change, actor:Actor, at}]}` (`DashboardResponse` in `@spoor/shared`). `counts`: items per lifecycle, archived included (`library` is only ever active or archived). `review`: the same numbers as `GET …/review` (all five sections, cleanup-and-jobs.md §6). `recent`: the last 15 content or lifecycle changes of items that still exist, newest first, read from the audit log; `change` is `create`, `update`, `supersede` (this item became superseded), `push`, `stale`, `archive`, `expire` or `restore` (verify and pin are not listed); `item` is the item as it is now |
+| GET | `/api/v1/projects/:slug/dashboard` | member; any for `_shared` | | 200 `{counts:{memories:{active,stale,archived},decisions:{…},docs:{…},library:{…}}, review:{stale,archived,expiring,conflicts,push_conflicts}, recent:[{item:ItemSummary, change, actor:Actor, at}], last_requests:{read, write}}` (`DashboardResponse` in `@spoor/shared`). `counts`: items per lifecycle, archived included (`library` is only ever active or archived). `review`: the same numbers as `GET …/review` (all five sections, cleanup-and-jobs.md §6). `recent`: the last 15 content or lifecycle changes of items that still exist, newest first, read from the audit log; `change` is `create`, `update`, `supersede` (this item became superseded), `push`, `stale`, `archive`, `expire` or `restore` (verify and pin are not listed); `item` is the item as it is now. `last_requests`: the newest agent read and write of the request log (§10.3), each `{at, surface, operation, actor:{label, client_name}}` or null; any member sees them (ADR-0018) |
 | GET | `/api/v1/projects/:slug/context` | member; any for `_shared` | same query as §7.1 | the digest, so admins can preview what agents get (cookie twin of the bearer endpoint) |
 
 ### 4.2 Memberships
@@ -433,6 +433,12 @@ marked, never attributed to live users ([data-model.md](data-model.md) §8 step 
 
 Audit `data` never contains secrets or bodies.
 
+### 10.3 Agent request log (ADR-0018)
+
+| method | path | role | notes |
+|---|---|---|---|
+| GET | `/api/v1/projects/:slug/requests` | PA, IA; `_shared`: 403 | one row per MCP tool call and per bearer REST call except `GET /whoami`, last 14 days. Filters `kind=read\|write`, `surface=mcp\|cli`, `operation=` (exact), `actor=` (substring of the actor label, token name or client name, case-insensitive), `since=` (inclusive), `until=` (exclusive); cursor on `id desc`. Row `{id, at, kind, surface, operation, actor:{user_id, label, token:{id, name, prefix}, client_name}, space, memory_type, handles, query, outcome, duration_ms, data}` (`RequestRowJson`); `outcome` is `ok` or the error code (`not_found`, `forbidden_role`, `duplicate`, `http_<status>`, ...) |
+
 ## 11. `install.md` and health
 
 ### 11.1 `GET /p/:slug/install.md`
@@ -485,7 +491,7 @@ POST /api/v1/invites/{preview,accept}             GET|POST /api/v1/invites  DELE
 GET  /api/v1/users  GET|PATCH|DELETE /api/v1/users/:id
 GET  /api/v1/device/lookup                        POST /api/v1/device/{approve,deny}
 GET|POST /api/v1/projects                         POST /api/v1/projects/import
-GET|PATCH|DELETE /api/v1/projects/:slug           GET  …/:slug/{dashboard,context,audit,jobs,export,resolve,search}
+GET|PATCH|DELETE /api/v1/projects/:slug           GET  …/:slug/{dashboard,context,audit,requests,jobs,export,resolve,search}
 POST …/:slug/import                               GET|POST …/:slug/members  PUT|DELETE …/members/:userId
 GET|POST …/:slug/tokens  DELETE …/tokens/:id
 GET|POST …/:slug/spaces/:space/items              GET|PATCH|DELETE …/:slug/items/:ref

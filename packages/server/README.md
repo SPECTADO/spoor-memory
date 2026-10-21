@@ -41,6 +41,9 @@ src/
     projects/         projects + settings, memberships, project visibility (access.ts: loadProjectAccess), the `_shared` seed
     tokens/           API tokens (create, list, revoke, mintToken) and `GET /p/:slug/api/whoami`
     audit/            reading the audit log (project and instance level)
+    requests/         the agent request log (ADR-0018): RequestLog writes a row per MCP tool call (from the MCP
+                      tool wrapper) and per bearer REST call (bearerRequestLog middleware); the admin list
+                      (`GET …/requests`) and the dashboard's last read / write; purged after 14 days
     items/            item service (create/update with revision check, pin, verify, archive, restore, delete,
                       supersede, edges, wikilinks, revisions), repo mirror (push.ts: push, adr/import), the
                       project-scoped id resolver (resolve.ts), frontmatter validation, revision snapshot and ADR
@@ -54,7 +57,7 @@ src/
                       matcher is @spoor/shared's anchors.ts
     jobs/             scheduler with DB leases (scheduler.ts, store.ts), job table (definitions.ts), cleanup
                       and purge jobs, lifecycle reference model, review queue (review.ts), the project dashboard
-                      (dashboard.ts: counts, review counts, recent changes from the audit log), decisions/undrafted,
+                      (dashboard.ts: counts, review counts, recent changes from the audit log, last agent read / write), decisions/undrafted,
                       job status and the admin run trigger (status.ts); search-jobs.ts holds the handlers that
                       run SearchJobs and noopSearchJobs
     transfer/         export zip, lossless and Markdown-folder import (chunk rows written in the import
@@ -113,12 +116,12 @@ Wiring: `createAppModules(deps, { scheduler, search })` (app.ts) builds every mo
 `deps`; `src/index.ts` passes the runtime's scheduler and search module so the routes and the ports share
 one instance (tests call `createAppModules` on `test/ports.ts` stubs, see `test/http.ts`). `/api/v1` first runs the auth
 module's guards (`cookieApiGuards`: Authorization header rejected, 1 MB JSON cap except the import upload,
-origin check, session lookup), then the routes of auth, projects, tokens, audit, items, search, jobs and
+origin check, session lookup), then the routes of auth, projects, tokens, audit, requests, items, search, jobs and
 transfer and device (`device/lookup|approve|deny`). Any other path is a JSON 404 (no 501 stubs remain,
 deviations.md G16).
 `/p/:slug/api` runs `bearerApiGuards` (token → `AuthContext` with the effective, capped role; 401
 `invalid_token` with `WWW-Authenticate`, 403 `token_project_mismatch`; cookies ignored; then the 1 MB cap),
-then the bearer routes (`whoami` from tokens, `push` and `adr/import` from items, `context` from search,
+then the request-log middleware of the requests module, then the bearer routes (`whoami` from tokens, `push` and `adr/import` from items, `context` from search,
 `decisions/undrafted` from jobs, `activity`, `adr/push` and `docs/push` from mirror). The public surfaces have no
 guard chain: `/p/:slug/device` (device `publicRoutes`), `/p/:slug/mcp` (the mcp module brings its own bearer auth,
 1 MB cap and error mapping; `src/index.ts` calls `mcp.close()` on shutdown) and `/p/:slug/install.md|json`.

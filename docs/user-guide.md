@@ -31,8 +31,18 @@ A project you are not a member of does not exist for you (404). Buttons you cann
 **Projects** lists the projects you can see as cards with item counts, a review badge and your role, plus a card for the shared
 knowledge. Instance admins create projects (New project: name, description, slug; the slug is permanent and becomes part of every
 URL and handle). The **dashboard** of a project shows counts per space (active, stale, archived; the library never stale), the five review sections, the last
-15 changes, and for project admins the install hint (`/p/<slug>/install.md`). **Preview digest** shows what an agent would receive,
+15 changes and **Agent activity**: when an agent last read and last wrote, who, with which agent and which tool. The **Connect** box
+gives every member the two commands that connect a repository (install the CLI, `spoor login` with this server and project filled in),
+the install guide (`/p/<slug>/install.md`) and token creation; it says how a new teammate gets in (project admins: Members; others:
+ask a project admin) and how a new project is made (instance admins: Projects). **Preview digest** shows what an agent would receive,
 optionally for a query and a list of files, with the token estimate.
+
+**Request log** (project navigation, project admins and instance admins only) lists every agent request of the last 14 days: each
+MCP tool call and each call of the spoor CLI and its hooks. A row shows the time, the person (or service token), the token name and
+prefix, the agent (for example `claude-code/2.1.303`), read or write, the tool or CLI route, the space and memory type, the items read
+or written, the search or digest query (first 200 characters), the outcome and the duration. Filter by kind, via (`mcp` or `cli`),
+actor/token/agent text and dates. Rows older than 14 days are deleted. Editors and viewers cannot open it; they see only the last
+read and write on the dashboard. Web UI edits are not in it: they are in the **Audit log**.
 
 ## 4. Spaces and items
 

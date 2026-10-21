@@ -36,6 +36,13 @@
       "when": 1792491039111,
       "tag": "0004_library_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792581787393,
+      "tag": "0005_request_log",
+      "breakpoints": true
     }
   ]
 }

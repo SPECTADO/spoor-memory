@@ -37,6 +37,7 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │    │            hybrid FTS+vector RRF, dedupe, digest (6 tiers), anchor matcher    │
  │    ├─ jobs ── scheduler (in process, DB leases): cleanup, embed-pending, reembed,  │
  │    │          purge-ephemeral; review queue, dashboard, undrafted, job status      │
+ │    ├─ requests ── agent request log (MCP tool calls, bearer REST), 14 days        │
  │    ├─ transfer ── export / import (zip, lossless or Markdown folder)               │
  │    └─ healthz, instance, SPA static files (packages/web build); any other unknown  │
  │       API path or method is a JSON 404                                             │
@@ -189,7 +190,7 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 spoor-memory/
   packages/
     shared/    types, zod schemas (settings, project/auth API, CLI config), slugify, token estimator, error codes, the anchor normaliser/validator/matcher (anchors.ts), frontmatter split/serialize (markdown.ts), the known-key table and ITEM_LIMITS (frontmatter.ts), the wikilink grammar and resolution order (wikilinks.ts), ItemSummary (api/items.ts), the repo integration blocks of install.json and `spoor init` (install.ts), the review and undrafted-decision shapes (api/review.ts); the item request schemas still live in the server (deviations.md G5)
-    server/    Hono app, Drizzle schema + migrations (src/db/migrations, copied to drizzle/ by `pnpm build` for the image), modules auth, projects, tokens, audit, items, search, jobs, transfer, device, install, mirror, mcp, scripts/fetch-model.mjs
+    server/    Hono app, Drizzle schema + migrations (src/db/migrations, copied to drizzle/ by `pnpm build` for the image), modules auth, projects, tokens, audit, requests, items, search, jobs, transfer, device, install, mirror, mcp, scripts/fetch-model.mjs
       src/{config.ts, index.ts, app.ts, runtime.ts, ports.ts, db/, lib/, modules/<name>/{service,routes,index}.ts}   test/ (integration harness, e2e/ walk of DoD 2 and 3)
     web/       React SPA (src/{api,ui,components,pages,lib}; conventions in packages/web/README.md), builds to dist/ served by the server
     cli/       npm package `spoor-memory`, bin `spoor`: src/{bin,cli,commands,ctx,config,http,state,mirror,writeback,settings-files,git}.ts, cmd/{setup,info,mirror,draft,session}.ts; published as one esbuild bundle dist/bin.js with `shared` compiled in (scripts/build.mjs, ADR 0013; layout in packages/cli/README.md)
@@ -198,7 +199,7 @@ spoor-memory/
   BRIEF.md  ARCHITECTURE.md  GLOSSARY.md  README.md  CHANGELOG.md  LICENSE
 ```
 Dependencies point one way: `web`, `server` and `cli` depend on `shared`; `server` never imports `web` or `cli`; the CLI talks to the server only over HTTP.
-Inside the server, domain modules (`src/modules/auth`, `projects`, `tokens`, `audit`, `items`, `search`, `jobs`, `transfer`, `device`, `install`, `mirror`, `mcp`) code against the interfaces in `src/ports.ts`
+Inside the server, domain modules (`src/modules/auth`, `projects`, `tokens`, `audit`, `requests`, `items`, `search`, `jobs`, `transfer`, `device`, `install`, `mirror`, `mcp`) code against the interfaces in `src/ports.ts`
 (`EmbeddingProvider`, `SearchPort`, `JobsPort`, `SearchJobs` with its `BatchContext`) and the helpers in `src/lib/` (errors, transactions, `AuthContext`, audit), never against
 each other's internals; the convention and the test harness are described in [packages/server/README.md](packages/server/README.md) and
 [ADR-0011](docs/adr/0011-server-modules-and-ports.md).

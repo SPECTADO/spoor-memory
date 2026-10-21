@@ -60,6 +60,13 @@ async function contextResponse(c: Context<AppEnv>, services: SearchRouteServices
     files: q.file,
     includeShared: q.include_shared,
   })
+  // bearer calls: the request-log row of the digest (ADR-0018)
+  const note = c.get('requestNote')
+  if (note) {
+    note.query = q.query
+    note.handles = res.items
+    note.data = { files: q.file, budget: q.budget }
+  }
   c.header('Cache-Control', 'no-store')
   // the SessionStart hook checks the repo's AGENTS.md block against it (cli-and-hooks.md section 5.1, ADR-0015)
   c.header(MEMORY_MODE_HEADER, res.memoryExclusive ? 'exclusive' : 'shared')

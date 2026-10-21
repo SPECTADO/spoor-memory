@@ -7,6 +7,7 @@ import { projectSettingsPatch } from '../settings.js'
 import { isValidProjectSlug } from '../slug.js'
 import { emailSchema, nameSchema, PROJECT_ROLES, type ProjectRole } from './auth.js'
 import type { ItemSummary } from './items.js'
+import type { LastRequestJson } from './requests.js'
 import type { ReviewSection } from './review.js'
 
 // ---- projects (api.md 4.1) ----------------------------------------------------------------------------
@@ -117,6 +118,8 @@ export interface DashboardResponse {
   review: Record<ReviewSection, number>
   /** The last 15 content or lifecycle changes of items that still exist, newest first. */
   recent: { item: ItemSummary; change: DashboardChange; actor: ActorJson; at: string }[]
+  /** The newest agent read and write in the request log (14 days), `null` when there is none. */
+  last_requests: { read: LastRequestJson | null; write: LastRequestJson | null }
 }
 
 // ---- memberships (api.md 4.2) -------------------------------------------------------------------------

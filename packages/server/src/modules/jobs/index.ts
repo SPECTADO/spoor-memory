@@ -18,6 +18,7 @@ import type { Logger } from 'pino'
 import type { Config } from '../../config.js'
 import type { Db } from '../../lib/db.js'
 import type { ServerDeps } from '../../lib/deps.js'
+import { RequestLogService } from '../requests/index.js'
 import { DashboardService } from './dashboard.js'
 import { jobDefinitions } from './definitions.js'
 import { ReviewService } from './review.js'
@@ -75,11 +76,14 @@ export function registerJobs(scheduler: Scheduler, opts: { searchJobs?: SearchJo
   for (const def of jobDefinitions(opts)) scheduler.register(def)
 }
 
-export function createJobsModule(deps: ServerDeps, opts: { scheduler?: Scheduler } = {}) {
+export function createJobsModule(
+  deps: ServerDeps,
+  opts: { scheduler?: Scheduler; requests?: RequestLogService } = {},
+) {
   const scheduler = opts.scheduler ?? createScheduler(deps)
   const review = new ReviewService(deps)
   const status = new JobStatusService(deps, scheduler)
-  const dashboard = new DashboardService(deps, review)
+  const dashboard = new DashboardService(deps, review, opts.requests ?? new RequestLogService(deps))
   return {
     name: 'jobs',
     scheduler,

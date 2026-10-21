@@ -34,7 +34,7 @@ interface Draft {
 const EMPTY: Draft = { action: '', actor: '', via: '', since: '', until: '' }
 
 /** Local midnight of a `YYYY-MM-DD` date as an ISO instant; `until` is exclusive, so it is the next midnight. */
-function dayStart(date: string, plusDays = 0): string | undefined {
+export function dayStart(date: string, plusDays = 0): string | undefined {
   if (!date) return undefined
   const d = new Date(`${date}T00:00:00`)
   if (Number.isNaN(d.getTime())) return undefined

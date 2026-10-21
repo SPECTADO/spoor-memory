@@ -189,12 +189,12 @@ async function called(p: Promise<unknown>): Promise<string> {
 }
 
 const mcp = {
-  remember: (a: unknown) => rememberTool(s.services)(rememberInput.parse(a), s.mcpX),
-  decide: (a: unknown) => decideTool(s.services)(decideInput.parse(a), s.mcpX),
-  docWrite: (a: unknown) => docWriteTool(s.services)(docWriteInput.parse(a), s.mcpX),
-  supersede: (a: unknown) => supersedeTool(s.services)(supersedeInput.parse(a), s.mcpX),
-  relate: (a: unknown) => relateTool(s.services)(relateInput.parse(a), s.mcpX),
-  verify: (a: unknown) => verifyTool(s.services)(verifyInput.parse(a), s.mcpX),
+  remember: (a: unknown) => rememberTool(s.services)(rememberInput.parse(a), s.mcpX, {}),
+  decide: (a: unknown) => decideTool(s.services)(decideInput.parse(a), s.mcpX, {}),
+  docWrite: (a: unknown) => docWriteTool(s.services)(docWriteInput.parse(a), s.mcpX, {}),
+  supersede: (a: unknown) => supersedeTool(s.services)(supersedeInput.parse(a), s.mcpX, {}),
+  relate: (a: unknown) => relateTool(s.services)(relateInput.parse(a), s.mcpX, {}),
+  verify: (a: unknown) => verifyTool(s.services)(verifyInput.parse(a), s.mcpX, {}),
 }
 
 const seedEdge = async (src: { id: string; projectId: string }, kind: 'refines', dst: { id: string }) => {

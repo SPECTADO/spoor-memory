@@ -1,5 +1,6 @@
 import type { Logger } from 'pino'
 import type { AuthContext } from './lib/auth-context.js'
+import type { RequestNote } from './modules/requests/log.js'
 
 export type AppEnv = {
   Variables: {
@@ -9,6 +10,8 @@ export type AppEnv = {
     auth: AuthContext | undefined
     /** sha256 of the session cookie of this request, when one is valid (password change keeps it). */
     sessionIdHash: Buffer | undefined
+    /** Bearer REST: the request-log row of this call, which a route may enrich (ADR-0018). */
+    requestNote: RequestNote | undefined
   }
 }
 

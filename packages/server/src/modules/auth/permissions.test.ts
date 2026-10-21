@@ -174,6 +174,16 @@ const MATRIX: Row[] = [
     mcp: [],
   },
   { row: '_shared: jobs', action: 'jobs.read', target: { shared: true }, web: ['IA'], rest: [], mcp: [] },
+  // ADR-0018: the agent request log; `_shared` has none (tokens never target it)
+  { row: 'agent request log', action: 'requests.read', web: ['IA', 'PA'], rest: [], mcp: [] },
+  {
+    row: '_shared: agent request log',
+    action: 'requests.read',
+    target: { shared: true },
+    web: [],
+    rest: [],
+    mcp: [],
+  },
   {
     row: '_shared: review actions',
     action: 'review.act',

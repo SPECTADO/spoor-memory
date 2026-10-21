@@ -1,9 +1,10 @@
 /**
- * Sidebar navigation. `ProjectNav` is role-aware: Members and Settings only for project admins (Settings on
- * the shared space: instance admins), Tokens and Members never on the shared space. The Review entry shows
+ * Sidebar navigation. `ProjectNav` is role-aware: Request log, Members and Settings only for project admins
+ * (Settings on the shared space: instance admins), Tokens, Request log and Members never on the shared space. The Review entry shows
  * the open review count as text, not just a colour.
  */
 import {
+  Activity,
   BookOpen,
   Briefcase,
   ClipboardCheck,
@@ -89,8 +90,10 @@ export function ProjectNav({ slug }: { slug: string }) {
     { to: p('audit'), label: 'Audit log', icon: History },
   ]
   if (!shared) entries.push({ to: p('tokens'), label: 'Tokens', icon: KeyRound })
-  if (!shared && passes('admin', me.data, role))
+  if (!shared && passes('admin', me.data, role)) {
+    entries.push({ to: p('requests'), label: 'Request log', icon: Activity })
     entries.push({ to: p('members'), label: 'Members', icon: Users })
+  }
   if (shared ? passes('ia', me.data, role) : passes('admin', me.data, role)) {
     entries.push({ to: p('settings'), label: 'Settings', icon: Settings })
   }

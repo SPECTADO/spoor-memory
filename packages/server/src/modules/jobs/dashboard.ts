@@ -7,6 +7,9 @@
  * content revisions (`item.create|update|supersede|push`) and the lifecycle transitions the cleanup job and
  * the web write (`item.stale|archive|expire|restore`), with the same actor fields. Rows of deleted items are
  * left out (the item join).
+ *
+ * `last_requests` is the newest agent read and write of the request log (ADR-0018). Any member sees these
+ * two rows; the full log is for admins.
  */
 import {
   type ActorJson,
@@ -21,6 +24,7 @@ import { auditLog, items } from '../../db/schema.js'
 import type { ServerDeps } from '../../lib/deps.js'
 import { loadItems, summaryJson } from '../items/index.js'
 import type { ProjectAccess } from '../projects/index.js'
+import type { RequestLogService } from '../requests/index.js'
 import type { ReviewService } from './review.js'
 
 export const DASHBOARD_RECENT = 15
@@ -32,6 +36,7 @@ export class DashboardService {
   constructor(
     private readonly deps: ServerDeps,
     private readonly review: ReviewService,
+    private readonly requests: RequestLogService,
   ) {}
 
   /** `GET /api/v1/projects/:slug/dashboard`. */
@@ -92,6 +97,6 @@ export class DashboardService {
         at: r.at.toISOString(),
       })
     }
-    return { counts, review, recent }
+    return { counts, review, recent, last_requests: await this.requests.last(p) }
   }
 }

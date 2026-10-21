@@ -44,6 +44,8 @@ import type {
   ProjectPatchRequest,
   ProjectRole,
   RelationKind,
+  RequestFilters,
+  RequestRowJson,
   RestoreBody,
   ReviewBulkBody,
   ReviewBulkResult,
@@ -243,6 +245,8 @@ export const listProjectAudit = (slug: string, f: AuditFilters = {}, o: Sig = {}
   api<Page<AuditRowJson>>(`${P(slug)}/audit`, { query: { ...f }, ...o })
 export const listInstanceAudit = (f: Omit<AuditFilters, 'item'> = {}, o: Sig = {}) =>
   api<Page<AuditRowJson>>('/audit', { query: { ...f }, ...o })
+export const listProjectRequests = (slug: string, f: RequestFilters = {}, o: Sig = {}) =>
+  api<Page<RequestRowJson>>(`${P(slug)}/requests`, { query: { ...f }, ...o })
 export const getProjectJobs = (slug: string, o: Sig = {}) => api<ProjectJobsJson>(`${P(slug)}/jobs`, o)
 export const getInstanceJobs = (o: Sig = {}) => api<InstanceJobsJson>('/jobs', o)
 export const runJob = (name: string) => api<RunJobResult>(`/jobs/${seg(name)}/run`, { method: 'POST' })

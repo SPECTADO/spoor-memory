@@ -230,6 +230,7 @@ LE member with the `library_editor` flag · U any logged-in user · ST service t
 | reset invites, instance-flag invites | IA | — | — |
 | export / import shared space | IA | — | — |
 | job status, re-embed progress | IA (all), PA (own project) | — | — |
+| agent request log (ADR-0018; never `_shared`) | IA, PA | — | — |
 
 Implementation: `can(principal, action, target)` in `packages/server/src/modules/auth/permissions.ts` is this table and
 nothing else; `permissions.test.ts` checks every row for every caller (IA, PA, E, V, SE, U; user tokens by effective

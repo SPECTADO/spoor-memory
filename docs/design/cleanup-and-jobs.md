@@ -132,7 +132,7 @@ RETURNING name;
 | `cleanup` | 1 h | 10 min | for each project (including shared): one transaction applying `P_expired`, `P_stale`, `P_archive` in that order, each with its audit rows (§5); a project whose transaction fails is rolled back and skipped, the others are still cleaned, and the run ends as `error`; a per-project `job_runs` row is written only for projects where something changed or failed. Then the chunk consistency sweep (search-and-digest.md §3), which checks the abort signal and the budget and renews the lease between items like every batch job. A failure stores only a safe message in `job_runs.error` (a database error is `database error <SQLSTATE>`, never the query or its parameters); the detail goes to the server log |
 | `embed-pending` | 1 min | 5 min | fill `chunks.embedding IS NULL`, 64 per batch, until empty or 4 min (search-and-digest.md §3) |
 | `reembed` | 1 min | 5 min, renewed per 16-item batch | per project with `embedding_target`: create index → re-chunk/embed → cut over → drop old chunks/index (search-and-digest.md §3) |
-| `purge-ephemeral` | 1 h | 5 min | delete sessions past either expiry; device codes 1 day past `expires_at` (the instance-wide cap also evicts oldest pending codes on insert, auth-and-security.md §6); invites used, revoked or expired for > 30 days; `job_runs` > 30 days |
+| `purge-ephemeral` | 1 h | 5 min | delete sessions past either expiry; device codes 1 day past `expires_at` (the instance-wide cap also evicts oldest pending codes on insert, auth-and-security.md §6); invites used, revoked or expired for > 30 days; `job_runs` > 30 days; `request_log` > 14 days (ADR-0018) |
 | `mcp-session-sweep` | 5 min | none (in-memory, per process) | close MCP sessions idle > 30 min |
 
 ## 5. Idempotency

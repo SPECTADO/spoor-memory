@@ -25,7 +25,7 @@ import {
 } from './handlers.js'
 import { instructionsFor, READ_TOOLS, TOOL_SPECS, type ToolName, WRITE_TOOLS } from './tools.js'
 
-type AnyHandler = (s: McpServices) => (args: never, x: never) => Promise<unknown>
+type AnyHandler = (s: McpServices) => (args: never, x: never, note: never) => Promise<unknown>
 
 const HANDLERS: Record<ToolName, { make: AnyHandler; hints?: Partial<Record<string, string>> }> = {
   spoor_context: { make: contextTool as AnyHandler },
@@ -64,6 +64,7 @@ export function buildMcpServer(
       services.logger,
       h.make(services) as Parameters<typeof guarded<z.ZodType>>[2],
       h.hints,
+      services.requests,
     )
     mcp.registerTool(
       name,

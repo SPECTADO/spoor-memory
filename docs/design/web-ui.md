@@ -37,7 +37,7 @@ SPA routes live under `/projects/...`, `/shared/...`, `/admin/...`, `/login`, `/
 | `/device` | Approve a CLI login: the user **types** the code from their terminal (a `?code=` parameter is ignored); shows project, requester IP, age, role and the client name labelled "reported by the requester (unverified)"; buttons **Approve read-only** (default focus), **Approve**, **Deny** ([auth-and-security.md](auth-and-security.md) §6) | logged in, member of the code's project | `GET device/lookup`, `POST device/approve|deny` |
 | `/` | redirect to `/projects` | logged in | |
 | `/projects` | Project list: cards with counts, review badge, your role; "Shared knowledge" card; "New project" (IA) | logged in | `GET projects` |
-| `/projects/:slug` | Dashboard: counts per space (active, stale, archived; a fourth Library card shows active and archived, "never stale"), review counts for all five sections with links, the last 15 changes, install hint (`/p/:slug/install.md`, token creation) for project admins, "Preview digest" | member | `GET projects/:slug`, `…/dashboard` |
+| `/projects/:slug` | Dashboard: counts per space (active, stale, archived; a fourth Library card shows active and archived, "never stale"), review counts for all five sections with links, the last 15 changes, "Agent activity" (last agent read and write; project admins also get a link to the request log), a "Connect" box for every member (CLI install and `spoor login` commands with this server's URL and version, install guide, token creation; a new teammate: Members for project admins, "ask a project admin" otherwise; a new project: Projects for IA), "Preview digest"; agent activity and Connect are not shown on `_shared` | member | `GET projects/:slug`, `…/dashboard`, `instance` |
 | `/projects/:slug/memories`, `/decisions`, `/docs`, `/library` | Space list with filters, "New" (library: only with the library right) | member | `GET …/spaces/:space/items` (infinite) |
 | `/projects/:slug/:space/new` | Editor, create mode | editor (`library`: the library right) | `POST …/spaces/:space/items` |
 | `/projects/:slug/i/:ref` | Item view (rendered Markdown, meta, links, actions) | member | `GET …/items/:ref`, `…/edges` |
@@ -47,6 +47,7 @@ SPA routes live under `/projects/...`, `/shared/...`, `/admin/...`, `/login`, `/
 | `/projects/:slug/search?q=` | Search | member | `GET …/search` |
 | `/projects/:slug/review?section=` | Review queue | member (actions: editor) | `GET …/review`, `…/review/:section`, `…/decisions/undrafted` |
 | `/projects/:slug/audit` | Audit log | member | `GET …/audit` (infinite) |
+| `/projects/:slug/requests` | Request log (ADR-0018): agent reads and writes of the last 14 days, filters kind, via, actor/token/agent, date range; rows: time, actor (token name and prefix, agent), kind/via/outcome badges, operation and duration, space · type and handle links, query and an expandable `data` | PA (not on `_shared`) | `GET …/requests` (infinite) |
 | `/projects/:slug/tokens` | Tokens (own; all for project admin) | member | `GET/POST/DELETE …/tokens` |
 | `/projects/:slug/members` | Members, roles and the library editor flag | project admin | `GET/POST/PUT/DELETE …/members` |
 | `/projects/:slug/settings` | Settings, export/import, delete | project admin | `PATCH projects/:slug`, `GET …/jobs`, `GET …/export`, `POST …/import` |

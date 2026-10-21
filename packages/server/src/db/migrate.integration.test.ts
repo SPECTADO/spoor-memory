@@ -58,7 +58,7 @@ describe.skipIf(!url)('migrations against a real Postgres', () => {
     )
     const have = new Set(res.rows.map((r) => r.table_name))
     const expected = Object.values(TABLES).map((t) => getTableName(t))
-    expect(expected).toHaveLength(14)
+    expect(expected).toHaveLength(15)
     for (const t of expected) expect(have, t).toContain(t)
   })
 

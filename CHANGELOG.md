@@ -4,6 +4,19 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
+### Added
+
+- **Agent request log** (ADR-0018): every MCP tool call and every spoor CLI call is recorded with person, token, agent, read or
+  write, tool or route, space, memory type, handles, query (200 characters), outcome and duration. Kept 14 days (`purge-ephemeral`).
+  Project admins and instance admins read it on the new **Request log** page (`GET /api/v1/projects/:slug/requests`); other
+  members get 403. New migration `0005_request_log`.
+- Dashboard **Agent activity**: the last agent read and the last write, for every member (`last_requests` in the dashboard
+  response).
+- Dashboard **Connect** box for every member: the CLI install and `spoor login` commands with this server's URL and version, the
+  install guide, token creation, and how to add a teammate or a project. It replaces the admin-only install hint.
+
 ## [0.2.0] - 2026-10-20
 
 ### Added

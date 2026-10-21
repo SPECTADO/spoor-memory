@@ -18,6 +18,7 @@ import type {
   InviteAcceptRequest,
   InviteCreateRequest,
   ItemSummary,
+  LastRequestJson,
   LoginRequest,
   MemberJson,
   MeResponse,
@@ -28,6 +29,9 @@ import type {
   ProjectPatchRequest,
   ProjectRole,
   PushConflictReviewRow,
+  RequestKind,
+  RequestRowJson,
+  RequestSurface,
   ReviewBulkRequest,
   ReviewBulkResponse,
   ReviewCounts,
@@ -50,6 +54,7 @@ export type {
   AuditRowJson,
   DeviceApproveResponse,
   ItemSummary,
+  LastRequestJson,
   MemberJson,
   MeResponse,
   ProjectCreateRequest,
@@ -57,6 +62,9 @@ export type {
   ProjectListItem,
   ProjectPatchRequest,
   ProjectRole,
+  RequestKind,
+  RequestRowJson,
+  RequestSurface,
   ReviewCounts,
   ReviewSection,
   Space,
@@ -360,6 +368,18 @@ export interface AuditFilters extends PageParams {
   since?: string
   until?: string
 }
+/** `GET /projects/:slug/requests` (api.md §10.3): the agent request log, admins only. */
+export interface RequestFilters extends PageParams {
+  kind?: RequestKind
+  surface?: RequestSurface
+  /** Exact tool name or `METHOD /path`. */
+  operation?: string
+  /** Actor, token name or agent substring. */
+  actor?: string
+  since?: string
+  until?: string
+}
+
 export interface JobRunJson {
   id: number
   name: string
