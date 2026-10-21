@@ -250,8 +250,8 @@ Design files (the *what*): [docs/design/](docs/design/). Research the choices re
 | 24 | [`0024-mcp-tools-list-budget-…md`](docs/adr/0024-mcp-tools-list-budget-raised-to-4-000-estimated-tokens-for-relations-on-all.md) | MCP tools/list budget raised to 4,000 estimated tokens for relations on all write tools and `spoor_get` depth (accepted) | the `tools.test.ts` ceiling, measured 3,932 | mcp |
 
 [deviations.md](docs/design/deviations.md) §D lists nine slightly different topics (for example "session-managed MCP transport" and "in-process scheduler" as their own ADRs); the list above
-folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule. ADRs 0001 to 0014 and
-the accepted ones after them are decided; the accepted ones (0016, 0020 to 0024; most drafted from decision memories by `spoor adr draft`) wait for the owner to accept them.
+folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule. ADRs 0001 to 0020 and 0024 are decided (0017 is superseded by 0019);
+the proposed ones (0021 to 0023, drafted from decision memories by `spoor adr draft`) wait for the owner to accept them.
 
 ## 6. Cross-cutting rules
 
