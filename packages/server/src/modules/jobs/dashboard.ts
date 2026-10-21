@@ -10,6 +10,10 @@
  *
  * `last_requests` is the newest agent read and write of the request log (ADR-0018). Any member sees these
  * two rows; the full log is for admins.
+ *
+ * `links` (ADR-0021): live items (active or stale, not superseded or deprecated) with no edge of any kind in
+ * either direction, and the distinct dangling wikilink refs written in such items. For `_shared`, incoming
+ * edges from every project count (only a number, so no membership filter).
  */
 import {
   type ActorJson,
@@ -20,7 +24,7 @@ import {
   type LifecycleCounts,
 } from '@spoor/shared'
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
-import { auditLog, items } from '../../db/schema.js'
+import { auditLog, edges, items } from '../../db/schema.js'
 import type { ServerDeps } from '../../lib/deps.js'
 import { loadItems, summaryJson } from '../items/index.js'
 import type { ProjectAccess } from '../projects/index.js'
@@ -97,6 +101,19 @@ export class DashboardService {
         at: r.at.toISOString(),
       })
     }
-    return { counts, review, recent, last_requests: await this.requests.last(p) }
+    return { counts, review, recent, links: await this.links(p), last_requests: await this.requests.last(p) }
+  }
+
+  private async links(projectId: string): Promise<DashboardResponse['links']> {
+    const live = sql`i.project_id = ${projectId} AND i.lifecycle IN ('active','stale')
+      AND i.status NOT IN ('superseded','deprecated')`
+    const res = await this.deps.db.execute<{ unlinked: number; dangling: number }>(sql`
+      SELECT
+        (SELECT count(*)::int FROM ${items} i WHERE ${live}
+           AND NOT EXISTS (SELECT 1 FROM ${edges} e WHERE e.src_id = i.id OR e.dst_id = i.id)) AS unlinked,
+        (SELECT count(DISTINCT e.dst_ref)::int FROM ${edges} e JOIN ${items} i ON i.id = e.src_id
+           WHERE e.dst_id IS NULL AND ${live}) AS dangling`)
+    const r = res.rows[0]
+    return { unlinked_items: r?.unlinked ?? 0, dangling_refs: r?.dangling ?? 0 }
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "spoor-memory-monorepo",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "packageManager": "pnpm@10.34.7",
   "engines": {

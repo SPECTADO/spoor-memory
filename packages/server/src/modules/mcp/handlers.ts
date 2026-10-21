@@ -6,6 +6,7 @@
  * in the request log (ADR-0018); a handler notes what it read or wrote in its `RequestNote`.
  */
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { EDGE_KINDS, type RelatedItem, spaces } from '@spoor/shared'
 import type { Logger } from 'pino'
 import type { z } from 'zod'
 import { type AuthContext, actorLabel } from '../../lib/auth-context.js'
@@ -29,9 +30,12 @@ import {
   FRAMING_LINE,
   fail,
   getItemText,
+  graphBlock,
   type LinkView,
   noteLines,
   ok,
+  type RelatedView,
+  relatedLine,
   tagOf,
 } from './format.js'
 import type {
@@ -107,6 +111,79 @@ const callerOf = (x: McpAuthExtra): Caller => ({
 /** `forbidden_role` for a viewer or a read-only token (mcp.md section 6). The token's project is never `_shared`. */
 const assertWriter = (x: McpAuthExtra) =>
   assertCan(bearerPrincipal(x.auth, 'mcp'), 'item.write', { shared: false })
+
+/** Related items shown after a write (`related:`) and in spoor_get (`see also:`), contract §6. */
+const RELATED_SHOWN = 3
+
+const relatedView = (r: RelatedItem): RelatedView => ({
+  handle: r.item.handle,
+  title: r.item.title,
+  space: r.item.space,
+  type: r.item.type,
+  provenance: r.item.provenance,
+  cos: r.cos,
+})
+
+/**
+ * Up to three related unlinked items of `item` (ADR-0022), or `null` while it has no vector. `item` given by
+ * id is loaded first (after an update). A failing load or lookup is logged and gives `null`: it never fails
+ * the tool call, whose write is already committed.
+ */
+async function relatedOf(
+  s: McpServices,
+  caller: Caller,
+  item: LoadedItem | string,
+  excludeIds: string[] = [],
+): Promise<RelatedView[] | null> {
+  try {
+    const row = typeof item === 'string' ? await s.items.load(caller, item, 'read') : item
+    const res = await s.items.relatedByProbe(caller, { item: row, excludeIds }, RELATED_SHOWN)
+    return res.note ? null : res.items.map(relatedView)
+  } catch (err) {
+    const id = typeof item === 'string' ? item : item.id
+    s.logger.warn({ err: loggableError(err), item: id }, 'related items lookup failed')
+    return null
+  }
+}
+
+/**
+ * The `related:` line after a committed write (contract §6 i) of the item with handle `from`; counts the hint
+ * in the request note.
+ */
+async function relatedHint(
+  s: McpServices,
+  caller: Caller,
+  from: string,
+  item: LoadedItem | string,
+  excludeIds: string[],
+  note: RequestNote,
+): Promise<string[]> {
+  const related = await relatedOf(s, caller, item, excludeIds)
+  if (related === null) return []
+  note.data = { ...note.data, related: related.length }
+  const line = relatedLine(from, related)
+  return line ? [line] : []
+}
+
+type Relation = NonNullable<z.output<typeof rememberInput>['relations']>[number]
+
+/**
+ * Resolve a create's `relations` up front (the service resolves them again in its transaction): the targets
+ * for the `note: linked` echo, each distinct (kind, target) once, as the service writes them.
+ */
+async function createRelations(s: McpServices, caller: Caller, relations: Relation[] | undefined) {
+  if (!relations?.length) return []
+  const seen = new Set<string>()
+  return (await s.items.relationTargets(caller, relations)).filter((r) => {
+    const key = `${r.kind}:${r.to.id}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const linkedLines = (caller: Caller, rels: readonly { kind: string; to: LoadedItem }[]) =>
+  rels.map((r) => `note: linked ${r.kind}→${handleOf(r.to, viewOf(caller.project))}`)
 
 type Handler<S extends z.ZodType> = (
   args: z.output<S>,
@@ -229,14 +306,37 @@ export function getTool(s: McpServices): Handler<typeof getInput> {
           kind: e.kind,
           direction: 'out' as const,
           other: e.other?.handle ?? null,
+          title: e.other?.title ?? null,
+          provenance: e.other?.provenance ?? null,
           ref: 'dst_ref' in e ? (e.dst_ref as string | null) : null,
         })),
         ...edges.incoming.map((e) => ({
           kind: e.kind,
           direction: 'in' as const,
           other: e.other?.handle ?? null,
+          title: e.other?.title ?? null,
+          provenance: e.other?.provenance ?? null,
         })),
       ]
+      const seeAlso = (await relatedOf(s, caller, row)) ?? []
+      let graph: string | null = null
+      if (a.depth > 0) {
+        // the focus walk with the map's default filters (contract §6 v)
+        const g = await s.items.graph(
+          caller,
+          {
+            spaces: [...spaces],
+            kinds: [...EDGE_KINDS],
+            lifecycle: ['active', 'stale'],
+            include_superseded: false,
+            unlinked: false,
+            focus: row.id,
+            depth: a.depth as 1 | 2,
+          },
+          [caller.project.id],
+        )
+        graph = graphBlock(row.id, a.depth, g)
+      }
       blocks.push(
         getItemText(
           {
@@ -264,6 +364,7 @@ export function getTool(s: McpServices): Handler<typeof getInput> {
           },
           links,
           { offset: a.offset, maxChars: a.max_chars },
+          { seeAlso, graph },
         ),
       )
       found.push(row.id)
@@ -272,6 +373,7 @@ export function getTool(s: McpServices): Handler<typeof getInput> {
     note.handles = rows.map((r) => handleOf(r, view))
     note.space = common(rows.map((r) => r.space))
     note.memoryType = common(rows.map((r) => r.type))
+    if (a.depth > 0) note.data = { depth: a.depth }
     if (found.length === 0) note.outcome = 'not_found'
     await s.items.touchUsed(found)
     const text = [FRAMING_LINE, ...blocks].join('\n')
@@ -288,6 +390,7 @@ export function rememberTool(s: McpServices): Handler<typeof rememberInput> {
     note.space = 'memories'
     if (a.id === undefined) {
       note.memoryType = a.type ?? 'fact'
+      const rels = await createRelations(s, caller, a.relations)
       const res = await s.items.create(
         caller,
         'memories',
@@ -313,6 +416,8 @@ export function rememberTool(s: McpServices): Handler<typeof rememberInput> {
       return [
         `OK created ${item.handle} r${item.revision} [${tagOf(item)}]`,
         ...noteLines(res.notes, res.warnings),
+        ...linkedLines(caller, rels),
+        ...(await relatedHint(s, caller, item.handle, res.row as LoadedItem, ids(rels), note)),
       ].join('\n')
     }
     // update: patch semantics, `revision` required (the service says `revision_required`); no dedupe runs.
@@ -334,18 +439,31 @@ export function rememberTool(s: McpServices): Handler<typeof rememberInput> {
     )
     note.handles = [res.item.handle]
     note.memoryType = res.item.type
-    const view = viewOf(caller.project)
-    const added = res.relations
-      .filter((r) => r.changed)
-      .map((r) => `note: linked ${r.kind}→${handleOf(r.to, view)}`)
-    const verb = res.changed ? 'updated' : 'unchanged'
     return [
-      `OK ${verb} ${res.item.handle} r${res.item.revision}`,
+      `OK ${res.changed ? 'updated' : 'unchanged'} ${res.item.handle} r${res.item.revision}`,
       ...noteLines([], res.warnings),
-      ...added,
+      ...(await updateTail(s, caller, res, note)),
     ].join('\n')
   }
 }
+
+/** After an update: `note: linked` per new edge, and `related:` when the content changed (contract §6 i, ii). */
+async function updateTail(
+  s: McpServices,
+  caller: Caller,
+  res: Awaited<ReturnType<ItemService['update']>>,
+  note: RequestNote,
+): Promise<string[]> {
+  const added = res.relations.filter((r) => r.changed)
+  const lines = linkedLines(caller, added)
+  // the related lookup reloads the item inside its best-effort path: the update is committed already
+  if (res.changed) {
+    lines.push(...(await relatedHint(s, caller, res.item.handle, res.item.id, ids(res.relations), note)))
+  }
+  return lines
+}
+
+const ids = (rels: readonly { to: LoadedItem }[]) => rels.map((r) => r.to.id)
 
 export const REMEMBER_HINTS = {
   wrong_space: 'spoor_remember edits memories; docs: spoor_doc_write; ADRs: edit the ADR file or the web UI',
@@ -375,6 +493,7 @@ export function decideTool(s: McpServices): Handler<typeof decideInput> {
         })
       }
     }
+    const rels = await createRelations(s, caller, a.relations)
     const res = await s.items.create(
       caller,
       'memories',
@@ -386,6 +505,7 @@ export function decideTool(s: McpServices): Handler<typeof decideInput> {
         anchors: a.anchors,
         tags: a.tags,
         supersedes: old?.id,
+        relations: a.relations,
         allow_duplicate: a.allow_duplicate,
       },
       { dedupe: 'block' },
@@ -404,7 +524,16 @@ export function decideTool(s: McpServices): Handler<typeof decideInput> {
     return [
       line,
       ...noteLines(res.notes, res.warnings),
+      ...linkedLines(caller, rels),
       'note: decision recorded; an ADR is drafted from it by spoor adr draft (Claude Code with Spoor hooks: automatically at turn end)',
+      ...(await relatedHint(
+        s,
+        caller,
+        item.handle,
+        res.row as LoadedItem,
+        [...ids(rels), ...(old ? [old.id] : [])],
+        note,
+      )),
     ].join('\n')
   }
 }
@@ -415,6 +544,7 @@ export function docWriteTool(s: McpServices): Handler<typeof docWriteInput> {
     const caller = callerOf(x)
     note.space = 'docs'
     if (a.id === undefined) {
+      const rels = await createRelations(s, caller, a.relations)
       const res = await s.items.create(
         caller,
         'docs',
@@ -424,6 +554,7 @@ export function docWriteTool(s: McpServices): Handler<typeof docWriteInput> {
           slug: a.slug,
           anchors: a.anchors,
           tags: a.tags,
+          relations: a.relations,
           allow_duplicate: a.allow_duplicate,
         },
         { dedupe: 'block' },
@@ -434,7 +565,12 @@ export function docWriteTool(s: McpServices): Handler<typeof docWriteInput> {
       }
       const item = res.item as NonNullable<typeof res.item>
       note.handles = [item.handle]
-      return [`OK created ${item.handle} r${item.revision}`, ...noteLines(res.notes, res.warnings)].join('\n')
+      return [
+        `OK created ${item.handle} r${item.revision}`,
+        ...noteLines(res.notes, res.warnings),
+        ...linkedLines(caller, rels),
+        ...(await relatedHint(s, caller, item.handle, res.row as LoadedItem, ids(rels), note)),
+      ].join('\n')
     }
     if (a.slug !== undefined) {
       throw new ApiError('invalid_input', {
@@ -446,11 +582,14 @@ export function docWriteTool(s: McpServices): Handler<typeof docWriteInput> {
       caller,
       a.id,
       { revision: a.revision, title: a.title, body: a.body, tags: a.tags, anchors: a.anchors },
-      { expectSpace: 'docs' },
+      { expectSpace: 'docs', relations: a.relations ?? [] },
     )
     note.handles = [res.item.handle]
-    const verb = res.changed ? 'updated' : 'unchanged'
-    return [`OK ${verb} ${res.item.handle} r${res.item.revision}`, ...noteLines([], res.warnings)].join('\n')
+    return [
+      `OK ${res.changed ? 'updated' : 'unchanged'} ${res.item.handle} r${res.item.revision}`,
+      ...noteLines([], res.warnings),
+      ...(await updateTail(s, caller, res, note)),
+    ].join('\n')
   }
 }
 

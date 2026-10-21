@@ -4,8 +4,49 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-21
+
+### Added
+
+- **Map page** (ADR-0021): `/projects/:slug/graph` and `/shared/graph`, nav entry "Map" after Library, for every role. Items are
+  nodes (shape by space, size by number of links), the seven link kinds are styled edges, a `[[ref]]` to nothing is a hollow node,
+  and items outside the filters or in another space appear as dashed ghosts. Filters for spaces, link kinds, lifecycle, superseded
+  and "Unlinked only", a text highlight, a legend, focus mode (`?focus=<handle>&depth=1|2`, "Open in map" on the item page), a list
+  view, keyboard pan and zoom, and a side card with links, suggested links, "Add relation", "Open item" and "Focus here". All state
+  is in the URL. At most 1,500 items, with a notice when the map is cut short. New web dependency `d3-force` 3.0.0 (exact pin),
+  loaded only by the map chunk.
+- **Graph endpoint** `GET /api/v1/projects/:slug/graph` with `spaces`, `kinds`, `lifecycle`, `include_superseded`, `unlinked`,
+  `focus` and `depth`; returns nodes with degrees and a ghost flag, edges (`id, kind, src, dst, dst_ref, editable`) and `meta`
+  (`truncated`, `node_cap`, `total_nodes`, `unlinked_count`, `dangling_count`). Same visibility as the per-item edges endpoint.
+- **Related items endpoint** `GET /api/v1/projects/:slug/items/:ref/related?limit=1..20` (ADR-0022): unlinked items ranked by the
+  best-chunk embedding cosine under the project's active model, over the project's four spaces plus `_shared` on the same model;
+  the item itself, linked, archived, superseded, deprecated and expired items are excluded inside the nearest-neighbour search.
+  Computed on demand, nothing stored, no LLM; `note: embedding pending…` while the item has no vector.
+- **Suggested links** in the item page's Links panel and the map's side card: up to 5 related items with their similarity, a kind
+  choice and one-click **Link** for people who can add relations.
+- **Dashboard link health**: `links: { unlinked_items, dangling_refs }` in the dashboard response and one line such as
+  `12 items without links · 3 dangling references` that opens the map (with "Unlinked only") or the whole map; hidden when both
+  are 0.
+- **Project setting** `dedupe.related_min_cos` (ADR-0023): the minimum similarity of a suggestion, 0.50 to 0.90, default 0.70,
+  "Related items minimum similarity" in the Duplicates section. It is always read at least 0.01 below the duplicate threshold.
+- **MCP**: `spoor_decide` and `spoor_doc_write` take `relations` like `spoor_remember` (at most 10); create replies echo
+  `note: linked <kind>→<handle>`; after a create or a content-changing update the three write tools add a `related:` line of up
+  to 3 similar unlinked items with a ready `spoor_relate` hint; `spoor_get` adds a `see also:` line (up to 3) and a `depth` input
+  (0 to 2) that appends a `graph:` block of the neighbourhood, capped at about 400 tokens with `+N more edges`.
+- A **Links** section in the agent guide: direction, when to use each kind, and how to act on the hints.
+- Migration `0006_edges_project_idx`: an index on `edges(project_id)`.
+
 ### Changed
 
+- `spoor_get`'s `links:` line prints a short title after each linked handle (`refines→m12 "Tokens are hashed"`), and `links:`,
+  `see also:`, `related:` and `graph:` mark agent-written, unreviewed items with `~` after the handle, as the digest and
+  `spoor_search` do.
+- Every `relations` argument describes the four kinds: `refines = narrows or details, supports = evidence for, depends_on =
+  requires, conflicts_with = contradicts (symmetric)`.
+- The server instructions' recording sentence ends "link them to related items (relations, or spoor_relate)".
+- The `tools/list` regression ceiling is 4,000 estimated tokens (was 3,500; ADR-0024). A writer's list is now 3,932 (was 3,440);
+  the instructions are 317, or 402 with exclusive memory (were 291 and 376).
+- Adding or removing a link in the web UI also refreshes the map, the suggestions and the dashboard.
 - **Image tags** (ADR-0019, supersedes ADR-0017): `latest` is again the highest release, pushed only by a `v*` release that is
   the highest `vX.Y.Z` tag. The newest green commit on `main` is now `develop` (plus `sha-<short>`). Version tags are unchanged.
 
@@ -133,5 +174,5 @@ First release. Scope is BRIEF.md (MVP) with its 2026-10-19 amendments; evidence 
 - Voyage embeddings are verified against a fake only (G15). The Cursor, Codex and Gemini CLI snippets in the install doc are checked
   against the vendors' docs but not run against those clients; Claude Code was verified with a real `claude -p` run
   ([docs/design/harness-verification.md](docs/design/harness-verification.md)).
-- Out of scope by design: SSO, email, graph visualisation, server-side LLM calls, rate limiting, agent writes to the shared space,
+- Out of scope by design: SSO, email, graph visualisation (added in 0.4.0), server-side LLM calls, rate limiting, agent writes to the shared space,
   pulling ADRs or docs back into the repository.

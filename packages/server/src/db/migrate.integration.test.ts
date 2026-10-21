@@ -74,6 +74,15 @@ describe.skipIf(!url)('migrations against a real Postgres', () => {
     expect(idx.rows[0]?.indexdef).toMatch(
       /USING hnsw .*vector_cosine_ops.*WHERE \(model = 'local:Xenova\/multilingual-e5-small@q8\/384'/s,
     )
+    const edgesIdx = await client.query<{ indexdef: string }>(
+      "SELECT indexdef FROM pg_indexes WHERE tablename = 'edges' AND indexname = 'edges_project_idx'",
+    )
+    expect(edgesIdx.rows).toHaveLength(1)
+    expect(edgesIdx.rows[0]?.indexdef).toMatch(/ON public\.edges USING btree \(project_id\)/)
+    const journal = JSON.parse(
+      readFileSync(new URL('./migrations/meta/_journal.json', import.meta.url), 'utf8'),
+    ) as { entries: { tag: string }[] }
+    expect(journal.entries.at(-1)?.tag).toBe('0006_edges_project_idx')
     const un = await client.query<{ s: string }>("SELECT spoor_unaccent('Příliš žluťoučký kůň') AS s")
     expect(un.rows[0]?.s).toBe('Prilis zlutoucky kun')
   })

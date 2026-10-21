@@ -204,3 +204,56 @@ Agreed 2026-10-20 between the owner and Claude (four questions, answered one at 
   in the user's own `.claude/settings.local.json`; teammates who never logged in keep theirs.
 
 Recorded in ADR-0015.
+
+## Amendment (2026-10-21): Graph view and link suggestions
+
+Agreed 2026-10-21 between the owner and Claude (twelve questions, answered one at a time; the owner took the
+recommended answer each time and picked all four linking improvements). Supersedes "No graph visualisation
+(phase 2)" in the Web UI section and the matching out-of-scope entry.
+
+- **Map page**: `/projects/:slug/graph` (also `/shared/graph`), one nav entry, one lazy chunk. Nodes are items,
+  edges are rows of the `edges` table: the seven stored kinds (refines, supports, depends_on, conflicts_with,
+  supersedes, drafted_from, wikilink), each with its own style and toggle. Dangling wikilinks are hollow ghost
+  nodes labelled with the reference text. Anchors are not edges in v1. Shared and library targets reached by a
+  project edge appear as outlined ghost nodes and open in their own space; the rest of the shared space is never
+  loaded.
+- **Two entry points**: the whole project by default; `?focus=<handle>&depth=1|2` (default 2) shows one item's
+  neighbourhood, reached from an "Open in map" button on the item page.
+- **Defaults and filters**: lifecycle active+stale, superseded and deprecated hidden, all spaces, all kinds.
+  Toggles for spaces, kinds, lifecycle, include superseded, unlinked only; a text filter highlights matching
+  nodes. All state lives in the URL (`useSearchParamsState`).
+- **Interaction**: click a node for a side card (title, badges, degree, links, suggested links, "Add relation"
+  reusing RelationDialog, "Open item", "Focus here"). No drag-to-link; edge removal stays on the item page.
+- **Rendering**: `d3-force` (exact pin, release-age checked) is the only new dependency; the layout is a pure
+  function with unit tests; React renders SVG with the existing CSS tokens; pan and zoom are hand-rolled.
+  Node cap 1,500 with a `truncated` notice that tells the user to narrow the filters.
+- **Graph endpoint**: `GET /api/v1/projects/:slug/graph` returns nodes (lean ItemSummary subset plus degree) and
+  edges (`id, kind, src, dst, dst_ref, editable`) under the same visibility rules as the per-item edges
+  endpoint; `focus` and `depth` select the neighbourhood mode. Adds an `edges(project_id)` index.
+- **Link health**: the endpoint reports degree per node and the dangling count; the map gets "unlinked only";
+  the dashboard shows one line (items without links, dangling references) that links to the map.
+- **Related items**: a new `GET .../items/:ref/related` ranks unlinked items by embedding cosine (best chunk,
+  the project's active model) across the four spaces of the project plus `_shared`, excluding the item itself
+  and already-linked, superseded, deprecated and archived items. The minimum cosine is a per-project setting
+  (default 0.70), always below the duplicate threshold. Computed on demand, nothing stored, no server-side LLM.
+  Without a vector (embedding pending) it returns an empty list with a note.
+- **Agent side**: `spoor_remember`, `spoor_decide` and `spoor_doc_write` reply with up to three related
+  unlinked items and a ready `spoor_relate` hint; `spoor_decide` and `spoor_doc_write` gain `relations`;
+  create replies echo linked edges as update does; every `relations` argument describes the four kinds;
+  `spoor_get` prints short titles next to link handles and a `see also` line of related unlinked items, and
+  gains `depth` (0–2, default 0) that appends a token-capped `graph:` block. The tools/list budget (3,500
+  tokens) and the server instructions may grow modestly if needed (owner, 2026-10-21).
+- **Guidance**: a Links section in the agent guide (direction convention, when to use each kind); the server
+  instructions gain one sentence if the budget allows. The AGENTS.md block and the Stop hook are unchanged.
+- **Web**: "Suggested links" in the item page's Links panel with one-click "link as …"; the same list feeds
+  the map's side card.
+- **Out of scope**: stored suggestions or a suggestion job, drag-to-link, anchor or file nodes, loading the
+  whole shared space, changes to the AGENTS.md block or the Stop hook.
+- **Done when**: server integration tests (graph, related, depth walk, visibility), MCP format tests, web
+  tests (map page, side card, suggested links, dashboard line), one Playwright spec that renders the map,
+  docs updated (user guide, agent guide, api.md, web-ui.md, mcp.md, search-and-digest.md, ARCHITECTURE.md,
+  CHANGELOG), version 0.4.0 across the five package.json files, full local CI green. Not committed; the owner
+  reviews first.
+
+Recorded in ADR-0021 (graph view) and ADR-0022 (link suggestions), refined by ADR-0023 (the related-item floor
+setting) and ADR-0024 (the tools/list budget of 4,000 estimated tokens).

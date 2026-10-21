@@ -17,6 +17,21 @@ export function projectPath(slug: string, rest = ''): string {
 export const itemPath = (slug: string, ref: string, rest = '') =>
   projectPath(slug, `i/${encodeURIComponent(ref)}${rest ? `/${rest}` : ''}`)
 
+/**
+ * The project map: `/projects/<slug>/graph` (`/shared/graph`), `?focus=<handle>&depth=1|2` for one item's
+ * neighbourhood, `unlinked=1` for "unlinked only". `depth` is left out without `focus`.
+ */
+export function graphPath(slug: string, params: { focus?: string; depth?: 1 | 2; unlinked?: boolean } = {}) {
+  const sp = new URLSearchParams()
+  if (params.focus) {
+    sp.set('focus', params.focus)
+    if (params.depth) sp.set('depth', String(params.depth))
+  }
+  if (params.unlinked) sp.set('unlinked', '1')
+  const qs = sp.toString()
+  return projectPath(slug, 'graph') + (qs ? `?${qs}` : '')
+}
+
 /** Wikilink resolver route: resolves `ref` (may carry `shared:`) then replaces itself with the item page. */
 export const wikiPath = (slug: string, ref: string) => projectPath(slug, `w/${encodeURIComponent(ref)}`)
 

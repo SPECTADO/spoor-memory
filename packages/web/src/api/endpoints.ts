@@ -14,6 +14,8 @@ import type {
   DeviceLookup,
   EdgeJson,
   EdgesResponse,
+  GraphParams,
+  GraphResponse,
   ImportResult,
   InstanceJobsJson,
   InstanceJson,
@@ -43,6 +45,7 @@ import type {
   ProjectListItem,
   ProjectPatchRequest,
   ProjectRole,
+  RelatedResponse,
   RelationKind,
   RequestFilters,
   RequestRowJson,
@@ -206,6 +209,21 @@ export const removeEdge = (slug: string, edgeId: string) =>
   api<void>(`${P(slug)}/edges/${seg(edgeId)}`, { method: 'DELETE' })
 export const resolveRef = (slug: string, ref: string, o: Sig = {}, from?: string) =>
   api<{ item: ItemSummary }>(`${P(slug)}/resolve`, { query: from ? { ref, from } : { ref }, ...o })
+
+/** Lists go out comma-separated (`?kinds=refines,supports`); omitted keys take the server defaults. */
+const graphQueryParams = (p: GraphParams): QueryParams => ({
+  spaces: p.spaces?.join(','),
+  kinds: p.kinds?.join(','),
+  lifecycle: p.lifecycle?.join(','),
+  include_superseded: p.include_superseded === undefined ? undefined : String(p.include_superseded),
+  unlinked: p.unlinked === undefined ? undefined : String(p.unlinked),
+  focus: p.focus,
+  depth: p.focus && p.depth ? p.depth : undefined,
+})
+export const getGraph = (slug: string, p: GraphParams = {}, o: Sig = {}) =>
+  api<GraphResponse>(`${P(slug)}/graph`, { query: graphQueryParams(p), ...o })
+export const getRelated = (slug: string, ref: string, limit?: number, o: Sig = {}) =>
+  api<RelatedResponse>(`${I(slug, ref)}/related`, { query: { limit }, ...o })
 
 // ---- 6. search ---------------------------------------------------------------------------------------
 

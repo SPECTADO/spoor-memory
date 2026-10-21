@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Project decisions, MADR style, each with date and deciders. Template and rules: the `adr` skill. Never rewrite an accepted ADR; supersede it with a new one. Design sources are in [docs/design](../design/); deviation ids (D1-D9, I1-I45, G, H, P3) are defined in [deviations.md](../design/deviations.md). All ADRs 0001 to 0014 are accepted. Where the amendments in BRIEF.md changed an earlier choice (D9, I33 to I38), the ADR text already states the amended rule. How the decisions show up for users: [user-guide.md](../user-guide.md), [agent-guide.md](../agent-guide.md), [operations.md](../operations.md).
+Project decisions, MADR style, each with date and deciders. Template and rules: the `adr` skill. Never rewrite an accepted ADR; supersede it with a new one. Design sources are in [docs/design](../design/); deviation ids (D1-D9, I1-I45, G, H, P3) are defined in [deviations.md](../design/deviations.md). All ADRs 0001 to 0014 are accepted; 0020 to 0024 are proposed and wait for the owner. Where the amendments in BRIEF.md changed an earlier choice (D9, I33 to I38), the ADR text already states the amended rule. How the decisions show up for users: [user-guide.md](../user-guide.md), [agent-guide.md](../agent-guide.md), [operations.md](../operations.md).
 
 - [ADR-0001](0001-stack.md) - Stack: Hono, Drizzle, React/Vite, MCP SDK, pnpm monorepo, Node 22, pinned versions (Accepted, 2026-10-19)
 - [ADR-0002](0002-postgres-pgvector.md) - Postgres with pgvector as the only store (Accepted, 2026-10-19)
@@ -21,3 +21,8 @@ Project decisions, MADR style, each with date and deciders. Template and rules: 
 - [ADR-0017](0017-latest-image-follows-main.md) - The `latest` image follows `main`; version tags stay on `v*` releases (Superseded by ADR-0019, 2026-10-20)
 - [ADR-0018](0018-agent-request-log.md) - An agent request log, kept 14 days, readable by admins (Accepted, 2026-10-21)
 - [ADR-0019](0019-develop-image-follows-main.md) - `develop` follows `main`, `latest` follows the highest release (Accepted, 2026-10-21)
+- [ADR-0020](0020-no-file-attachment-storage-in-near-versions-json-goes-in-doc-bodies-files-stay.md) - No file or attachment storage in near versions: JSON goes in doc bodies, files stay in the repo with anchors (Proposed, 2026-10-21)
+- [ADR-0021](0021-graph-view-one-project-wide-graph-endpoint-rendered-as-d3-force-svg-with-focus.md) - Graph view: one project-wide graph endpoint rendered as d3-force SVG with focus mode, read-only canvas plus side card (Proposed, 2026-10-21)
+- [ADR-0022](0022-link-suggestions-are-computed-on-demand-from-existing-embeddings-nothing-stored.md) - Link suggestions are computed on demand from existing embeddings; nothing stored, no server-side LLM (Proposed, 2026-10-21)
+- [ADR-0023](0023-related-item-floor-lives-at-settings-dedupe-related-min-cos-0-50-0-90-default-0.md) - Related-item floor lives at `dedupe.related_min_cos` (0.50 to 0.90, default 0.70), clamped on read below the duplicate threshold (Proposed, 2026-10-21)
+- [ADR-0024](0024-mcp-tools-list-budget-raised-to-4-000-estimated-tokens-for-relations-on-all.md) - MCP tools/list budget raised to 4,000 estimated tokens for relations on all write tools and `spoor_get` depth (Proposed, 2026-10-21)

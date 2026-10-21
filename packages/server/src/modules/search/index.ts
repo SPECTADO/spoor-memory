@@ -28,6 +28,7 @@ export {
   FRAMING_LINE,
   formatDigestLine,
   itemTag,
+  truncateTitle,
 } from './digest.js'
 export { formatSearchLine, formatSearchResults, loadItemSummaries } from './format.js'
 export {
@@ -43,6 +44,7 @@ export { LOCAL_TAG, LocalE5Provider } from './providers/local.js'
 export { createEmbeddingRegistry, ProviderRegistry, providerForSettings } from './providers/registry.js'
 export { OpenAIProvider, VoyageProvider } from './providers/remote.js'
 export { buildTsQuery, RRF_K, rrfFuse } from './query.js'
+export { RELATED_KNN, RELATED_KNN_PER_RESULT, RELATED_PROBE_MAX, relatedKnn } from './related.js'
 export { contextQuery, searchQuery } from './routes.js'
 export {
   firstDuplicate,

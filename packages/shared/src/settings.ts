@@ -18,6 +18,8 @@ const fields = {
   },
   dedupe: {
     threshold: z.number().min(0.8).max(0.99),
+    /** Minimum cosine of a related-item suggestion; read through `relatedMinCos` (kept below `threshold`). */
+    related_min_cos: z.number().min(0.5).max(0.9),
   },
   embedding: {
     /** A provider name enabled by env (`local` always); the server checks it against its registry. */
@@ -32,7 +34,7 @@ const fields = {
 export const SETTINGS_DEFAULTS = {
   cleanup: { stale_days: 30, archive_days: 90, observation_days: 7 },
   digest: { default_budget: 1500, decision_window_days: 30 },
-  dedupe: { threshold: 0.92 },
+  dedupe: { threshold: 0.92, related_min_cos: 0.7 },
   embedding: { provider: 'local' },
   memory: { exclusive: true },
 } as const
@@ -55,7 +57,12 @@ export const projectSettings = z.strictObject({
       decision_window_days: f.digest.decision_window_days.default(d.digest.decision_window_days),
     })
     .prefault({}),
-  dedupe: z.strictObject({ threshold: f.dedupe.threshold.default(d.dedupe.threshold) }).prefault({}),
+  dedupe: z
+    .strictObject({
+      threshold: f.dedupe.threshold.default(d.dedupe.threshold),
+      related_min_cos: f.dedupe.related_min_cos.default(d.dedupe.related_min_cos),
+    })
+    .prefault({}),
   embedding: z.strictObject({ provider: f.embedding.provider.default(d.embedding.provider) }).prefault({}),
   memory: z.strictObject({ exclusive: f.memory.exclusive.default(d.memory.exclusive) }).prefault({}),
 })
@@ -76,11 +83,25 @@ export const projectSettingsPatch = z.strictObject({
       decision_window_days: f.digest.decision_window_days.optional(),
     })
     .optional(),
-  dedupe: z.strictObject({ threshold: f.dedupe.threshold.optional() }).optional(),
+  dedupe: z
+    .strictObject({
+      threshold: f.dedupe.threshold.optional(),
+      related_min_cos: f.dedupe.related_min_cos.optional(),
+    })
+    .optional(),
   embedding: z.strictObject({ provider: f.embedding.provider.optional() }).optional(),
   memory: z.strictObject({ exclusive: f.memory.exclusive.optional() }).optional(),
 })
 export type ProjectSettingsPatch = z.infer<typeof projectSettingsPatch>
+
+/**
+ * The cosine floor related-item suggestions use: `dedupe.related_min_cos`, clamped to 0.01 below the duplicate
+ * threshold so a suggestion is never a near-duplicate's score band.
+ */
+export function relatedMinCos(settings: Pick<ProjectSettings, 'dedupe'>): number {
+  const { threshold, related_min_cos } = settings.dedupe
+  return Math.min(related_min_cos, Math.round((threshold - 0.01) * 100) / 100)
+}
 
 type StoredSettings = Record<string, Record<string, unknown>>
 

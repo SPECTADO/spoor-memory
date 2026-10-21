@@ -81,6 +81,13 @@ const GROUPS: {
         step: '0.01',
         range: [0.8, 0.99],
       },
+      {
+        key: 'related_min_cos',
+        label: 'Related items minimum similarity',
+        hint: 'Suggestions below this cosine are hidden; always kept below the duplicate threshold. 0.50 to 0.90.',
+        step: '0.01',
+        range: [0.5, 0.9],
+      },
     ],
   },
 ]
@@ -245,6 +252,8 @@ function NumbersForm({ project, spec }: { project: ProjectJson; spec: (typeof GR
           label={f.label}
           type="number"
           step={f.step ?? '1'}
+          min={f.range[0]}
+          max={f.range[1]}
           inputMode="decimal"
           value={values[f.key]}
           onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}

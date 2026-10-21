@@ -6,6 +6,7 @@
 import type {
   AuditFilters,
   ContextParams,
+  GraphParams,
   InviteFilters,
   ItemListFilters,
   RequestFilters,
@@ -46,6 +47,10 @@ export const qk = {
   revisions: (slug: string, ref?: string) =>
     ref === undefined ? (['revisions', slug] as const) : (['revisions', slug, ref] as const),
   revision: (slug: string, ref: string, n: number) => ['revision', slug, ref, n] as const,
+  graph: (slug: string, params?: GraphParams) =>
+    params ? (['graph', slug, params] as const) : (['graph', slug] as const),
+  related: (slug: string, ref?: string, limit?: number) =>
+    ref === undefined ? (['related', slug] as const) : (['related', slug, ref, limit ?? null] as const),
   resolve: (slug: string, ref: string, from?: string) => ['resolve', slug, ref, from ?? null] as const,
   search: (slug: string, params?: SearchParams) =>
     params ? (['search', slug, params] as const) : (['search', slug] as const),

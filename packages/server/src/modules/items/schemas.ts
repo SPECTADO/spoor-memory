@@ -5,7 +5,18 @@
  * NOTE: the design puts these in `packages/shared/src/api/` so the SPA and the CLI share them; they live
  * here until they move, because this module may not write outside its folder.
  */
-import { adrStatuses, confidences, ITEM_LIMITS, memoryTypes, relationKinds, spaces } from '@spoor/shared'
+import {
+  adrStatuses,
+  confidences,
+  EDGE_KINDS,
+  GRAPH_LIFECYCLES,
+  type GraphQuery,
+  ITEM_LIMITS,
+  memoryTypes,
+  RELATED_LIMIT,
+  relationKinds,
+  spaces,
+} from '@spoor/shared'
 import { z } from 'zod'
 import { paginationQuery } from '../../lib/pagination.js'
 
@@ -126,6 +137,44 @@ export const listQuery = z.strictObject({
   ...paginationQuery,
 })
 export type ListQuery = z.infer<typeof listQuery>
+
+/**
+ * `GET …/graph`: comma-separated lists (each value at most once is not enforced; duplicates are harmless).
+ * `depth` only with `focus`, `unlinked=true` only without it (400 `invalid_input` otherwise).
+ */
+export const graphQuery = z
+  .strictObject({
+    spaces: csv(spaces).default([...spaces]),
+    kinds: csv(EDGE_KINDS).default([...EDGE_KINDS]),
+    lifecycle: csv(GRAPH_LIFECYCLES).default(['active', 'stale']),
+    include_superseded: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    unlinked: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    focus: ref.optional(),
+    depth: z
+      .enum(['1', '2'])
+      .transform((v) => (v === '1' ? 1 : 2) as 1 | 2)
+      .optional(),
+  })
+  .refine((q) => q.depth === undefined || q.focus !== undefined, {
+    message: 'depth needs focus',
+    path: ['depth'],
+  })
+  .refine((q) => !q.unlinked || q.focus === undefined, {
+    message: 'unlinked is not allowed with focus',
+    path: ['unlinked'],
+  })
+  .transform((q): GraphQuery => ({ ...q, depth: q.depth ?? 2 }))
+
+/** `GET …/items/:ref/related?limit=` (default 5, max 20). */
+export const relatedQuery = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(RELATED_LIMIT.max).default(RELATED_LIMIT.default),
+})
 
 export const revisionsQuery = z.strictObject({ ...paginationQuery })
 /** `from`: the space of the item the link is written in; it only sets the slug precedence (default docs). */

@@ -25,9 +25,11 @@ const services = { logger: pino({ level: 'silent' }) } as unknown as McpServices
  * mcp.md section 5: a regression ceiling for the writer tools/list. Raised from 1,200 to 2,200 (deviations.md H2,
  * ADR 0010) and then re-expressed in the recalibrated estimator (review-log-phase5 A2: 1/2.2 per Latin code point):
  * the same 7,5xx characters now estimate at about 3,420 and measured 3,307 real Claude tokens. Growth beyond the
- * ceiling needs a decision, not a bigger number.
+ * ceiling needs a decision, not a bigger number. Raised to 4,000 by the owner's decision of 2026-10-21 (graph and
+ * link suggestions, ADR-0022): `relations` on spoor_decide and spoor_doc_write, the shared relations text on all
+ * three write tools and spoor_get `depth` took it from 3,440 to about 3,930.
  */
-const TOOLS_LIST_BUDGET = 3500
+const TOOLS_LIST_BUDGET = 4000
 
 async function listTools(role: 'viewer' | 'editor' | 'admin') {
   const server = buildMcpServer(services, role)
@@ -88,7 +90,21 @@ describe('tools/list', () => {
     })
     expect(props('spoor_remember').tags).toMatchObject({ maxItems: 20, items: { maxLength: 40 } })
     expect(props('spoor_remember').anchors).toMatchObject({ maxItems: 20, items: { maxLength: 256 } })
-    expect(props('spoor_remember').relations).toMatchObject({ maxItems: 10 })
+    const relationsText =
+      'links to add: refines = narrows or details, supports = evidence for, depends_on = requires, conflicts_with = contradicts (symmetric)'
+    for (const n of ['spoor_remember', 'spoor_decide', 'spoor_doc_write']) {
+      expect(props(n).relations, n).toMatchObject({ maxItems: 10, description: relationsText })
+      expect(props(n).relations?.items, n).toMatchObject({
+        properties: { kind: { enum: ['refines', 'supports', 'depends_on', 'conflicts_with'] } },
+      })
+    }
+    expect(props('spoor_get').depth).toMatchObject({
+      type: 'integer',
+      minimum: 0,
+      maximum: 2,
+      default: 0,
+      description: 'neighbourhood hops to append as a graph: block (0-2, default 0)',
+    })
     expect(props('spoor_doc_write').body).toMatchObject({ maxLength: 200000 })
     expect(props('spoor_verify').ids).toMatchObject({ minItems: 1, maxItems: 20 })
     expect(props('spoor_relate').kind).toMatchObject({
@@ -119,6 +135,9 @@ describe('instructions', () => {
     )
     expect(READ_ONLY_INSTRUCTIONS).not.toBe(INSTRUCTIONS)
     expect(READ_ONLY_INSTRUCTIONS).toContain('L = library')
+    // the linking sentence (2026-10-21) belongs to the recording sentence: a read-only session gets neither
+    expect(INSTRUCTIONS).toContain('link them to related items (relations, or spoor_relate).')
+    expect(READ_ONLY_INSTRUCTIONS).not.toContain('spoor_relate')
     console.info(`instructions: ${estimateTokens(INSTRUCTIONS)} estimated tokens`)
   })
 

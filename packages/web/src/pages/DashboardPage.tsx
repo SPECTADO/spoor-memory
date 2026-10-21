@@ -9,7 +9,7 @@ import { useDashboard, useInstance, useProject } from '../api/hooks'
 import type { DashboardJson, LastRequestJson, Space } from '../api/types'
 import { useCan } from '../components/RequireRole'
 import { fromNow } from '../lib/format'
-import { isShared, itemPath, projectPath, useProjectSlug } from '../lib/paths'
+import { graphPath, isShared, itemPath, projectPath, useProjectSlug } from '../lib/paths'
 import {
   Badge,
   type BadgeTone,
@@ -87,7 +87,7 @@ export function DashboardPage() {
         <ErrorState error={dash.error} onRetry={() => dash.refetch()} />
       ) : (
         <div className="space-y-8">
-          <Counts slug={slug} counts={dash.data.counts} />
+          <Counts slug={slug} counts={dash.data.counts} links={dash.data.links} />
           <div className="grid gap-8 lg:grid-cols-[1fr_20rem]">
             <Recent slug={slug} recent={dash.data.recent} />
             <div className="space-y-8">
@@ -108,7 +108,15 @@ export function DashboardPage() {
   )
 }
 
-function Counts({ slug, counts }: { slug: string; counts: DashboardJson['counts'] }) {
+function Counts({
+  slug,
+  counts,
+  links,
+}: {
+  slug: string
+  counts: DashboardJson['counts']
+  links?: DashboardJson['links']
+}) {
   return (
     <section aria-labelledby="counts-h">
       <h2 id="counts-h" className="sr-only">
@@ -134,6 +142,21 @@ function Counts({ slug, counts }: { slug: string; counts: DashboardJson['counts'
           )
         })}
       </ul>
+      {links && (links.unlinked_items > 0 || links.dangling_refs > 0) && (
+        <p className="mt-3 text-sm text-muted">
+          {links.unlinked_items > 0 && (
+            <Link to={graphPath(slug, { unlinked: true })} className="text-accent hover:underline">
+              {links.unlinked_items} {links.unlinked_items === 1 ? 'item' : 'items'} without links
+            </Link>
+          )}
+          {links.unlinked_items > 0 && links.dangling_refs > 0 && ' · '}
+          {links.dangling_refs > 0 && (
+            <Link to={graphPath(slug)} className="text-accent hover:underline">
+              {links.dangling_refs} dangling {links.dangling_refs === 1 ? 'reference' : 'references'}
+            </Link>
+          )}
+        </p>
+      )}
     </section>
   )
 }

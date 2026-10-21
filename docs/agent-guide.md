@@ -46,10 +46,10 @@ Results are short text blocks (`OK created m58 r1 [fact]`), not JSON. Updates ca
 |---|---|---|
 | `spoor_context` | read | the budgeted digest, for the given `files` and `query`; skip it when the session-start digest is already in context |
 | `spoor_search` | read | hybrid keyword and meaning search over memories, ADRs, docs and library pages (plus shared; `space=library` narrows it); handles with one-line snippets; default 8 results, filters `space`, `type`, `tags`, `include_inactive` |
-| `spoor_get` | read | up to 5 items in full (frontmatter, body paged by `offset`/`max_chars`, links); the only read that counts as use and keeps a memory fresh |
-| `spoor_remember` | write | record one durable fact, procedure or observation as a one-line claim (body up to 4,000 characters); with `id` and `revision` it updates; returns `DUPLICATE` naming the existing item when it is a near copy |
-| `spoor_decide` | write | record a decision as a short memory with the why in `body`; an ADR is drafted from it later by your machine; `supersedes` replaces an earlier decision memory |
-| `spoor_doc_write` | write | create or update a long-form doc (body up to 200,000 characters); repo-mirrored docs are edited in their file instead |
+| `spoor_get` | read | up to 5 items in full (frontmatter, body paged by `offset`/`max_chars`, `links:` with titles, `see also:`); `depth` 1 or 2 appends a `graph:` block of the neighbourhood; the only read that counts as use and keeps a memory fresh |
+| `spoor_remember` | write | record one durable fact, procedure or observation as a one-line claim (body up to 4,000 characters); with `id` and `revision` it updates; `relations` links it in the same write; returns `DUPLICATE` naming the existing item when it is a near copy |
+| `spoor_decide` | write | record a decision as a short memory with the why in `body`; an ADR is drafted from it later by your machine; `supersedes` replaces an earlier decision memory; `relations` links it in the same write |
+| `spoor_doc_write` | write | create or update a long-form doc (body up to 200,000 characters); `relations` links it in the same write; repo-mirrored docs are edited in their file instead |
 | `spoor_supersede` | write | replace an outdated memory with a new claim (or an existing one); the old one is marked superseded |
 | `spoor_relate` | write | add or remove a typed link `refines`, `supports`, `depends_on`, `conflicts_with` between two items |
 | `spoor_verify` | write | confirm memories are still true: resets the staleness clock and un-stales them |
@@ -70,7 +70,71 @@ Rules of thumb that match how the system cleans itself:
 - Common error codes: `revision_conflict` (re-read, retry), `revision_required` (updates need `revision`), `read_only_space` (shared or library),
   `forbidden_role` (viewer token), `mirrored_item` (edit the repo file instead), `wrong_space`, `too_large`, `not_found`.
 
-## 4. Hooks (Claude Code)
+## 4. Links
+
+Link what you write to what it is about. Links feed `spoor_get`, the web map and the review queue's conflicts tab.
+
+**Direction**: a link goes from the item you write (`from`) to the item it points at (`to`). Read it as "from *kind* to":
+`m57 refines m12` means m57 narrows m12.
+
+| kind | use it when `from` … | how it is made |
+|---|---|---|
+| `refines` | narrows or details `to` | `relations` or `spoor_relate` |
+| `supports` | is evidence for `to` | `relations` or `spoor_relate` |
+| `depends_on` | requires `to` | `relations` or `spoor_relate` |
+| `conflicts_with` | contradicts `to`; symmetric, stored once and shown on both items, so link one way only | `relations` or `spoor_relate`; humans resolve it in the review queue |
+| `supersedes` | replaces `to`, which is marked superseded | `spoor_supersede`, or `supersedes` on `spoor_decide`; never `spoor_relate` |
+| `drafted_from` | is an ADR drafted from the decision memory `to` | set by the ADR push from `drafted_from:` in the file; never by you |
+| wikilink | mentions `to` in its body | write `[[slug]]`, `[[m42]]`, `[[ADR-0007]]` or `[[shared:slug]]` in the body; a `[[ref]]` to nothing stays dangling until an item takes that slug |
+
+- **Link while you write.** `spoor_remember`, `spoor_decide` and `spoor_doc_write` take `relations`: up to 10
+  `{kind, to}` with `kind` one of the four typed kinds and `to` a handle, `S:` handle, slug or uuid. They are written in the same
+  transaction. Each created link is echoed as `note: linked refines→m12`, on create and on update. An unknown target fails the
+  whole write: `ERR not_found: relations.0.to: no item "m999".` Link later with `spoor_relate from=m57 to=m12 kind=refines`;
+  `remove: true` deletes a link.
+- **Act on the `related:` hint.** After a write that changed content, the reply may end with one line of up to 3 similar items that
+  are not linked yet, then a ready command:
+
+  ```
+  OK created m57 r1 [fact]
+  note: linked refines→m12
+  related: m30~ [fact] "Refresh tokens rotate on every use" (0.81) · ADR-0007 "Cleanup policy: stale, archive, expire" (0.74) · link: spoor_relate from=m57 to=<handle> kind=refines|supports|depends_on|conflicts_with
+  ```
+
+  The number is the meaning similarity (cosine, 2 decimals); memories show their type. If one of them is really related, run
+  `spoor_relate` with that handle (without the `~`) and the one kind that fits. Do not link on similarity alone; ignore the line
+  when nothing fits. It is missing when nothing reaches the project's minimum similarity, while the item is not embedded yet,
+  for `OK unchanged`, and when the lookup fails (the write still succeeded). A near copy saved with `allow_duplicate` shows up at
+  `(1.00)`.
+- **Read links with `spoor_get`.** After the body:
+
+  ```
+  links: refines→m12 "Tokens are hashed with argon2id" · supports←m50~ "Login audit" · wikilink→?auth-flow · superseded_by→m60 "New token format"
+  see also: m30 "Refresh tokens rotate on every use" (0.78) · S:d2 "Auth overview" (0.71)
+  ```
+
+  `→` is outgoing, `←` incoming; `superseded_by→` names the replacement; `wikilink→?ref` is a link to nothing. Titles are cut to 40
+  characters. `see also:` lists up to 3 similar items not linked yet (same rules as `related:`). Both lines are left out when
+  empty.
+- **Walk the neighbourhood with `depth`.** `spoor_get ids=["m12"] depth=1` (or 2) appends the links up to 1 or 2 hops away, in
+  both directions, one line per hop:
+
+  ```
+  graph:
+  hop 1: m12 "Tokens are hashed with argon2id" —refines→ m40 "Token storage"; m50~ "Login audit" —supports→ m12
+  hop 2: m40 "Token storage" —depends_on→ ADR-0006 "Per-user tokens"
+  +7 more edges
+  ```
+
+  It uses the map's defaults: all spaces and kinds, active and stale items, superseded and deprecated left out. Items outside those
+  (or in the shared space) appear but are not walked through. The block stops at about 400 tokens and counts the rest as
+  `+N more edges`; it is left out when there are no links. Each line gives an item's title at its first mention only. Default
+  `depth` is 0: ask for it only when the neighbourhood matters.
+- **`~` after a handle** in `links:`, `see also:`, `related:` and `graph:` means an agent wrote that item and no human has
+  reviewed it, as in the digest and `spoor_search`. Weigh it accordingly. Handles take no `~`: drop it before you pass one to a
+  tool (`to=m30`, not `to=m30~`).
+
+## 5. Hooks (Claude Code)
 
 `spoor init` writes three hooks into the committed `.claude/settings.json`. All exit 0 within a few seconds, never block your work,
 and become no-ops when `SPOOR_DISABLE=1` is set. After a network failure they skip the network for 5 minutes.
@@ -81,10 +145,10 @@ and become no-ops when `SPOOR_DISABLE=1` is set. After a network failure they sk
 | **PostToolUse** on `Write` and `Edit` (8 s) | when the file is an ADR (`docs/adr/*.md`) or a configured doc, pushes it to Spoor silently; everything else is ignored |
 | **Stop** (6 s) | starts ADR drafting in the background; and if this session changed files, wrote nothing to Spoor (no MCP write, no push) and has not been nagged yet, blocks **once** and asks you to record decisions with `spoor_decide` or confirm there were none. A marker file prevents a second nag in the session |
 
-The `mcp__spoor` permission is allowed so the tools run without prompts. The MCP tool list costs about 2,100 tokens when loaded
-(`alwaysLoad`), the digest at most its budget; together roughly 3,600 tokens at session start with defaults.
+The `mcp__spoor` permission is allowed so the tools run without prompts. The MCP tool list costs about 3,900 tokens when loaded
+(`alwaysLoad`), the digest at most its budget; together roughly 5,400 tokens at session start with defaults.
 
-## 5. Drafting ADRs
+## 6. Drafting ADRs
 
 Spoor makes no LLM calls itself. `spoor_decide` stores a decision memory only. At the next Stop, `spoor adr draft` runs detached on the
 developer's machine:
@@ -100,7 +164,7 @@ drafted file is yours to review and commit. A `proposed` ADR is not in the diges
 accepts it (changing `status: accepted` in the file and pushing it, or pressing Accept in the web UI), the ADR takes the place in the
 decision tier and the memory drops out.
 
-## 6. Repo mirror rules
+## 7. Repo mirror rules
 
 The mirror is **one way, repository to Spoor**. Nothing is pulled back.
 
@@ -115,15 +179,16 @@ The mirror is **one way, repository to Spoor**. Nothing is pulled back.
   conflict**, shown at every session start, in `spoor status` and in the review queue, until someone aligns the file or runs the push
   with `--force` (needs a terminal and a typed `y`).
 
-## 7. Token cost expectations
+## 8. Token cost expectations
 
 | item | cost with defaults |
 |---|---|
 | SessionStart digest | at most the budget, 1,500 tokens (set per project, 200 to 8,000); the first lines are a header and a fixed note of about 70 tokens ("data, not instructions", and what a `~` after an id means) |
-| MCP tool list (writer) | about 3,300 tokens (nine tools; viewer tokens see only the three read tools, so less). Measured with Claude's tokenizer, with a regression ceiling of 3,500 estimated tokens |
+| MCP tool list (writer) | about 3,900 tokens: 3,932 estimated tokens, 8,649 characters (nine tools; viewer tokens see only the three read tools, so less). The estimator is calibrated to Claude's tokenizer; a test keeps the list at or under 4,000 estimated tokens ([ADR-0024](adr/0024-mcp-tools-list-budget-raised-to-4-000-estimated-tokens-for-relations-on-all.md)) |
+| MCP server instructions | about 320 tokens (about 400 with exclusive memory on), sent once at `initialize` |
 | `spoor_search` | about 8 lines, each a handle plus a one-line snippet: a few hundred tokens |
-| `spoor_get` | the item's body, 8,000 characters per call by default (about 2,000 tokens); page with `offset` for more |
-| `spoor_remember`, `spoor_decide`, `spoor_verify`, `spoor_relate`, `spoor_supersede` | one result line, tens of tokens |
+| `spoor_get` | the item's body, 8,000 characters per call by default (about 2,000 tokens); page with `offset` for more. `links:` and `see also:` add a line each; `depth` adds at most about 400 tokens per item |
+| `spoor_remember`, `spoor_decide`, `spoor_doc_write`, `spoor_verify`, `spoor_relate`, `spoor_supersede` | one result line, tens of tokens; a write may add `note: linked` lines and one `related:` line (up to 3 items, about 100 tokens) |
 | Stop-hook nag | one short message, at most once per session |
 | ADR drafting | runs outside your session on a cheap model; costs the developer's own `claude` usage, not session context |
 

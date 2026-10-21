@@ -7,8 +7,11 @@ import { apiError, mockApi } from '../test/utils'
 import {
   flattenPages,
   revisionConflict,
+  useAddEdge,
+  useGraph,
   useItemAction,
   usePatchItem,
+  useRelated,
   useReviewBulk,
   useReviewSection,
 } from './hooks'
@@ -81,5 +84,46 @@ describe('item writes', () => {
     await waitFor(() => expect(result.current.isError).toBe(true))
     expect(revisionConflict(result.current.error)).toEqual({ current_revision: 7, current })
     expect(revisionConflict(new Error('x'))).toBeNull()
+  })
+})
+
+describe('graph and related', () => {
+  const graph = {
+    nodes: [],
+    edges: [],
+    meta: { truncated: false, node_cap: 1500, total_nodes: 0, unlinked_count: 0, dangling_count: 0 },
+  }
+
+  it('useGraph sends lists comma-separated and depth only with focus', async () => {
+    const { calls } = mockApi({ 'GET /api/v1/projects/acme/graph': [200, graph] })
+    const { wrapper } = setup()
+    const { result } = renderHook(
+      () => useGraph('acme', { kinds: ['refines', 'wikilink'], include_superseded: true, depth: 1 }),
+      { wrapper },
+    )
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const q = calls[0]?.url.searchParams
+    expect(q?.get('kinds')).toBe('refines,wikilink')
+    expect(q?.get('include_superseded')).toBe('true')
+    expect(q?.has('depth')).toBe(false)
+  })
+
+  it('useRelated waits for a ref; linking refreshes the map and the suggestions', async () => {
+    const { calls } = mockApi({
+      'GET /api/v1/projects/acme/items/m1/related': [200, { items: [] }],
+      'POST /api/v1/projects/acme/items/m1/edges': [201, { edge: {} }],
+    })
+    const { qc, wrapper } = setup()
+    const idle = renderHook(() => useRelated('acme', undefined), { wrapper })
+    expect(idle.result.current.fetchStatus).toBe('idle')
+    const { result } = renderHook(() => ({ related: useRelated('acme', 'm1', 3), add: useAddEdge('acme') }), {
+      wrapper,
+    })
+    await waitFor(() => expect(result.current.related.isSuccess).toBe(true))
+    expect(calls[0]?.url.searchParams.get('limit')).toBe('3')
+    qc.setQueryData(qk.graph('acme', {}), graph)
+    act(() => result.current.add.mutate({ ref: 'm1', kind: 'refines', to: 'm2' }))
+    await waitFor(() => expect(qc.getQueryState(qk.graph('acme', {}))?.isInvalidated).toBe(true))
+    await waitFor(() => expect(calls.filter((c) => c.path.endsWith('/related'))).toHaveLength(2))
   })
 })

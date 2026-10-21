@@ -192,9 +192,9 @@ Only pending, unexpired codes can be looked up, approved or denied. Every 404 of
 | GET | `/api/v1/projects` | any | | 200 `{items:[{slug,name,description,role,counts:{memories,decisions,docs,library}, review_total}]}`. Members only; IA sees all. Not paginated. `counts` are items that are not archived; `review_total` is the sum of the review sections of [cleanup-and-jobs.md](cleanup-and-jobs.md) §6 (stale, archived in the last 30 days, observations expiring within 48 h, open conflicts, push conflicts); library pages are never counted in it |
 | POST | `/api/v1/projects` | IA | `{slug, name, description?, settings?}` | 201 project. 409 `slug_taken`. Slug rules in [data-model.md](data-model.md) §6. `settings` is a partial object as in PATCH; without `embedding.provider` the instance default provider is stored. Audited as the instance-level `project.create`. The creator gets no membership (an IA is project admin everywhere) |
 | GET | `/api/v1/projects/:slug` | member; any for `_shared` | | 200 `{id, slug, name, description, kind, settings, role, can_edit_library, embedding:{model, target, remaining}, created_at}`. `can_edit_library` is the server's answer to `can('library.write')` (IA, PA, a member with the flag; on `_shared` IA and SE); the SPA gates every library control on it and never recomputes it. `settings` has every default filled in. `role` is the effective role (`admin` for IA); on `_shared` it is `admin` for IA, `editor` for SE and `viewer` for everyone else, for the SPA's role gates. `remaining` is the count of items without target chunks while a re-embed runs |
-| PATCH | `/api/v1/projects/:slug` | PA, IA (`_shared`: IA) | `{name?, description?, settings?}` | 200 project. `settings` is a partial object deep-merged and validated ([data-model.md](data-model.md) §2.1); issues are reported under `settings.…`. Changing `embedding.provider` sets `embedding_target` (response `embedding.target`) and nudges the `reembed` job; choosing the active model's provider again clears it; a provider not enabled on the instance is 400. The slug is immutable (sending it is 400). Audited as `project.update` (`data.fields`) and `project.settings` (`data.changed`, the patch) |
+| PATCH | `/api/v1/projects/:slug` | PA, IA (`_shared`: IA) | `{name?, description?, settings?}` | 200 project. `settings` is a partial object deep-merged and validated ([data-model.md](data-model.md) §2.1); issues are reported under `settings.…`. Changing `embedding.provider` sets `embedding_target` (response `embedding.target`) and nudges the `reembed` job; choosing the active model's provider again clears it; a provider not enabled on the instance is 400. `dedupe.related_min_cos` (0.50–0.90) is accepted even at or above `dedupe.threshold`; reads clamp it below the threshold (§5.7). The slug is immutable (sending it is 400). Audited as `project.update` (`data.fields`) and `project.settings` (`data.changed`, the patch) |
 | DELETE | `/api/v1/projects/:slug` | IA | `?confirm=<slug>` | 204. The shared project cannot be deleted (403 `forbidden`). One purge transaction: everything of the project cascades and its audit rows are removed with it; an instance-level `project.delete` row remains ([data-model.md](data-model.md) §4) |
-| GET | `/api/v1/projects/:slug/dashboard` | member; any for `_shared` | | 200 `{counts:{memories:{active,stale,archived},decisions:{…},docs:{…},library:{…}}, review:{stale,archived,expiring,conflicts,push_conflicts}, recent:[{item:ItemSummary, change, actor:Actor, at}], last_requests:{read, write}}` (`DashboardResponse` in `@spoor/shared`). `counts`: items per lifecycle, archived included (`library` is only ever active or archived). `review`: the same numbers as `GET …/review` (all five sections, cleanup-and-jobs.md §6). `recent`: the last 15 content or lifecycle changes of items that still exist, newest first, read from the audit log; `change` is `create`, `update`, `supersede` (this item became superseded), `push`, `stale`, `archive`, `expire` or `restore` (verify and pin are not listed); `item` is the item as it is now. `last_requests`: the newest agent read and write of the request log (§10.3), each `{at, surface, operation, actor:{label, client_name}}` or null; any member sees them (ADR-0018) |
+| GET | `/api/v1/projects/:slug/dashboard` | member; any for `_shared` | | 200 `{counts:{memories:{active,stale,archived},decisions:{…},docs:{…},library:{…}}, review:{stale,archived,expiring,conflicts,push_conflicts}, recent:[{item:ItemSummary, change, actor:Actor, at}], last_requests:{read, write}}` (`DashboardResponse` in `@spoor/shared`). `counts`: items per lifecycle, archived included (`library` is only ever active or archived). `review`: the same numbers as `GET …/review` (all five sections, cleanup-and-jobs.md §6). `recent`: the last 15 content or lifecycle changes of items that still exist, newest first, read from the audit log; `change` is `create`, `update`, `supersede` (this item became superseded), `push`, `stale`, `archive`, `expire` or `restore` (verify and pin are not listed); `item` is the item as it is now. `last_requests`: the newest agent read and write of the request log (§10.3), each `{at, surface, operation, actor:{label, client_name}}` or null; any member sees them (ADR-0018). `links:{unlinked_items, dangling_refs}` (link health, ADR-0021): `unlinked_items` = items of the project that are `active` or `stale`, not `superseded` or `deprecated`, with no edge of any kind in either direction (a dangling outgoing wikilink counts as a link); `dangling_refs` = distinct `dst_ref` of dangling wikilinks written in such items. On `_shared`, incoming edges from every project count, whatever the viewer's memberships (deviations.md M3); for a regular project the numbers equal the default map's `meta.unlinked_count` and `meta.dangling_count` (§5.6) |
 | GET | `/api/v1/projects/:slug/context` | member; any for `_shared` | same query as §7.1 | the digest, so admins can preview what agents get (cookie twin of the bearer endpoint) |
 
 ### 4.2 Memberships
@@ -294,6 +294,120 @@ old snapshot into the editor and saves it as a new revision with `PATCH`.
 | POST | `/items/:ref/edges` | E | `{kind: refines|supports|depends_on|conflicts_with, to: ref|"S:handle"}` → 201 `{edge}`; idempotent (200 when it exists). `to` in `_shared` only from a project item, never the reverse (403 `read_only_space`). An edge whose source is a library page needs `library.write` (else `read_only_space`) and may point at any item except `conflicts_with` to a non-library item; a project item may point at a library page with `refines`, `supports` or `depends_on`, but `conflicts_with` to one is 400 `wrong_space`. Removing an edge whose source is a library page needs `library.write` |
 | DELETE | `/edges/:id` | E | 204. Only the four typed kinds; `supersedes`, `drafted_from` and `wikilink` edges return 409 `edge_not_editable` |
 | GET | `/resolve?ref=<text>&from=<space>` | V | resolves wikilink text exactly as stored edges do (`from` is the space of the page the link sits in, default `docs`; for a library source it only sets the rank, it never refuses): canonicalised ([data-model.md](data-model.md) §0: `ADR-0007` → `adr-7`, handles, slug; `shared:` prefix) and the same precedence → 200 `{item:ItemSummary}` or 404. Backs the SPA's `/projects/:slug/w/:ref` route |
+
+### 5.6 Project graph (ADR-0021)
+
+`GET /api/v1/projects/:slug/graph`, role `V` (`any` for `_shared`; the SPA's `/shared/graph` calls it with slug `_shared`).
+Cookie only; MCP `spoor_get` with `depth` uses the same focus walk ([mcp.md](mcp.md) §5). Items are nodes, rows of `edges`
+are edges. Implementation: `modules/items/graph.ts`; query schema `graphQuery` in `modules/items/schemas.ts`; types in
+`@spoor/shared` (`GraphQuery`, `GraphResponse`, `GRAPH_NODE_CAP`).
+
+| param | form | default | notes |
+|---|---|---|---|
+| `spaces` | csv of `memories,decisions,docs,library` | all four | |
+| `kinds` | csv of the seven edge kinds (`refines,supports,depends_on,conflicts_with,supersedes,drafted_from,wikilink`) | all seven | only these kinds count anywhere below (walk, degree, unlinked, dangling) |
+| `lifecycle` | csv of `active,stale,archived` | `active,stale` | |
+| `include_superseded` | `true` \| `false` | `false` | `false` hides status `superseded` and `deprecated` |
+| `unlinked` | `true` \| `false` | `false` | whole project only: just the core items without links (below) |
+| `focus` | item ref (handle, `S:` handle, slug, uuid), ≤ 200 chars | none | neighbourhood mode, resolved like `:ref` of `GET …/items/:ref` |
+| `depth` | `1` \| `2` | `2` | hops from `focus`; only together with `focus` |
+
+Unknown params, an empty or unknown csv value, any other boolean spelling, `depth` without `focus` and `unlinked=true`
+together with `focus` are 400 `invalid_input`. An unknown project or a non-member is
+404 `not_found`, a `focus` that does not resolve 404 `not_found`, an ambiguous one 409 `ambiguous_id`.
+
+Response 200 (`GraphResponse`):
+```json
+{ "nodes": [
+    { "id": "6c1e…", "handle": "m12", "project": "acme", "space": "memories", "title": "Tokens are hashed with argon2id",
+      "type": "fact", "status": "active", "lifecycle": "active", "confidence": "high", "pinned": true,
+      "provenance": "agent", "tags": ["auth"], "updated_at": "…", "last_verified_at": "…",
+      "degree_in": 1, "degree_out": 2, "ghost": false },
+    { "id": "f00d…", "handle": "S:L3", "project": "_shared", "space": "library", "title": "Security baseline", "…": "…",
+      "degree_in": 1, "degree_out": 0, "ghost": true } ],
+  "edges": [
+    { "id": "e2…", "kind": "wikilink", "src": "6c1e…", "dst": "f00d…", "editable": false },
+    { "id": "e3…", "kind": "wikilink", "src": "6c1e…", "dst": null, "dst_ref": "auth-flow", "editable": false } ],
+  "meta": { "truncated": false, "node_cap": 1500, "total_nodes": 2, "unlinked_count": 0, "dangling_count": 1 } }
+```
+- A node is a subset of `ItemSummary` (`id, handle, project, space, title, type, status, lifecycle, confidence, pinned,
+  provenance, tags, updated_at, last_verified_at`) plus `degree_in`, `degree_out` and `ghost`. Handles are relative to the
+  viewed project as in §0.6: a shared item seen from a project is `S:…` with `project: "_shared"`, a project item seen from
+  `_shared` keeps its plain handle and its own project slug. The handle carries no `~`; `provenance` says it.
+- An edge is `{id, kind, src, dst, dst_ref?, editable}`: `src` and `dst` are node ids; `dst` is `null` for a dangling
+  wikilink, which then carries `dst_ref` (and only then). `editable` is true for the four typed kinds. Dangling targets are
+  not nodes; the SPA draws one hollow node per distinct `dst_ref`.
+
+Semantics:
+1. **Filter** F(item): the item is in the viewed project, its space is in `spaces`, its lifecycle in `lifecycle`, and
+   `include_superseded` is true or its status is neither `superseded` nor `deprecated`.
+2. **Visible edges** (the rules of `GET …/items/:ref/edges`, §5.5), of the selected `kinds` only. A regular project sees the
+   edges stored in it (its items' outgoing links into the project, into `_shared`, or dangling) and the edges stored in
+   `_shared` (between two shared items). `_shared` sees its own edges and the edges from project items into `_shared`, the
+   latter only from the viewer's member projects (an instance admin sees all).
+3. **Whole project** (no `focus`): core nodes are the items with F. Kept edges are visible edges with at least one core end (a
+   dangling one: a core source). **Ghost** nodes are the non-core other ends: items of another project (a shared item seen from a
+   project, a project item seen from `_shared`) or items of the project outside the filters. `_shared`'s own edges have no
+   core end in a project view, so they never appear there.
+4. **Focus** (`focus`, `depth`): a breadth-first walk over visible edges in both directions, up to `depth` hops. A reached
+   item with F is core and is expanded further; any other reached item is a ghost and is not walked through. The focus item
+   is always core, even when it fails F. Kept edges are the visible edges between two walked nodes with at least one core
+   end, plus dangling wikilinks with a core source. With a shared focus item opened from a project (`focus=S:m12`), its edges
+   to other shared items are kept and those items appear at hop 1 as ghosts with `S:` handles.
+5. Edges between two ghosts are never returned, in either mode.
+6. **Degree**: `degree_in` / `degree_out` count kept edges, before the cap; a dangling wikilink counts in its source's
+   `degree_out`.
+7. **`unlinked=true`** (whole project only): `nodes` holds only the core nodes whose degree is 0 under the active filters,
+   `edges` is `[]` and there are no ghosts. Degree is counted over all kept edges before the cap, so an unlinked item is
+   never cut in favour of a linked one, and a dangling wikilink makes its source linked. `meta.total_nodes`,
+   `meta.unlinked_count` and `meta.dangling_count` still describe the full filtered graph (the same values as without
+   `unlinked`); `meta.truncated` refers to the unlinked list.
+8. **Cap**: `GRAPH_NODE_CAP` = 1,500 nodes. Above it the nodes are ranked: the focus item first, core before ghost, pinned
+   first, higher degree (`degree_in + degree_out`) first, newer `updated_at` first, then `id` ascending; the first 1,500 are
+   kept. Then edges with an end outside the kept nodes are dropped, and so are ghosts left without an edge.
+   `meta.truncated` is true.
+9. **`meta`**: `truncated`; `node_cap` (1500); `total_nodes` = core plus ghost nodes before the cap; `unlinked_count` = core
+   nodes with degree 0, before the cap; `dangling_count` = distinct `dst_ref` among the kept dangling wikilinks, before the cap.
+   On `_shared` both counts depend on the viewer's memberships (step 2); the dashboard's do not (§4.1).
+10. **Order**: core nodes first, then ghosts; within each by space (memories, decisions, docs, library), then number, then
+    id. Edges by `created_at`, then `id`.
+
+The whole-project query reads every visible edge of the project; `edges_project_idx` on `edges(project_id)` (migration
+`0006_edges_project_idx`) serves it. Id lists (walk frontier, ghost ids) go to Postgres as one `uuid[]` parameter, so a
+large walk stays within the bind-parameter limit.
+
+### 5.7 Related items (ADR-0022)
+
+`GET /api/v1/projects/:slug/items/:ref/related?limit=`, role `V` (`any` for `_shared`). Unlinked items similar to `:ref`,
+for the "Suggested links" of the item page and the map's side card; MCP shows the same list as `related:` after a write and
+`see also:` in `spoor_get` ([mcp.md](mcp.md) §5). Query schema `relatedQuery`: `limit` an integer 1–20, default 5
+(`RELATED_LIMIT`); `0`, `21`, a non-number or any other param is 400 `invalid_input`. Unknown ref (or a non-member) 404
+`not_found`, ambiguous ref 409 `ambiguous_id`.
+
+Response 200 (`RelatedResponse`), not paginated:
+```json
+{ "items": [
+    { "item": { "handle": "m30", "project": "acme", "title": "Refresh tokens rotate", "…": "full ItemSummary" }, "cos": 0.812 },
+    { "item": { "handle": "S:d2", "project": "_shared", "title": "Auth overview", "…": "…" }, "cos": 0.744 } ] }
+```
+- `cos` is the best-chunk cosine, rounded to 3 decimals. Order: `cos` desc, then `updated_at` desc, then `id`; at most `limit`.
+- **Candidates**: all four spaces of the item's project; plus `_shared` items when the item is in a regular project and
+  `_shared`'s active embedding model tag equals the project's. For an item in `_shared` (also when opened from a project as
+  `S:…`), only `_shared` items. Shared candidates seen from a project carry `S:` handles.
+- **Excluded**: the item itself; every item joined to it by an edge of any kind in either direction (resolved edges); lifecycle
+  `archived`; status `superseded` or `deprecated`; expired items (`expires_at <= now()`). Stale items are allowed. The
+  exclusions run inside the nearest-neighbour scan, so excluded items never take its slots.
+- **Floor**: `cos >= relatedMinCos(settings)` of the item's project, which is `min(dedupe.related_min_cos, dedupe.threshold −
+  0.01)` (default 0.70, threshold 0.92). A stored `related_min_cos` at or above the threshold is clamped on read (threshold
+  0.80 and 0.90 give 0.79), so a suggestion never falls in the duplicate band. No upper bound: a near-duplicate saved with
+  `allow_duplicate` shows up at about 1.00.
+- **Scoring** is approximate by design: up to 32 probe chunks, the K nearest eligible chunks per probe chunk with
+  K = max(100, `limit` × 20). The exact rule and what it can miss: [search-and-digest.md](search-and-digest.md) §5a.
+- **Pending**: when the item has no embedded chunk under its project's active model (or the model's width is unknown), the
+  answer is `{"items": [], "note": "embedding pending: related items appear once the item is embedded"}`
+  (`RELATED_PENDING_NOTE`). An empty list without `note` means nothing reached the floor.
+- Nothing is stored, no embedding provider and no LLM is called (only the stored chunk vectors are read), and `last_used_at`
+  is not bumped.
 
 ## 6. Search
 
@@ -491,11 +605,11 @@ POST /api/v1/invites/{preview,accept}             GET|POST /api/v1/invites  DELE
 GET  /api/v1/users  GET|PATCH|DELETE /api/v1/users/:id
 GET  /api/v1/device/lookup                        POST /api/v1/device/{approve,deny}
 GET|POST /api/v1/projects                         POST /api/v1/projects/import
-GET|PATCH|DELETE /api/v1/projects/:slug           GET  …/:slug/{dashboard,context,audit,requests,jobs,export,resolve,search}
+GET|PATCH|DELETE /api/v1/projects/:slug           GET  …/:slug/{dashboard,context,audit,requests,jobs,export,resolve,search,graph}
 POST …/:slug/import                               GET|POST …/:slug/members  PUT|DELETE …/members/:userId
 GET|POST …/:slug/tokens  DELETE …/tokens/:id
 GET|POST …/:slug/spaces/:space/items              GET|PATCH|DELETE …/:slug/items/:ref
 POST …/items/:ref/{pin,unpin,verify,archive,restore,supersede}
-GET  …/items/:ref/{revisions,revisions/:n,edges}  POST …/items/:ref/edges   DELETE …/:slug/edges/:id
+GET  …/items/:ref/{revisions,revisions/:n,edges,related}  POST …/items/:ref/edges   DELETE …/:slug/edges/:id
 GET  …/:slug/review  GET …/review/:section        POST …/review/bulk   GET …/:slug/decisions/undrafted
 ```

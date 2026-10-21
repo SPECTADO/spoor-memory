@@ -51,6 +51,9 @@ class FakeSearch implements SearchPort {
     this.calls.push({ item, pending: prepared.pending })
     return { embeddingPending: prepared.pending }
   }
+  async relatedCandidates() {
+    return { candidates: [], pending: true }
+  }
 }
 
 async function seed() {

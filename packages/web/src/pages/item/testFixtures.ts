@@ -57,7 +57,7 @@ export function projectFixture(
     settings: {
       cleanup: { stale_days: 30, archive_days: 90, observation_days: 7 },
       digest: { default_budget: 1500, decision_window_days: 30 },
-      dedupe: { threshold: 0.92 },
+      dedupe: { threshold: 0.92, related_min_cos: 0.7 },
       embedding: { provider: 'local' },
       memory: { exclusive: true },
     },

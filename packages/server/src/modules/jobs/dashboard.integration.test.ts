@@ -14,7 +14,7 @@ import {
   DEFAULT_PASSWORD,
 } from '../../../test/factories.js'
 import { type Client, json, loginAs, testApp } from '../../../test/http.js'
-import { auditLog, items } from '../../db/schema.js'
+import { auditLog, edges, items } from '../../db/schema.js'
 
 const db = () => testDb()
 const P = '/api/v1/projects/acme'
@@ -143,6 +143,35 @@ describe('GET /api/v1/projects/:slug/dashboard', () => {
     expect(d.recent).toHaveLength(15)
     expect(d.recent.map((r) => r.item.id)).not.toContain(last.id)
     expect(d.recent[0]?.item.title).toBe('Fact number 15')
+  })
+
+  it('links: live items without any edge, distinct dangling refs of live items', async () => {
+    const a = await create('memories', { title: 'Alpha', type: 'fact' })
+    const b = await create('memories', { title: 'Beta', type: 'fact' })
+    await create('memories', { title: 'Lonely', type: 'fact' })
+    // a dangling wikilink counts as a link; two refs, one of them twice
+    await create('docs', { title: 'Doc one', body: '[[nowhere]] and [[gone]]' })
+    await create('docs', { title: 'Doc two', body: '[[nowhere]]' })
+    const archived = await create('memories', { title: 'Archived lonely', type: 'fact' })
+    await ed.post(`${P}/items/${archived.id}/archive`)
+    const sup = await createItem(db(), { projectId: s.acme.id, status: 'superseded', body: '' })
+    await db()
+      .insert(edges)
+      .values({ projectId: s.acme.id, srcId: sup.id, kind: 'wikilink', dstRef: 'ignored', dstId: null })
+    expect((await dashboard(ed)).links).toEqual({ unlinked_items: 3, dangling_refs: 2 })
+    // a typed edge links both ends
+    expect((await ed.post(`${P}/items/${a.id}/edges`, { kind: 'refines', to: b.id })).status).toBe(201)
+    expect((await dashboard(ed)).links).toEqual({ unlinked_items: 1, dangling_refs: 2 })
+    // _shared: an incoming edge from a project counts
+    const sh = await createItem(db(), { projectId: s.shared.id })
+    await createItem(db(), { projectId: s.shared.id })
+    await db()
+      .insert(edges)
+      .values({ projectId: s.acme.id, srcId: a.id, kind: 'supports', dstRef: 'x', dstId: sh.id })
+    expect((await dashboard(ed, '/api/v1/projects/_shared')).links).toEqual({
+      unlinked_items: 1,
+      dangling_refs: 0,
+    })
   })
 
   it('members only: viewers read it, outsiders get 404, no session is 401; _shared is readable by everyone', async () => {

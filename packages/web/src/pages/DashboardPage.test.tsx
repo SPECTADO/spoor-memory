@@ -9,6 +9,7 @@ const lc = (active: number, stale: number, archived: number) => ({ active, stale
 const dashboard = (review: Record<string, number>) => ({
   counts: { memories: lc(12, 2, 1), decisions: lc(3, 0, 0), docs: lc(4, 1, 0), library: lc(2, 0, 1) },
   review,
+  links: { unlinked_items: 12, dangling_refs: 3 },
   recent: [
     {
       item: summary({ handle: 'm9', title: 'Retry with jitter' }),
@@ -53,6 +54,61 @@ describe('DashboardPage', () => {
     expect(recent).toHaveAttribute('href', '/projects/acme/i/m9')
     expect(within(recent.closest('li') as HTMLElement).getByText('created')).toBeInTheDocument()
     expect(screen.getByText(/via claude-code\/2.1/)).toBeInTheDocument()
+  })
+
+  it('shows the link-health line, linking to the graph', async () => {
+    setup('viewer')
+    renderApp('/projects/acme')
+    expect(await screen.findByRole('link', { name: '12 items without links' })).toHaveAttribute(
+      'href',
+      '/projects/acme/graph?unlinked=1',
+    )
+    expect(screen.getByRole('link', { name: '3 dangling references' })).toHaveAttribute(
+      'href',
+      '/projects/acme/graph',
+    )
+  })
+
+  it('prints only the non-zero link parts, pluralised', async () => {
+    setup('viewer', undefined, {
+      'GET /api/v1/projects/acme/dashboard': [
+        200,
+        { ...dashboard({}), links: { unlinked_items: 1, dangling_refs: 0 } },
+      ],
+    })
+    renderApp('/projects/acme')
+    expect(await screen.findByRole('link', { name: '1 item without links' })).toBeInTheDocument()
+    expect(screen.queryByText(/dangling/)).not.toBeInTheDocument()
+    expect(screen.queryByText('·')).not.toBeInTheDocument()
+  })
+
+  it('pluralises a single dangling reference and drops the zero part', async () => {
+    setup('viewer', undefined, {
+      'GET /api/v1/projects/acme/dashboard': [
+        200,
+        { ...dashboard({}), links: { unlinked_items: 0, dangling_refs: 1 } },
+      ],
+    })
+    renderApp('/projects/acme')
+    expect(await screen.findByRole('link', { name: '1 dangling reference' })).toBeInTheDocument()
+    expect(screen.queryByText(/without links/)).not.toBeInTheDocument()
+  })
+
+  it('links to the shared graph on the shared dashboard', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({}, [])],
+      'GET /api/v1/projects/_shared': [200, projectFixture('_shared', 'viewer')],
+      'GET /api/v1/projects/_shared/dashboard': [200, dashboard({})],
+    })
+    renderApp('/shared')
+    expect(await screen.findByRole('link', { name: '12 items without links' })).toHaveAttribute(
+      'href',
+      '/shared/graph?unlinked=1',
+    )
+    expect(screen.getByRole('link', { name: '3 dangling references' })).toHaveAttribute(
+      'href',
+      '/shared/graph',
+    )
   })
 
   it('shows a fourth Library card that is never stale', async () => {

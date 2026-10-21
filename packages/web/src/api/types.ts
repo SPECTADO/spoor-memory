@@ -48,7 +48,18 @@ import type {
   UserPatchRequest,
 } from '@spoor/shared'
 
-export { REVIEW_SECTIONS } from '@spoor/shared'
+export type {
+  GraphEdge,
+  GraphLifecycle,
+  GraphMeta,
+  GraphNode,
+  GraphParams,
+  GraphQuery,
+  GraphResponse,
+  RelatedItem,
+  RelatedResponse,
+} from '@spoor/shared'
+export { EDGE_KINDS, GRAPH_LIFECYCLES, GRAPH_NODE_CAP, REVIEW_SECTIONS } from '@spoor/shared'
 export type {
   ActorJson,
   AuditRowJson,

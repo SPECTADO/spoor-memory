@@ -16,7 +16,16 @@
  * - `last_used_at` is bumped only by a near-duplicate hit, a `relate` target (and `spoor_get`, which calls
  *   `touchUsed`), never by REST reads, lists or search.
  */
-import { bestStrength, canonicalRef, knownKeys, normalizeFilePath } from '@spoor/shared'
+import {
+  bestStrength,
+  canonicalRef,
+  type GraphQuery,
+  knownKeys,
+  normalizeFilePath,
+  RELATED_PENDING_NOTE,
+  type RelatedResponse,
+  relatedMinCos,
+} from '@spoor/shared'
 import { and, asc, desc, eq, inArray, ne, or, type SQL, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { edges, itemRevisions, items, memberships, projects } from '../../db/schema.js'
@@ -33,8 +42,9 @@ import {
 import type { ServerDeps } from '../../lib/deps.js'
 import { ApiError } from '../../lib/errors.js'
 import { cursorTimestamp, decodeTypedCursor, encodeCursor } from '../../lib/pagination.js'
-import type { DedupeCandidate, PreparedChunks, Space } from '../../ports.js'
+import type { DedupeCandidate, PreparedChunk, PreparedChunks, Space } from '../../ports.js'
 import { resolveSettings } from '../projects/index.js'
+import { graph } from './graph.js'
 import {
   addEdge,
   claimWikilinks,
@@ -1483,6 +1493,64 @@ export class ItemService {
       ...(r.other ? {} : { dst_ref: r.edge.dstRef }),
     })
     return { outgoing: outRows.filter(visible).map(toJson), incoming: inRows.filter(visible).map(toJson) }
+  }
+
+  /**
+   * `GET …/graph` (ADR-0021): the whole project, or `focus`'s neighbourhood (resolved like `:ref`; 404 /
+   * 409 `ambiguous_id`). `memberProjects` filters incoming edges into `_shared` as `edges` does.
+   */
+  async graph(caller: Caller, query: GraphQuery, memberProjects: string[] | null, cap?: number) {
+    const focusId = query.focus ? (await this.load(caller, query.focus, 'read')).id : undefined
+    return graph(this.db, { project: caller.project, query, memberProjects, focusId, cap })
+  }
+
+  /**
+   * `GET …/items/:ref/related` (ADR-0022): unlinked items ranked by best-chunk cosine under the item's
+   * project's active model, floor `relatedMinCos` of the item's project; `note` when no vector exists yet.
+   */
+  async related(caller: Caller, ref: string, limit: number): Promise<RelatedResponse> {
+    const item = await this.load(caller, ref, 'read')
+    return this.relatedByProbe(caller, { item }, limit)
+  }
+
+  /**
+   * The same for an already loaded item, e.g. right after an MCP write: `chunks` (the write's prepared
+   * chunks) replaces reading the stored ones; `excludeIds` are never suggested (linked in the same call).
+   * Candidates: the item's project (+ `_shared` on the same model when the item is not shared itself).
+   */
+  async relatedByProbe(
+    caller: Caller,
+    probe: { item: LoadedItem; chunks?: PreparedChunk[]; excludeIds?: string[] },
+    limit: number,
+  ): Promise<RelatedResponse> {
+    const { item } = probe
+    const minCos = relatedMinCos(await this.projectSettings(item.projectId))
+    const res = await this.deps.ports.search.relatedCandidates(this.db, {
+      projectId: item.projectId,
+      itemId: item.id,
+      chunks: probe.chunks,
+      includeShared: item.projectKind !== 'shared',
+      excludeIds: probe.excludeIds,
+      minCos,
+      limit,
+    })
+    if (res.pending) return { items: [], note: RELATED_PENDING_NOTE }
+    if (res.candidates.length === 0) return { items: [] }
+    const rows = await loadItems(
+      this.db,
+      inArray(
+        items.id,
+        res.candidates.map((c) => c.id),
+      ),
+    )
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    const view = viewOf(caller.project)
+    return {
+      items: res.candidates.flatMap((c) => {
+        const row = byId.get(c.id)
+        return row ? [{ item: summaryJson(row, view), cos: Math.round(c.cos * 1000) / 1000 }] : []
+      }),
+    }
   }
 
   /** Projects whose links a cookie user may see on a shared item (null = all, instance admin). */

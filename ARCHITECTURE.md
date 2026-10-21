@@ -1,6 +1,6 @@
 # Architecture
 
-Status: implemented, 0.1.0 release candidate (2026-10-19). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4) and release documentation (phase 5). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
+Status: implemented, 0.4.0 (2026-10-21). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3) and the map and link suggestions (0.4). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
 [docs/design/](docs/design/); terms are defined in [GLOSSARY.md](GLOSSARY.md). Where this file and a design file
 disagree, the design file wins and this file gets fixed. Open questions for the owner: [docs/design/deviations.md](docs/design/deviations.md).
 
@@ -32,9 +32,10 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │    ├─ auth, projects, tokens, audit  users, sessions, invites, permission matrix,  │
  │    │                                 projects + settings, tokens, audit log        │
  │    ├─ items ── item service, revisions (append-only), edges, wikilinks, resolver,  │
- │    │           repo mirror (push, adr/import)                                      │
+ │    │           repo mirror (push, adr/import), project graph (graph.ts), related   │
  │    ├─ search ── chunker, providers (local ONNX e5-small q8 | OpenAI | Voyage),     │
- │    │            hybrid FTS+vector RRF, dedupe, digest (6 tiers), anchor matcher    │
+ │    │            hybrid FTS+vector RRF, dedupe, related items (related.ts),         │
+ │    │            digest (6 tiers), anchor matcher                                   │
  │    ├─ jobs ── scheduler (in process, DB leases): cleanup, embed-pending, reembed,  │
  │    │          purge-ephemeral; review queue, dashboard, undrafted, job status      │
  │    ├─ requests ── agent request log (MCP tool calls, bearer REST), 14 days        │
@@ -52,12 +53,12 @@ How the server modules depend on each other (arrows = "calls through"; nothing i
 internals, only its `index.ts` or a port):
 
 ```
- items ──SearchPort──▶ search (prepare/index chunks, dedupe)     items ──JobsPort──▶ jobs (nudge embed-pending)
+ items ──SearchPort──▶ search (prepare/index chunks, dedupe, related candidates)     items ──JobsPort──▶ jobs (nudge embed-pending)
  transfer ──SearchPort──▶ search (NULL-embedding chunks in the import tx) projects ──JobsPort──▶ jobs (nudge reembed)
  jobs ──SearchJobs + BatchContext (ports.ts)──▶ search (embed-pending, reembed, consistency sweep)
  search, projects, transfer ──EmbeddingRegistry──▶ providers built by search (createEmbeddingRegistry)
  transfer ──▶ items (field cleaners, snapshot, ItemSummary)    review, search ──▶ items summaryJson (one ItemSummary)
- mcp ──▶ items (ItemService) + search (SearchService, ContextService)    mirror ──▶ items (PushService)
+ mcp ──▶ items (ItemService, incl. graph walk and related items) + search (SearchService, ContextService)    mirror ──▶ items (PushService)
  device ──▶ tokens (mintToken)    install ──▶ projects (default digest budget)
  every module ──▶ @spoor/shared (anchors, wikilinks, frontmatter split/serialize, known keys, ITEM_LIMITS)
  every module ──▶ auth guards, projects access
@@ -68,19 +69,19 @@ internals, only its `index.ts` or a port):
 | REST API | everything the SPA, CLI and hooks need | [api.md](docs/design/api.md) |
 | MCP server | the nine agent tools, per-session client name, role-aware tool list | [mcp.md](docs/design/mcp.md) |
 | Auth | scrypt passwords, DB sessions, per-user and service tokens, device login, origin check, shared-space rules | [auth-and-security.md](docs/design/auth-and-security.md) |
-| Data model | 14 tables, handles, frontmatter, ADR numbering, export format | [data-model.md](docs/design/data-model.md) |
-| Search and digest | chunking, providers, RRF, dedupe, token estimator, `spoor_context`, anchors | [search-and-digest.md](docs/design/search-and-digest.md) |
+| Data model | 15 tables, handles, frontmatter, ADR numbering, export format | [data-model.md](docs/design/data-model.md) |
+| Search and digest | chunking, providers, RRF, dedupe, related items, token estimator, `spoor_context`, anchors | [search-and-digest.md](docs/design/search-and-digest.md) |
 | Export and import | zip export, lossless and Markdown-folder import, zip hardening | [data-model.md](docs/design/data-model.md) §8, [api.md](docs/design/api.md) §9 |
 | Cleanup and jobs | lifecycle (stale, archived), observation expiry, review queue, scheduler | [cleanup-and-jobs.md](docs/design/cleanup-and-jobs.md) |
 | CLI and hooks | `spoor` commands, three hooks, ADR drafting, install doc | [cli-and-hooks.md](docs/design/cli-and-hooks.md) |
-| Web UI | pages, editor, diff, review queue, admin | [web-ui.md](docs/design/web-ui.md) |
+| Web UI | pages, editor, diff, review queue, admin, map of the links | [web-ui.md](docs/design/web-ui.md) |
 | Deployment | Dockerfile, compose, env vars, CI, backup | [deployment.md](docs/design/deployment.md); operator guide [docs/operations.md](docs/operations.md) |
 | Guides | what users and agents see | [user-guide.md](docs/user-guide.md), [agent-guide.md](docs/agent-guide.md) |
 
 Boundaries worth remembering:
 - **Postgres is the only state.** The app is stateless except for the embedding model baked into its image and in-memory MCP sessions (lost on restart, clients re-initialise).
 - **Three auth surfaces, never mixed**: cookies on `/api/v1`, bearer tokens on `/p/:slug/mcp` and `/p/:slug/api`, public device and install endpoints.
-- **No server-side LLM calls.** ADR drafting runs on the developer's machine through the user's own `claude` login.
+- **No server-side LLM calls.** ADR drafting runs on the developer's machine through the user's own `claude` login; link suggestions are nearest neighbours over the stored embeddings, computed per request and never stored (ADR-0022).
 - **Spoor never writes to the repo from the server.** The CLI pushes repo files to Spoor; nothing is pulled back.
 - **The shared space is a special project row** (`kind='shared'`, slug `_shared`), so every code path is reused; its write rules (humans only, `IA` or `shared_editor`) are enforced server-side.
 - **One composition root.** `src/runtime.ts` is the only place that binds real implementations to the ports of `src/ports.ts`; `src/index.ts` only reads env, opens the pool and the HTTP server, and calls it. Open drift from the design is listed in [deviations.md](docs/design/deviations.md) §G and §H.
@@ -88,7 +89,7 @@ Boundaries worth remembering:
 ## 3. Key flows
 
 Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI against the real server, by
-`packages/server/test/e2e/harness.e2e.test.ts` (BRIEF.md DoD 2 and 3); flows 3.3, 3.6 and 3.9 from the browser by `packages/web/e2e/fullstack.spec.ts` (DoD 4). Evidence per Definition-of-done item: [docs/design/dod-status.md](docs/design/dod-status.md).
+`packages/server/test/e2e/harness.e2e.test.ts` (BRIEF.md DoD 2 and 3); flows 3.3, 3.6 and 3.9 from the browser by `packages/web/e2e/fullstack.spec.ts` (DoD 4), and flow 3.10 by `packages/web/e2e/graph.spec.ts`. Evidence per Definition-of-done item: [docs/design/dod-status.md](docs/design/dod-status.md).
 
 ### 3.1 Agent session start
 1. Claude Code starts a session and runs the SessionStart hook command `spoor init` wrote (`command -v spoor … && exec spoor hook session-start`, falling back to a pinned `npx spoor-memory@<server version>`) with `{session_id, source}` on stdin. `resume` and `fork` print nothing.
@@ -108,7 +109,7 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 4. Near-duplicate check: cosine >= threshold (0.92) within the space, ignoring expired observations, observations when the new item is not one, and the item being superseded. A hit returns the existing item as a
    non-error `DUPLICATE` result and bumps its `last_used_at`.
 5. Otherwise, in one transaction: insert the item (observations get `expires_at`), revision 1, chunks, wikilink edges, typed relations, audit row (`via=mcp`, client name, token owner).
-6. The result is one short line, `OK created m58 r1 [fact]`. Updates carry the `revision` they read; a mismatch is `revision_conflict`, never last-write-wins. An update that also adds `relations` writes the edges in the same transaction (deviations.md H3).
+6. The result is one short line, `OK created m58 r1 [fact]`, then one `note: linked …` per relation written and, after the commit, at most one `related:` line with up to three similar unlinked items and a ready `spoor_relate` hint (best effort: a failed lookup only drops the line). Updates carry the `revision` they read; a mismatch is `revision_conflict`, never last-write-wins. An update that also adds `relations` writes the edges in the same transaction (deviations.md H3).
 
 ### 3.3 Human edit (web UI)
 1. The user opens an item (`/projects/:slug/i/:ref`), clicks Edit; the editor loads the item at revision N.
@@ -184,15 +185,21 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 3. The same transaction writes every imported item's chunk rows with NULL embeddings (through `SearchPort`), so full-text search finds them at once; after the commit `embed-pending` is nudged and fills the
    embeddings. A folder import also claims the target project's existing wikilinks to the new items.
 
+### 3.10 Map and link suggestions (ADR-0021, ADR-0022)
+1. The SPA's Map page (`/projects/:slug/graph`, `pages/graph/`, its own lazy chunk) calls `GET …/graph` with only the non-default filters. `modules/items/graph.ts` selects the visible edges in SQL (the per-item edges rules; the filter predicate as a SQL expression), walks the neighbourhood breadth-first when `focus` is set, then counts degrees, applies `unlinked` and the 1,500-node cap and orders the result in process.
+2. The browser lays the nodes out with `d3-force` in `lib/graphLayout.ts` (pure functions, unit-tested) and draws SVG; pan and zoom change only the view box.
+3. Selecting a node opens a side card; its "Suggested links", like the item page's, come from `GET …/items/:ref/related`: `ItemService.related` resolves the item and calls `SearchPort.relatedCandidates` (`modules/search/related.ts`), a per-probe-chunk kNN over eligible chunks of the active model with the project's floor. "Link" is the ordinary `POST …/edges`, after which the edges, map, suggestions and dashboard queries refresh.
+4. Agents get the same data as text: `related:` after a write, `see also:` and, with `depth`, a `graph:` block in `spoor_get` ([mcp.md](docs/design/mcp.md) §4, §5).
+
 ## 4. Package layout (pnpm monorepo)
 
 ```
 spoor-memory/
   packages/
-    shared/    types, zod schemas (settings, project/auth API, CLI config), slugify, token estimator, error codes, the anchor normaliser/validator/matcher (anchors.ts), frontmatter split/serialize (markdown.ts), the known-key table and ITEM_LIMITS (frontmatter.ts), the wikilink grammar and resolution order (wikilinks.ts), ItemSummary (api/items.ts), the repo integration blocks of install.json and `spoor init` (install.ts), the review and undrafted-decision shapes (api/review.ts); the item request schemas still live in the server (deviations.md G5)
-    server/    Hono app, Drizzle schema + migrations (src/db/migrations, copied to drizzle/ by `pnpm build` for the image), modules auth, projects, tokens, audit, requests, items, search, jobs, transfer, device, install, mirror, mcp, scripts/fetch-model.mjs
+    shared/    types, zod schemas (settings, project/auth API, CLI config), slugify, token estimator, error codes, the anchor normaliser/validator/matcher (anchors.ts), frontmatter split/serialize (markdown.ts), the known-key table and ITEM_LIMITS (frontmatter.ts), the wikilink grammar and resolution order (wikilinks.ts), ItemSummary and the graph and related-item shapes (api/items.ts), the settings schema with `relatedMinCos` (settings.ts), the repo integration blocks of install.json and `spoor init` (install.ts), the review and undrafted-decision shapes (api/review.ts); the item request schemas still live in the server (deviations.md G5)
+    server/    Hono app, Drizzle schema + migrations (src/db/migrations, copied to drizzle/ by `pnpm build` for the image), modules auth, projects, tokens, audit, requests, items (incl. graph.ts, the project graph), search (incl. related.ts, related items), jobs, transfer, device, install, mirror, mcp, scripts/fetch-model.mjs
       src/{config.ts, index.ts, app.ts, runtime.ts, ports.ts, db/, lib/, modules/<name>/{service,routes,index}.ts}   test/ (integration harness, e2e/ walk of DoD 2 and 3)
-    web/       React SPA (src/{api,ui,components,pages,lib}; conventions in packages/web/README.md), builds to dist/ served by the server
+    web/       React SPA (src/{api,ui,components,pages,lib}; conventions in packages/web/README.md; the map in pages/graph/ with its layout in lib/graphLayout.ts), builds to dist/ served by the server
     cli/       npm package `spoor-memory`, bin `spoor`: src/{bin,cli,commands,ctx,config,http,state,mirror,writeback,settings-files,git}.ts, cmd/{setup,info,mirror,draft,session}.ts; published as one esbuild bundle dist/bin.js with `shared` compiled in (scripts/build.mjs, ADR 0013; layout in packages/cli/README.md)
   docs/        operations.md, user-guide.md, agent-guide.md; research/, design/ (incl. deviations.md, dod-status.md, harness-verification.md), adr/
   Dockerfile  docker-compose.yml  deploy/{Caddyfile,initdb/}  .env.example  .github/workflows/{ci.yml (lint, unit, integration, e2e-server, e2e-web, image build), release.yml (v* tags: version check, CI, npm publish with provenance, GHCR image; ADR 0013)}
@@ -231,9 +238,20 @@ Design files (the *what*): [docs/design/](docs/design/). Research the choices re
 | 12 | [`0012-authority-and-write-ordering.md`](docs/adr/0012-authority-and-write-ordering.md) | Delegated authority is re-checked at use; item writes lock the project row first | invites and other delegated authority end with their source, one lock order for item writes | phase 2 review |
 | 13 | [`0013-cli-packaging-and-release.md`](docs/adr/0013-cli-packaging-and-release.md) | The CLI is published as one esbuild bundle; a v* tag releases the npm package and the image together | esbuild bundle of `@spoor/shared`, one version for image and package (I30), `release.yml` | deployment, cli-and-hooks |
 | 14 | [`0014-library-space.md`](docs/adr/0014-library-space.md) | Library space: per-project pages written only by humans | fourth space `library` with handle `L<n>`, `library_editor` member flag, one human-only rule shared with `_shared` (`humanOnlyZone`), digest tier 0 (≤ 15 %), link rule (outgoing links are human choices; no capture or takeover; no `conflicts_with` with non-library items), `SPL01`/`SPL02` backstops, the stated web-session boundary | auth, data-model, search-and-digest |
+| 15 | [`0015-exclusive-memory.md`](docs/adr/0015-exclusive-memory.md) | Spoor is the agents' only memory by default (accepted) | project setting `memory.exclusive` (default true), the memory rule in the MCP instructions, the `AGENTS.md` block and the SessionStart check | mcp, cli-and-hooks, data-model |
+| 16 | [`0016-keep-the-global-cli-install-…md`](docs/adr/0016-keep-the-global-cli-install-the-sessionstart-digest-warns-when-the-cli-version.md) | Keep the global CLI install; the SessionStart digest warns when the CLI version differs from the server's (proposed) | `Spoor-Server-Version` header, version warning in the digest | cli-and-hooks, api |
+| 17 | [`0017-latest-image-follows-main.md`](docs/adr/0017-latest-image-follows-main.md) | The `latest` image follows `main`; version tags stay on `v*` releases (superseded by ADR-0019) | image tags | deployment |
+| 18 | [`0018-agent-request-log.md`](docs/adr/0018-agent-request-log.md) | An agent request log, kept 14 days, readable by admins (accepted) | `request_log` table (migration 0005), the Request log page, dashboard agent activity | api, data-model, web-ui |
+| 19 | [`0019-develop-image-follows-main.md`](docs/adr/0019-develop-image-follows-main.md) | `develop` follows `main`, `latest` follows the highest release (accepted) | image tags | deployment |
+| 20 | [`0020-no-file-attachment-storage-…md`](docs/adr/0020-no-file-attachment-storage-in-near-versions-json-goes-in-doc-bodies-files-stay.md) | No file or attachment storage in near versions: JSON goes in doc bodies, files stay in the repo with anchors (proposed) | scope | BRIEF |
+| 21 | [`0021-graph-view-…md`](docs/adr/0021-graph-view-one-project-wide-graph-endpoint-rendered-as-d3-force-svg-with-focus.md) | Graph view: one project-wide graph endpoint rendered as d3-force SVG with focus mode, read-only canvas plus side card (proposed) | `GET …/graph`, ghosts, the 1,500-node cap, `edges_project_idx`, `d3-force` 3.0.0, the Map page, dashboard link health | api, web-ui, data-model |
+| 22 | [`0022-link-suggestions-…md`](docs/adr/0022-link-suggestions-are-computed-on-demand-from-existing-embeddings-nothing-stored.md) | Link suggestions are computed on demand from existing embeddings; nothing stored, no server-side LLM (proposed) | `GET …/items/:ref/related`, the kNN approximation, MCP `related:` / `see also:` / `graph:`, Suggested links in the web UI | api, search-and-digest, mcp, web-ui |
+| 23 | [`0023-related-item-floor-…md`](docs/adr/0023-related-item-floor-lives-at-settings-dedupe-related-min-cos-0-50-0-90-default-0.md) | Related-item floor lives at `dedupe.related_min_cos` (0.50 to 0.90, default 0.70), clamped on read below the duplicate threshold (proposed) | `relatedMinCos` | data-model |
+| 24 | [`0024-mcp-tools-list-budget-…md`](docs/adr/0024-mcp-tools-list-budget-raised-to-4-000-estimated-tokens-for-relations-on-all.md) | MCP tools/list budget raised to 4,000 estimated tokens for relations on all write tools and `spoor_get` depth (proposed) | the `tools.test.ts` ceiling, measured 3,932 | mcp |
 
 [deviations.md](docs/design/deviations.md) §D lists nine slightly different topics (for example "session-managed MCP transport" and "in-process scheduler" as their own ADRs); the list above
-folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule.
+folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule. ADRs 0001 to 0014 and
+the accepted ones after them are decided; the proposed ones (0016, 0020 to 0024; most drafted from decision memories by `spoor adr draft`) wait for the owner to accept them.
 
 ## 6. Cross-cutting rules
 

@@ -8,7 +8,7 @@ One definition per term. Names are the ones used in code, API and UI. Details: [
 **Project**: An isolated body of knowledge, usually one repository, with its own **members**, **tokens**, settings, counters (item numbers, ADR numbers) and embedding model. A project owns many **items**
 and is addressed by an immutable slug (`acme`). The **shared space** is stored as one special project (`kind='shared'`, slug `_shared`).
 
-**Space**: One of the three named collections of **items** inside a project: `memories`, `decisions` or `docs`. The space fixes an item's kind, its allowed statuses and its handle form.
+**Space**: One of the four named collections of **items** inside a project: `memories`, `decisions`, `docs` or `library`. The space fixes an item's kind, its allowed statuses and its handle form.
 
 **Item**: The unit of storage: Markdown with YAML frontmatter, belonging to exactly one **project** and one **space**, with a handle, a slug, a title, tags, **anchors**, a current `revision` and operational state
 (pinned, lifecycle, last verified, last used). An item is a **memory**, a **decision** or a **doc**; its history is its **revisions**.
@@ -81,6 +81,16 @@ review queue until a human runs the push with `--force` or aligns the file.
 
 **Backlink**: The incoming side of an **edge**, shown on the target item (who links here). On a shared item only the viewer's own projects' links are shown.
 
+**Map**: The web page that draws a project's **items** as nodes and their **edges** as lines (`/projects/<slug>/graph`, `/shared/graph`; ADR-0021): the whole project, or one item's neighbourhood of one or two hops ("Open in map", "Focus here"). It is read-only apart from adding relations and **suggested links** from its side card, filters by space, edge kind, lifecycle and superseded status, and draws at most 1,500 nodes. Agents get the neighbourhood as text with `spoor_get` `depth`. In the API it is the project graph (`GET …/graph`).
+
+**Ghost node**: A node on the **map** that is not part of the view itself but is joined to it by a shown **edge**: an item of another project (a **shared** item seen from a project, a project item seen from the shared space) or an item of the project outside the active filters. Drawn with a dashed outline; never walked through in a neighbourhood, and an edge between two ghosts is never shown.
+
+**Dangling reference**: A wikilink whose target does not exist yet (`[[auth-flow]]` with no item of that slug or handle): an **edge** with no target item, only its reference text (`dst_ref`). The **map** draws one hollow node per distinct reference, the dashboard counts them, and creating an item with that slug or handle resolves them.
+
+**Unlinked item**: An active or stale item, not superseded or deprecated, with no **edge** of any kind in either direction (an outgoing **dangling reference** counts as a link). The dashboard counts them and links to the **map** with "Unlinked only".
+
+**Related items** (**suggested links**): Up to a few unlinked items whose text is most similar to an item's by embedding cosine (the best **chunk** pair), above the project's floor `dedupe.related_min_cos` (default 0.70, always below the duplicate threshold). Computed on each request from the stored vectors, never stored and with no LLM (ADR-0022). People see them as "Suggested links" on the item page and in the **map**'s side card, with one-click Link; agents see them as the `related:` line after a write and the `see also:` line of `spoor_get`. Linked, archived, superseded, deprecated and expired items are never suggested.
+
 **Chunk**: A piece of an item's text (about 400 tokens, 60 overlap, code fences kept whole) with a vector tagged by embedding model; search runs over chunks and scores an item by its best chunk.
 
 **Embedding model tag**: The string that identifies the model, variant and width that produced a chunk's vector (`local:Xenova/multilingual-e5-small@q8/384`). Search reads only vectors whose tag matches the project's active model; a **re-embed** switches it.
@@ -120,4 +130,5 @@ treated as untrusted data either way; provenance helps the reader weigh it. Impo
 - A **token** belongs to one project and either one user or the project (**service token**); a **device code** belongs to one project and ends as one token.
 - The **digest** is computed from a project's active items plus the **shared space**; **stale** and **archived** items are excluded.
 - The **review queue** lists items by lifecycle (**stale**, **archived**) and by edge (`conflicts_with`); humans move items out of it.
+- The **map** shows a project's items and **edges**, plus **ghost nodes** for the other ends and one hollow node per **dangling reference**; **related items** are computed from **chunks** and never become edges until a human or agent links them.
 - Every change to an item writes an audit row naming the actor (user or service token, `via`, client name); the audit log outlives deleted items.

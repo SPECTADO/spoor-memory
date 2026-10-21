@@ -449,6 +449,7 @@ export const edges = pgTable(
   (t) => [
     unique('edges_src_kind_dst_ref_uq').on(t.srcId, t.kind, t.dstRef),
     index('edges_dst_idx').on(t.dstId, t.kind),
+    index('edges_project_idx').on(t.projectId), // the project graph (0006)
     index('edges_dangling_idx').on(t.projectId, t.dstRef).where(sql`dst_id IS NULL`),
     check('edges_kind_check', inList('kind', EDGE_KINDS)),
     check('edges_no_self_loop_check', raw('src_id <> dst_id')),

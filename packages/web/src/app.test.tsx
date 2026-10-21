@@ -41,7 +41,16 @@ describe('app shell', () => {
     })
     renderApp('/projects/demo/search')
     const nav = await screen.findByRole('navigation', { name: 'Project' })
-    for (const name of ['Dashboard', 'Memories', 'Decisions', 'Docs', 'Search', 'Audit log', 'Tokens']) {
+    for (const name of [
+      'Dashboard',
+      'Memories',
+      'Decisions',
+      'Docs',
+      'Map',
+      'Search',
+      'Audit log',
+      'Tokens',
+    ]) {
       expect(within(nav).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInTheDocument()
     }
     const review = within(nav).getByRole('link', { name: /^Review/ })
@@ -150,6 +159,8 @@ describe('library nav', () => {
       .getAllByRole('link')
       .map((a) => a.textContent)
     expect(names.indexOf('Library')).toBe(names.indexOf('Docs') + 1)
+    expect(names.indexOf('Map')).toBe(names.indexOf('Library') + 1)
+    expect(within(nav).getByRole('link', { name: 'Map' })).toHaveAttribute('href', '/projects/demo/graph')
   })
 
   it('shows the Library tab on /shared', async () => {
@@ -157,5 +168,6 @@ describe('library nav', () => {
     renderApp('/shared/search')
     const nav = await screen.findByRole('navigation', { name: 'Project' })
     expect(within(nav).getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/shared/library')
+    expect(within(nav).getByRole('link', { name: 'Map' })).toHaveAttribute('href', '/shared/graph')
   })
 })

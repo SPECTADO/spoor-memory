@@ -23,6 +23,7 @@ export const projectRoutes: RouteObject[] = [
   { path: 'i/:ref/edit', element: <P.ItemEditPage /> },
   { path: 'i/:ref/history', element: <P.HistoryPage /> },
   { path: 'w/:ref', lazy: page(() => import('./pages/WikilinkPage'), 'WikilinkPage') },
+  { path: 'graph', lazy: page(() => import('./pages/graph/GraphPage'), 'GraphPage') },
   { path: 'search', lazy: page(() => import('./pages/SearchPage'), 'SearchPage') },
   { path: 'review', element: <P.ReviewPage /> },
   { path: 'audit', element: <P.AuditPage /> },

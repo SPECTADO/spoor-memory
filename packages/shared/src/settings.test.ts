@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { mergeSettings, projectSettings, projectSettingsPatch, settingsPatchPaths } from './settings.js'
+import {
+  mergeSettings,
+  projectSettings,
+  projectSettingsPatch,
+  relatedMinCos,
+  settingsPatchPaths,
+} from './settings.js'
 
 describe('project settings', () => {
   it('fills defaults on read and rejects unknown keys and out-of-range values', () => {
@@ -7,7 +13,7 @@ describe('project settings', () => {
     expect(full).toEqual({
       cleanup: { stale_days: 30, archive_days: 90, observation_days: 7 },
       digest: { default_budget: 1500, decision_window_days: 30 },
-      dedupe: { threshold: 0.92 },
+      dedupe: { threshold: 0.92, related_min_cos: 0.7 },
       embedding: { provider: 'local' },
       memory: { exclusive: true },
     })
@@ -37,6 +43,18 @@ describe('project settings', () => {
     expect(stored.cleanup).toEqual({ stale_days: 10 }) // input untouched
     expect(mergeSettings(null, {})).toEqual({})
     expect(projectSettings.parse(merged).cleanup.observation_days).toBe(7)
+  })
+
+  it('related_min_cos: 0.50-0.90, default 0.70, read clamped below the duplicate threshold', () => {
+    expect(projectSettings.safeParse({ dedupe: { related_min_cos: 0.49 } }).success).toBe(false)
+    expect(projectSettings.safeParse({ dedupe: { related_min_cos: 0.91 } }).success).toBe(false)
+    expect(projectSettingsPatch.parse({ dedupe: { related_min_cos: 0.8 } })).toEqual({
+      dedupe: { related_min_cos: 0.8 },
+    })
+    expect(relatedMinCos(projectSettings.parse({}))).toBe(0.7)
+    expect(relatedMinCos(projectSettings.parse({ dedupe: { threshold: 0.85, related_min_cos: 0.9 } }))).toBe(
+      0.84,
+    )
   })
 
   it('lists the dotted paths a patch sets', () => {

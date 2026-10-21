@@ -1,6 +1,6 @@
 /**
  * Items routes. Cookie surface (mounted at /api/v1, api.md section 5): spaces, items, revisions, edges,
- * operational actions, resolve, and the review queue's bulk verify / archive (api.md section 8). Bearer
+ * graph, related, operational actions, resolve, and the review queue's bulk verify / archive (api.md section 8). Bearer
  * surface (mounted at /p/:slug/api, api.md sections 7.2 and 7.3): push, adr/import (`decisions/undrafted` is
  * the jobs module's, next to the review lists). Parsing, permission checks and status codes only; the rules
  * are in the services.
@@ -19,11 +19,13 @@ import {
   adrImportRequest,
   deleteQuery,
   edgeCreateRequest,
+  graphQuery,
   itemCreateRequest,
   itemPatchRequest,
   listQuery,
   noteRequest,
   pushRequest,
+  relatedQuery,
   resolveQuery,
   restoreRequest,
   revisionsQuery,
@@ -149,6 +151,18 @@ export function itemRoutes(deps: ServerDeps, items: ItemService) {
         a.assert('project.read')
         const members = await items.memberProjectIds(a.ctx.user.id, a.ctx.user.isAdmin)
         return c.json(await items.edges(webCaller(a), ref(c), members))
+      })
+      .get('/projects/:slug/graph', async (c) => {
+        const a = await access(c)
+        a.assert('project.read')
+        const q = readQuery(c, graphQuery)
+        const members = await items.memberProjectIds(a.ctx.user.id, a.ctx.user.isAdmin)
+        return c.json(await items.graph(webCaller(a), q, members))
+      })
+      .get('/projects/:slug/items/:ref/related', async (c) => {
+        const caller = await reader(c)
+        const q = readQuery(c, relatedQuery)
+        return c.json(await items.related(caller, ref(c), q.limit))
       })
       .post('/projects/:slug/items/:ref/edges', async (c) => {
         const caller = await writer(c)

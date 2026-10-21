@@ -256,6 +256,37 @@ next: still true → spoor_verify ids=["m42"] · changed → spoor_remember id="
 4. If the embedding fails (pending), the check is skipped and the result says
    `note: duplicate check skipped`.
 
+## 5a. Related items (link suggestions, ADR-0022)
+
+`SearchPort.relatedCandidates(db, { projectId, itemId, chunks?, includeShared, excludeIds?, minCos, limit })` →
+`{ candidates: {id, cos}[], pending }`, in `modules/search/related.ts`. It backs `GET …/items/:ref/related`
+([api.md](api.md) §5.7), the item page's "Suggested links", the map's side card, and the MCP `related:` and `see also:`
+lines ([mcp.md](mcp.md) §5). It is computed on demand from the stored chunk vectors: nothing is written, no provider
+is called, no LLM is involved.
+
+1. **Model and scope.** The probe item's project gives the model (`projects.embedding_model`). Candidate chunks have that
+   model tag and belong to the project, plus `_shared` when `includeShared` is set (the item is not itself in `_shared`)
+   and `_shared`'s active model tag is the same. Vectors of different models are never compared.
+2. **Probe.** Up to `RELATED_PROBE_MAX` = 32 chunks of the item, the first by ordinal, with an embedding under the active
+   model; or the chunks a write just prepared (`chunks`), filtered and capped the same way. No probe vector (embedding
+   pending, or the model's width unknown) returns `pending: true`, which the callers turn into `RELATED_PENDING_NOTE`.
+3. **Per probe chunk, the K nearest eligible chunks**, K = `relatedKnn(limit)` = max(`RELATED_KNN` = 100,
+   `limit` × `RELATED_KNN_PER_RESULT` = 20): 100 to 400 for limit 1 to 20. A chunk is eligible when it has the model tag,
+   is in scope, and its item is not the probe item, not joined to it by an edge of any kind in either direction (resolved
+   edges), not in `excludeIds` (items linked in the same MCP call), not `archived`, not `superseded` or `deprecated`, and not
+   expired. These exclusions are inside the `LATERAL` kNN subquery (`chunks` joined to `items`), so excluded chunks never
+   take a slot; the scan runs with `SET LOCAL hnsw.ef_search = 100` and `hnsw.iterative_scan = relaxed_order` as search
+   and dedupe do, and keeps going past them. The model's partial HNSW index serves it; the planner may choose an exact scan
+   on small tables.
+4. **Best chunk per item**: each candidate item scores the maximum cosine over its (probe chunk, candidate chunk) pairs.
+5. **Floor and limit**: items with `cos >= minCos` (inclusive; the callers pass `relatedMinCos(settings)` of the item's
+   project, [data-model.md](data-model.md) §2.1), ordered by `cos` desc, `updated_at` desc, `id`; the first `limit`.
+
+**The approximation, stated exactly.** Besides HNSW recall, an eligible item is missed only when, for every probe chunk,
+at least K chunks of other eligible items are nearer than all of its own chunks (for example when an unlinked long doc has
+more than K chunks near every probe chunk). A larger `limit` raises K, so `?limit=20` looks deeper than the default 5.
+Chunks after the 32nd of a long probe item are not used (deviations.md M1).
+
 ## 6. Token estimator
 
 The digest budget is counted in Claude tokens, and nothing offline counts those exactly. Spoor uses a

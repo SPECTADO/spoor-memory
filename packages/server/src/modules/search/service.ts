@@ -6,6 +6,8 @@
  * - indexItemChunks: inside the item write transaction, lock the model set `FOR SHARE` and replace the item's
  *   chunks for every model of the locked set (a model not prepared gets NULL-embedding chunks);
  * - dedupeCandidates: chunk-0 cosine within (project, space, active model), exclusions per section 5;
+ * - relatedCandidates: best-chunk cosine over the project (+ `_shared` on the same model), unlinked only
+ *   (related.ts, ADR-0022);
  * - search: FTS (`simple` + unaccent, prefix tsquery) and vector cosine on the active model, fused by RRF
  *   (k = 60), project and shared merged by score.
  */
@@ -23,6 +25,8 @@ import type {
   IndexedItem,
   PreparedChunk,
   PreparedChunks,
+  RelatedQuery,
+  RelatedResult,
   SearchPort,
   Space,
 } from '../../ports.js'
@@ -30,6 +34,7 @@ import { chunkItem, type TokenCounter } from './chunker.js'
 import { LocalE5Provider } from './providers/local.js'
 import { dimsOfTag, fallbackCount, withTimeout } from './providers/util.js'
 import { buildTsQuery, makeSnippet, mergeScopes, normalizeQuery, queryTokens } from './query.js'
+import { relatedCandidates } from './related.js'
 import {
   DIGEST_ELIGIBLE,
   inList,
@@ -313,6 +318,10 @@ export class SearchService implements SearchPort {
       cos: Number(r.cos),
     }))
     return { candidates, skipped: false }
+  }
+
+  relatedCandidates(db: DbOrTx, q: RelatedQuery): Promise<RelatedResult> {
+    return relatedCandidates(this.#registry, db, q)
   }
 
   /** The query vector for a tag (LRU cached), or null when the provider fails. */

@@ -21,6 +21,7 @@ import { qk } from './keys'
 import type {
   AuditFilters,
   ContextParams,
+  GraphParams,
   InviteCreateBody,
   InviteFilters,
   InviteJson,
@@ -71,8 +72,9 @@ export function revisionConflict(e: unknown): RevisionConflictDetails | null {
 }
 
 /**
- * After any content write or item action (web-ui.md §3): lists, item pages, revisions, edges, dashboard,
- * review queue and search of the project; `counts` also refreshes the project list (its counts and badges).
+ * After any content write or item action (web-ui.md §3): lists, item pages, revisions, edges, graph, related
+ * items, dashboard, review queue and search of the project; `counts` also refreshes the project list (its
+ * counts and badges).
  */
 export function invalidateItemScope(qc: QueryClient, slug: string, opts: { counts?: boolean } = {}) {
   for (const queryKey of [
@@ -80,6 +82,8 @@ export function invalidateItemScope(qc: QueryClient, slug: string, opts: { count
     qk.item(slug),
     qk.revisions(slug),
     qk.edges(slug),
+    qk.graph(slug),
+    qk.related(slug),
     qk.dashboard(slug),
     qk.review(slug),
     qk.search(slug),
@@ -593,13 +597,20 @@ export const useEdges = (slug: string, ref: string | undefined) =>
     enabled: !!ref,
   })
 
+/** A link changes the edges, the map, the suggestions (they exclude linked items) and the dashboard's link line. */
+function invalidateLinks(qc: QueryClient, slug: string) {
+  for (const queryKey of [qk.edges(slug), qk.graph(slug), qk.related(slug), qk.dashboard(slug)]) {
+    void qc.invalidateQueries({ queryKey })
+  }
+}
+
 export function useAddEdge(slug: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ ref, kind, to }: { ref: string; kind: RelationKind; to: string }) =>
       E.addEdge(slug, ref, { kind, to }),
     onSettled: (_r, _e, { kind }) => {
-      void qc.invalidateQueries({ queryKey: qk.edges(slug) })
+      invalidateLinks(qc, slug)
       if (kind === 'conflicts_with') void qc.invalidateQueries({ queryKey: qk.review(slug) })
     },
   })
@@ -610,11 +621,30 @@ export function useRemoveEdge(slug: string) {
   return useMutation({
     mutationFn: (edgeId: string) => E.removeEdge(slug, edgeId),
     onSettled: () => {
-      void qc.invalidateQueries({ queryKey: qk.edges(slug) })
+      invalidateLinks(qc, slug)
       void qc.invalidateQueries({ queryKey: qk.review(slug) })
     },
   })
 }
+
+/**
+ * The project map (`GET …/graph`); the previous graph stays on screen while a filter change loads, but never
+ * across projects (another project's nodes must not show under this slug).
+ */
+export const useGraph = (slug: string, params: GraphParams = {}) =>
+  useQuery({
+    queryKey: qk.graph(slug, params),
+    queryFn: ({ signal }) => E.getGraph(slug, params, { signal }),
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === slug ? prev : undefined),
+  })
+
+/** Suggested links of one item (`GET …/items/:ref/related`); idle without a ref. */
+export const useRelated = (slug: string, ref: string | undefined, limit?: number) =>
+  useQuery({
+    queryKey: qk.related(slug, ref ?? '', limit),
+    queryFn: ({ signal }) => E.getRelated(slug, ref as string, limit, { signal }),
+    enabled: !!ref,
+  })
 
 export const useResolve = (slug: string, ref: string, from?: string) =>
   useQuery({

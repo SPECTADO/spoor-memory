@@ -9,6 +9,9 @@ Postgres with pgvector) serves many isolated projects and one org-wide shared sp
 - **Four spaces per project**: `memories` (atomic claims: decision, fact, procedure, observation), `decisions` (numbered
   ADRs, `ADR-0001`), `docs` (long-form pages) and `library` (human-written guides agents read but cannot change, `L<n>`). Every item is Markdown with YAML frontmatter, versioned in append-only
   revisions, linked by `[[wikilinks]]` and typed edges, with backlinks in the UI.
+- **A map of the links**: every project (and the shared space) as an interactive graph with filters, a focus mode for one
+  item's neighbourhood, a list view and link-health counts. **Suggested links** rank unlinked items by meaning, computed on
+  demand from the stored embeddings, for people in the UI and for agents after each write.
 - **A shared space** every project token can read, written only by humans in the web UI.
 - **Cheap for agents**: a budgeted digest (about 1,500 tokens by default) at session start, hybrid search (full text plus
   vectors, reciprocal rank fusion), handles instead of ids, one short text block per tool result. Nine MCP tools.
@@ -16,7 +19,7 @@ Postgres with pgvector) serves many isolated projects and one org-wide shared sp
 - **Claude Code integration**: `spoor login` (device approval in the browser), a committed `.mcp.json`, three hooks (session
   start digest, push of edited ADR and doc files, one gentle "record your decisions" nudge), ADR drafting on your own machine.
 - **Self-cleaning**: unverified memories become stale, then archived; observations expire; humans review and hard-delete.
-- **Web UI**: dashboard, filters, search, rendered Markdown, CodeMirror editor with live preview, revision history with diff,
+- **Web UI**: dashboard, map, filters, search, rendered Markdown, CodeMirror editor with live preview, revision history with diff,
   review queue, audit log, tokens, members, invites, settings, jobs.
 - **Export and import** of a project as a zip of Markdown files with full history, re-importable losslessly.
 
@@ -83,8 +86,8 @@ and names the commands (`npm i -g spoor-memory@<server version>`, then `spoor in
 | read | for |
 |---|---|
 | [docs/operations.md](docs/operations.md) | deploying and running it: env vars, TLS, proxies, backup, restore, upgrades, troubleshooting |
-| [docs/user-guide.md](docs/user-guide.md) | the web UI: projects, spaces, item lifecycle, editing, tokens, admin |
-| [docs/agent-guide.md](docs/agent-guide.md) | what agents get: digest, tools, hooks, drafting, mirror rules, token costs |
+| [docs/user-guide.md](docs/user-guide.md) | the web UI: projects, spaces, the map and suggested links, item lifecycle, editing, tokens, admin |
+| [docs/agent-guide.md](docs/agent-guide.md) | what agents get: digest, tools, links, hooks, drafting, mirror rules, token costs |
 | [CHANGELOG.md](CHANGELOG.md) | what is in each release |
 | [ARCHITECTURE.md](ARCHITECTURE.md), [GLOSSARY.md](GLOSSARY.md) | components, flows, terms |
 | [docs/adr/](docs/adr/README.md), [docs/design/](docs/design/) | decisions and the detailed design; [dod-status.md](docs/design/dod-status.md) maps the brief's Definition of done to evidence |

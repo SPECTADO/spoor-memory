@@ -31,7 +31,11 @@ A project you are not a member of does not exist for you (404). Buttons you cann
 **Projects** lists the projects you can see as cards with item counts, a review badge and your role, plus a card for the shared
 knowledge. Instance admins create projects (New project: name, description, slug; the slug is permanent and becomes part of every
 URL and handle). The **dashboard** of a project shows counts per space (active, stale, archived; the library never stale), the five review sections, the last
-15 changes and **Agent activity**: when an agent last read and last wrote, who, with which agent and which tool. The **Connect** box
+15 changes and **Agent activity**: when an agent last read and last wrote, who, with which agent and which tool. Under the
+counts, a **link health** line such as `12 items without links · 3 dangling references` counts the active and stale items (not
+superseded or deprecated) that have no link of any kind in either direction, and the distinct `[[refs]]` in such items that point at
+nothing yet. The first part opens the map with **Unlinked only**, the second the whole map. Each part shows only when its count is
+above 0 (`1 item without links`, `1 dangling reference`), and the line is hidden when both are 0. The **Connect** box
 gives every member the two commands that connect a repository (install the CLI, `spoor login` with this server and project filled in),
 the install guide (`/p/<slug>/install.md`) and token creation; it says how a new teammate gets in (project admins: Members; others:
 ask a project admin) and how a new project is made (instance admins: Projects). **Preview digest** shows what an agent would receive,
@@ -71,11 +75,81 @@ An **item page** shows rendered Markdown, badges (type, status, lifecycle, `pinn
 anchors (repository paths or globs the item is about), dates, who changed it and from where, and the links panel: outgoing and
 incoming edges (`refines`, `supports`, `depends_on`, `conflicts_with`, `supersedes`, `drafted_from`, wikilinks). Write
 `[[slug]]`, `[[ADR-0007]]`, `[[ref|label]]` or `[[shared:slug]]` in a body to link; a link to nothing shows a **create** button.
-Opening an item never counts as using it.
+**Open in map** (top of the Details panel) shows the item's neighbourhood on the [map](#5-the-map). Opening an item never counts as
+using it.
+
+**Suggested links** (bottom of the links panel) lists up to 5 items whose text is closest in meaning to this one and that are not
+linked to it yet, in either direction. Candidates are the four spaces of the project, plus the shared space when it uses the same
+embedding model (for a shared item, only the shared space). Archived, superseded, deprecated and expired items are left out; stale
+ones are not. Each row shows `similar 0.81`: the cosine of the best-matching passages. People who can add relations (editors, admins,
+and library editors on library pages) pick a kind (refines, supports, depends on, conflicts with; default refines; a library page
+offers no conflicts with) and press **Link**; the button stays disabled after the click and the row disappears on refresh. Readers
+see the list without controls. Below the project's minimum similarity (Settings, Duplicates) nothing is shown: **No suggestions
+yet**. An item that is not embedded yet shows `embedding pending: related items appear once the item is embedded`; a failed lookup
+shows **Suggestions unavailable** with Retry. Suggestions are computed each time from the stored embeddings and never saved
+([ADR-0022](adr/0022-link-suggestions-are-computed-on-demand-from-existing-embeddings-nothing-stored.md)).
 
 Item URLs use handles (`/projects/acme/i/m42`), so they stay valid and are safe to paste into chat or an ADR.
 
-## 5. Item lifecycle: active, stale, archived
+## 5. The map
+
+**Map** (project navigation, after Library) draws a project's items as nodes and their links as arrows: `/projects/<slug>/graph`,
+and `/shared/graph` for the shared space. Every role can open it. The map itself only reads; you link items from its side card
+([ADR-0021](adr/0021-graph-view-one-project-wide-graph-endpoint-rendered-as-d3-force-svg-with-focus.md)).
+
+- **What is drawn**: the project's items that pass the filters, and the links between them of the seven kinds (`refines`,
+  `supports`, `depends_on`, `conflicts_with`, `supersedes`, `drafted_from`, wikilinks). Anchors are not links. An item outside the
+  filters, or in another space (a shared item seen from a project, a project item seen from the shared space), appears as a
+  **ghost** with a dashed outline when a link joins it to a drawn item; links between two ghosts are not drawn and the rest of the
+  shared space is not loaded. A `[[ref]]` to an item that does not exist yet is a hollow node labelled `[[ref]]`. On the shared map,
+  links from projects show only for projects you are a member of (instance admins see all).
+- **Filters** (above the map): checkbox groups for **Spaces** (all), **Lifecycle** (active and stale) and **Link kinds** (all); the
+  last ticked box of a group cannot be unticked. **Include superseded and deprecated** (off by default), **Unlinked only**, and
+  **Highlight**, a text box that outlines matching items and dims the rest without hiding anything. **Reset filters** shows when
+  something is filtered; it keeps the focus, depth and view.
+- **The URL holds the view**, so a pasted link shows the same map. Keys: `spaces`, `kinds`, `lifecycle` (comma lists, for example
+  `?spaces=memories,decisions`), `superseded=1`, `unlinked=1`, `q` (the highlight), `focus` (a handle), `depth=1` (2 is the
+  default), `view=list`. Defaults are left out; unknown values fall back to the default.
+- **Unlinked only** shows the items that have no link under the current filters (a `[[ref]]` to nothing counts as a link). The
+  server picks them before the size cap, so the result is right on a large project. It works on the whole-project map only: in a
+  neighbourhood the box is disabled with the hint "Whole project only". When there is nothing to show: **No items without links**.
+- **Status line**: `N items · M links · K items without links · J dangling references`, plus the number of matches while you
+  highlight and `updating…` while it reloads. The without-links and dangling counts cover the whole filtered project before the cap,
+  so they can be larger than what is drawn.
+- **Size cap**: a map shows at most 1,500 items. Above that, **The map is cut short** ("Showing 1,500 of N items") asks you to
+  narrow the spaces, link kinds or lifecycle, or to focus on one item. Items of the project are kept before ghosts, then pinned
+  items, items with more links and recently updated items.
+- **Focus mode** (`?focus=m12&depth=2`) shows one item's neighbourhood: the items up to 1 or 2 links away, in either direction. A
+  strip reads "Neighbourhood of m12" with a Depth choice (1 hop, 2 hops) and **Show whole project**. You get there from **Open in
+  map** on an item page or **Focus here** on the side card, which opens the item's card too. Ghosts are shown but not walked
+  through, and the focused item is always shown, even when the filters would hide it.
+- **Legend** (open below the map) explains every mark in text. Shapes give the space, so colour is never the only cue: memories
+  are circles, decisions diamonds, docs squares, library pages hexagons. Bigger nodes have more links. Dashed outline: a ghost.
+  Hollow and labelled `[[ref]]`: a link to nothing. Outer ring: pinned. Faded: stale (archived more so). `~` after a handle:
+  agent-written, not yet reviewed. Links: `refines`, `supports` and `depends_on` are solid lines in their own colours,
+  `conflicts_with` has arrows at both ends, `supersedes` is dashed, `drafted_from` dotted, wikilinks thin and muted.
+- **Moving around**: drag the empty canvas to pan (a press on a node never pans), turn the mouse wheel to zoom around the pointer,
+  or use **Zoom in**, **Zoom out** and **Fit to screen** at the top right. A click on the empty background closes the card; a drag
+  keeps it open.
+
+**Side card.** Click a node, or Tab to it and press Enter or Space. The card shows the handle and title, the badges, where the item
+lives (for example "in the shared space"), its number of links (outgoing, incoming) and its links grouped by kind with the item
+page's labels (Refines and Refined by, Supports and Supported by, and so on); each linked item is a button that selects it on the
+map. Actions: **Open item**, **Focus here**, and for people who can relate items **Add relation** (**Add link** on a library page),
+the same dialog as on the item page. **Suggested links** in the card work as on the item page: pick a kind and press **Link**, and
+the map, the links and the suggestions refresh. A shared ghost on a project map opens in the shared space and has no suggestions
+or write actions there. A `[[ref]]` node says "No item has this reference yet." and offers editors **Create it as a doc**. Close
+the card with **Close details** or Escape (focus returns to the node). There is no drag-to-link, and links are removed on the item
+page.
+
+**List view and keyboard.** **Map** and **List** in the page header switch views (`view=list`). The list has two tables: **Nodes on
+the map** (item, space, number of links, state, and **Details**, which opens the card) and **Links** (from, kind, to); matching rows
+are marked while you highlight. On the map every node is a focusable button whose name says its handle, title, space, state and
+number of links. While focus is in the map, the arrow keys pan, `+` or `=` zooms in, `-` zooms out and `0` fits the map to the
+screen. A **Show the map as a list** button appears when you Tab into the map. Links on the map are drawn for the eye only; the
+card and the list carry the same information as text.
+
+## 6. Item lifecycle: active, stale, archived
 
 Lifecycle is separate from status. Library pages are only active or archived and are never stale. Every project has three settings (project Settings, defaults in brackets): `stale_days` (30),
 `archive_days` (90) and `observation_days` (7).
@@ -107,7 +181,7 @@ The cleanup runs hourly; changed day counts apply at the next run.
 
 Tick rows for bulk Verify or Archive now. Viewers see the queue without actions.
 
-## 6. Editing and history
+## 7. Editing and history
 
 **New** (in a space list) or **Edit** (on an item) opens the editor: fields for title, type and confidence (memories), status and
 date (decisions), tags, anchors (one per line) and slug (only at creation), then a CodeMirror Markdown editor with live preview
@@ -130,7 +204,7 @@ forces it. Agents cannot edit mirrored items through MCP.
 **Supersede** (memories): replace a wrong or outdated memory with a new one (written inline or picked); the old one is marked
 `superseded` and links to its replacement. For ADRs, supersede happens in the new ADR file (`supersedes:` in its frontmatter).
 
-## 7. Tokens and device approval
+## 8. Tokens and device approval
 
 Agents authenticate with bearer tokens, per project. **Tokens** (project navigation) lists them with kind, origin (`device login` or
 `web`), role cap, last used, expiry. **New token**: a name, a kind (a user token acts as you with your live role, optionally
@@ -144,7 +218,7 @@ self-reported client name (unverified). Then **Approve read-only** (the token ca
 follows your role) or **Deny**. Only approve codes you started yourself. Codes last 10 minutes and are single use; device tokens
 expire after 90 days. The page does not accept a code from a link, on purpose.
 
-## 8. Admin pages (instance admins)
+## 9. Admin pages (instance admins)
 
 - **Projects**: every project with counts and review total; create a project.
 - **Users**: search, make someone instance admin or shared editor, disable, delete (type the email), **Create reset invite**
@@ -156,12 +230,14 @@ expire after 90 days. The page does not accept a code from a link, on purpose.
 - **Instance audit**: user, invite, project and job events.
 
 Project admins also have **Members** (add by email, change role, remove; the last project admin cannot be demoted), **Settings**
-(name, cleanup days, digest budget and decision window, duplicate threshold 0.80 to 0.99, embedding provider with a progress bar
+(name, cleanup days, digest budget and decision window, duplicate threshold 0.80 to 0.99, **Related items minimum similarity**
+0.50 to 0.90, default 0.70 (suggested links below it are hidden; it always acts at least 0.01 below the duplicate threshold, so
+with threshold 0.85 a saved 0.90 acts as 0.84), embedding provider with a progress bar
 during a re-embed, export, import (a full Spoor export into an empty project; a zip of Markdown files into any project), and for
 instance admins delete) and the project **Audit log** (who or which
 agent changed what, via which channel, filterable).
 
-## 9. Shared space
+## 10. Shared space
 
 `Shared knowledge` (`/shared`) is the org-wide space, with the same four spaces (including a shared **Library**, handles `S:L3`, written by instance admins and shared editors) and the same pages. Rules:
 

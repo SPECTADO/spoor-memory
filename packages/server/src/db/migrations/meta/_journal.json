@@ -43,6 +43,13 @@
       "when": 1792581787393,
       "tag": "0005_request_log",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792614642798,
+      "tag": "0006_edges_project_idx",
+      "breakpoints": true
     }
   ]
 }

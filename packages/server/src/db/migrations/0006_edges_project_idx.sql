@@ -1,0 +1,1 @@
+CREATE INDEX "edges_project_idx" ON "edges" USING btree ("project_id");

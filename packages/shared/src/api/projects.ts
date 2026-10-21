@@ -64,7 +64,7 @@ export interface ProjectJson {
   settings: {
     cleanup: { stale_days: number; archive_days: number; observation_days: number }
     digest: { default_budget: number; decision_window_days: number }
-    dedupe: { threshold: number }
+    dedupe: { threshold: number; related_min_cos: number }
     embedding: { provider: string }
     memory: { exclusive: boolean }
   }
@@ -120,6 +120,12 @@ export interface DashboardResponse {
   recent: { item: ItemSummary; change: DashboardChange; actor: ActorJson; at: string }[]
   /** The newest agent read and write in the request log (14 days), `null` when there is none. */
   last_requests: { read: LastRequestJson | null; write: LastRequestJson | null }
+  /**
+   * Link health (the map's defaults): `unlinked_items` = active or stale items of the project, status not
+   * superseded or deprecated, with no edge of any kind in either direction; `dangling_refs` = distinct refs of
+   * dangling wikilinks written in such items.
+   */
+  links: { unlinked_items: number; dangling_refs: number }
 }
 
 // ---- memberships (api.md 4.2) -------------------------------------------------------------------------

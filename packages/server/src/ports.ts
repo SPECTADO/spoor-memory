@@ -108,6 +108,35 @@ export interface DedupeResult {
   skipped: boolean
 }
 
+/** Related-item candidates (ADR-0022): nearest unlinked items by best-chunk cosine, nothing stored. */
+export interface RelatedQuery {
+  /** The probe item's project: its active model, its items, and `_shared` when `includeShared`. */
+  projectId: string
+  /** The probe item: never a candidate, nor any item joined to it by an edge in either direction. */
+  itemId: string
+  /** Probe vectors (e.g. just prepared by a write); omitted = the item's stored chunks of the active model. */
+  chunks?: PreparedChunk[]
+  /** Add `_shared` items when `_shared`'s active model equals the project's (ignored for `_shared` itself). */
+  includeShared: boolean
+  /** Further items never suggested (e.g. linked in the same call). */
+  excludeIds?: string[]
+  /** Floor (inclusive) on the best-chunk cosine. */
+  minCos: number
+  limit: number
+}
+
+export interface RelatedCandidate {
+  id: string
+  cos: number
+}
+
+export interface RelatedResult {
+  /** Best first (cos desc, then updated_at desc), at most `limit`. */
+  candidates: RelatedCandidate[]
+  /** true when no probe vector exists (embedding pending, unknown model dims). */
+  pending: boolean
+}
+
 export interface IndexedItem {
   id: string
   projectId: string
@@ -125,6 +154,8 @@ export interface SearchPort {
    * for the active (and target) model at `item.revision`. Returns whether any embedding is pending.
    */
   indexItemChunks(tx: Tx, item: IndexedItem, prepared: PreparedChunks): Promise<{ embeddingPending: boolean }>
+  /** Related unlinked items by embedding similarity (ADR-0022), for `GET …/related` and the MCP replies. */
+  relatedCandidates(db: DbOrTx, query: RelatedQuery): Promise<RelatedResult>
 }
 
 // ---- jobs (cleanup-and-jobs.md section 4) ---------------------------------------------------------------
@@ -212,5 +243,9 @@ export class NoopSearchPort implements SearchPort {
   async indexItemChunks(_tx: Tx, item: IndexedItem): Promise<{ embeddingPending: boolean }> {
     this.indexed.push(item)
     return { embeddingPending: false }
+  }
+
+  async relatedCandidates(): Promise<RelatedResult> {
+    return { candidates: [], pending: true }
   }
 }

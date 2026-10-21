@@ -199,16 +199,20 @@ CREATE INDEX device_codes_pending_idx ON device_codes (created_at) WHERE status 
 {
   "cleanup":   { "stale_days": 30, "archive_days": 90, "observation_days": 7 },
   "digest":    { "default_budget": 1500, "decision_window_days": 30 },
-  "dedupe":    { "threshold": 0.92 },
+  "dedupe":    { "threshold": 0.92, "related_min_cos": 0.7 },
   "embedding": { "provider": "local" },
   "memory":    { "exclusive": true }
 }
 ```
 Ranges: `stale_days` 1–3650, `archive_days` 1–3650, `observation_days` 1–365,
-`default_budget` 200–8000, `decision_window_days` 1–365, `threshold` 0.80–0.99,
+`default_budget` 200–8000, `decision_window_days` 1–365, `threshold` 0.80–0.99, `related_min_cos` 0.50–0.90,
 `embedding.provider` ∈ providers enabled by env (`local` always). `memory.exclusive` is a boolean, default true (ADR-0015): when on, the
 MCP instructions, the `AGENTS.md` block and the SessionStart hook tell agents to use no other memory store. Changing the provider sets
 `embedding_target` (see search-and-digest.md §3); choosing the active model's provider again clears it.
+`dedupe.related_min_cos` (ADR-0023) is the cosine floor of related-item suggestions (search-and-digest.md §5a, api.md §5.7). It is read
+only through `relatedMinCos(settings)` = `min(related_min_cos, threshold − 0.01)` (rounded to 2 decimals), so the floor always stays
+below the duplicate threshold; a stored value at or above the threshold is accepted on write and clamped on read (threshold 0.85 and
+0.90 give 0.84). Patched like every setting (`PATCH /api/v1/projects/:slug`, audit path `dedupe.related_min_cos`).
 Unknown keys are rejected on write. The column stores only the keys an admin set (a write deep-merges the
 patch and validates the result), so a changed default reaches every project that never overrode it. A new
 project stores `embedding.provider` = the instance's default provider (`SPOOR_EMBEDDING_DEFAULT`) and takes
@@ -384,6 +388,7 @@ CREATE TABLE edges (
   CHECK (src_id <> dst_id)
 );
 CREATE INDEX edges_dst_idx ON edges (dst_id, kind);
+CREATE INDEX edges_project_idx ON edges (project_id);   -- the project graph (migration 0006_edges_project_idx)
 CREATE INDEX edges_dangling_idx ON edges (project_id, dst_ref) WHERE dst_id IS NULL;
 
 -- scope guard (custom migration): an edge belongs to its source's project, and nothing in _shared
@@ -409,6 +414,14 @@ CREATE TRIGGER edges_scope BEFORE INSERT OR UPDATE OF src_id, dst_id, project_id
 ```
 The item service maps `P0002` to `read_only_space` (shared target in a write position) or `not_found`;
 the trigger is the backstop, not the primary check.
+
+Edge visibility on reads follows from that scope: `edges.project_id` is the source's project, so a regular project's
+edges are the rows with its `project_id` (into the project, into `_shared`, or dangling), and `_shared`'s own rows link
+two shared items. The per-item edges list and the project graph (api.md §5.5, §5.6) show a project its own rows plus the
+`_shared` rows (in the graph only around a shared item it focuses on, because an edge between two ghosts is never
+returned); `_shared` sees its own rows plus the project rows pointing into it, those only from the viewer's member
+projects (all for an instance admin). `edges_project_idx` (migration `0006_edges_project_idx`) serves the whole-project
+read.
 
 Migration `0004_library_guards.sql` extends `spoor_edge_scope()` (the body above plus the library rules) and raises the
 custom SQLSTATE **`SPL01`** (not `P0003`, which is plpgsql's built-in `too_many_rows`) when

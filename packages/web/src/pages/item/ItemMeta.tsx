@@ -3,12 +3,14 @@
  * list filtered by tag), anchors, provenance (`~`), dates, who and via what, revision with a history link,
  * the mirrored source path, the superseded-by chain and the extra frontmatter keys.
  */
+import { Network } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import { useItem } from '../../api/hooks'
 import type { ItemJson } from '../../api/types'
 import { dateTime } from '../../lib/format'
-import { itemPath, projectPath } from '../../lib/paths'
+import { graphPath, itemPath, projectPath } from '../../lib/paths'
+import { ButtonLink } from '../../ui'
 import { lifecycleText, When } from './common'
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -57,6 +59,10 @@ export function ItemMeta({ slug, item }: { slug: string; item: ItemJson }) {
       <h2 id="meta-heading" className="mb-2 text-base font-semibold">
         Details
       </h2>
+      <ButtonLink to={graphPath(slug, { focus: item.handle, depth: 2 })} size="sm" className="mb-2">
+        <Network className="size-4" aria-hidden="true" />
+        Open in map
+      </ButtonLink>
       <dl className="divide-y divide-border">
         {item.type && <Row label="Type">{item.type}</Row>}
         {((item.space !== 'docs' && item.space !== 'library') || item.status !== 'active') && (

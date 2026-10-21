@@ -1,10 +1,11 @@
 # Web UI
 
-Status: implemented (phase 4), 2026-10-19. Minimal on purpose: a browse, read, edit, review and administer tool for people. English only, no graph view
-(BRIEF). Every call it makes is in [api.md](api.md); permissions are enforced by the server, the UI only hides what a user cannot do.
+Status: implemented (phase 4), 2026-10-19; the Map page and suggested links added 2026-10-21 (0.4.0, ADR-0021, ADR-0022). Minimal on purpose: a browse, read, edit,
+review and administer tool for people, with one read-only map of the links (§4.4). English only. Every call it makes is in [api.md](api.md); permissions are enforced by the server, the UI only hides what a user cannot do.
 Stack ([docs/research/web-stack.md](../research/web-stack.md)): React 19.3.1, Vite 8.3.4, Tailwind 4.3.3, TanStack Query 5.104.3,
 react-router 7.18.4 (data router, single `react-router` package), `@uiw/react-codemirror` 4.25.12 + `@codemirror/lang-markdown`,
-`react-markdown` 10.1.0 + `remark-gfm` 4.0.1, `diff` 9.0.0, `lucide-react` 1.58.0. No component library, no new package.
+`react-markdown` 10.1.0 + `remark-gfm` 4.0.1, `diff` 9.0.0, `lucide-react` 1.58.0, `d3-force` 3.0.0 (exact pin, the map's layout only, loaded
+only by the map chunk; ADR-0021). No component library.
 
 ## 1. Layout of `packages/web`
 
@@ -15,8 +16,10 @@ src/
   ui/         primitives of §4, MarkdownView, MarkdownEditor (CodeMirror, lazy-loaded), DiffView
   components/ shell and guards of §4 (AppShell, Nav, AccountMenu, ProjectSwitcher, AuthGuard, RequireRole, ProjectScope, RouteError) and the composite components
   pages/      one module per route of §2, one chunk per page: single-module pages are `lazy:` routes in router.tsx; the page groups
-              item/, review/, settings/, admin/ wrap theirs in React.lazy + Suspense in their own index.tsx (re-exported by pages/index.tsx)
-  lib/        paths.ts, roles.ts, wikilinks.ts (remark plugin), diff.ts, format.ts, listFilters.ts, useSearchParamsState.ts
+              item/, review/, settings/, admin/ wrap theirs in React.lazy + Suspense in their own index.tsx (re-exported by pages/index.tsx);
+              graph/ is the map (GraphPage, a `lazy:` route, with GraphCanvas, GraphFilters, GraphLegend, GraphList, NodeCard, graphState.ts, graphStyle.ts)
+  lib/        paths.ts, roles.ts, wikilinks.ts (remark plugin), diff.ts, format.ts, listFilters.ts, useSearchParamsState.ts,
+              graphLayout.ts (the map's view model and d3-force layout as pure functions, unit-tested; pan and zoom maths)
 ```
 Conventions (API layer, UI primitives, tests) are written down in [packages/web/README.md](../../packages/web/README.md).
 Types and zod schemas come from `packages/shared` (`ItemSummary`, `Item`, frontmatter, the wikilink regex, `slugify`, the anchor normaliser).
@@ -37,13 +40,14 @@ SPA routes live under `/projects/...`, `/shared/...`, `/admin/...`, `/login`, `/
 | `/device` | Approve a CLI login: the user **types** the code from their terminal (a `?code=` parameter is ignored); shows project, requester IP, age, role and the client name labelled "reported by the requester (unverified)"; buttons **Approve read-only** (default focus), **Approve**, **Deny** ([auth-and-security.md](auth-and-security.md) §6) | logged in, member of the code's project | `GET device/lookup`, `POST device/approve|deny` |
 | `/` | redirect to `/projects` | logged in | |
 | `/projects` | Project list: cards with counts, review badge, your role; "Shared knowledge" card; "New project" (IA) | logged in | `GET projects` |
-| `/projects/:slug` | Dashboard: counts per space (active, stale, archived; a fourth Library card shows active and archived, "never stale"), review counts for all five sections with links, the last 15 changes, "Agent activity" (last agent read and write; project admins also get a link to the request log), a "Connect" box for every member (CLI install and `spoor login` commands with this server's URL and version, install guide, token creation; a new teammate: Members for project admins, "ask a project admin" otherwise; a new project: Projects for IA), "Preview digest"; agent activity and Connect are not shown on `_shared` | member | `GET projects/:slug`, `…/dashboard`, `instance` |
+| `/projects/:slug` | Dashboard: counts per space (active, stale, archived; a fourth Library card shows active and archived, "never stale"), review counts for all five sections with links, the last 15 changes, a link-health line (below the counts: "N items without links" → the map with "Unlinked only", "N dangling references" → the map; each part only when its count is above 0, singular for 1, joined by ` · ` only when both show; hidden when both are 0; on `/shared` the links go to `/shared/graph?unlinked=1` and `/shared/graph`), "Agent activity" (last agent read and write; project admins also get a link to the request log), a "Connect" box for every member (CLI install and `spoor login` commands with this server's URL and version, install guide, token creation; a new teammate: Members for project admins, "ask a project admin" otherwise; a new project: Projects for IA), "Preview digest"; agent activity and Connect are not shown on `_shared` | member | `GET projects/:slug`, `…/dashboard`, `instance` |
 | `/projects/:slug/memories`, `/decisions`, `/docs`, `/library` | Space list with filters, "New" (library: only with the library right) | member | `GET …/spaces/:space/items` (infinite) |
 | `/projects/:slug/:space/new` | Editor, create mode | editor (`library`: the library right) | `POST …/spaces/:space/items` |
-| `/projects/:slug/i/:ref` | Item view (rendered Markdown, meta, links, actions) | member | `GET …/items/:ref`, `…/edges` |
+| `/projects/:slug/i/:ref` | Item view (rendered Markdown, meta with "Open in map", links with suggested links, actions) | member | `GET …/items/:ref`, `…/edges`, `…/related` |
 | `/projects/:slug/i/:ref/edit` | Editor, edit mode | editor (library page: the library right) | `PATCH …/items/:ref` |
 | `/projects/:slug/i/:ref/history?rev=&base=` | Revisions and diff | member | `GET …/revisions`, `…/revisions/:n` |
 | `/projects/:slug/w/:ref` | Wikilink resolver: resolves, then `replace` navigates to the item (a shared item under `/shared/i/…`) or shows "No item called …" with a "Create doc" button (editors; not for a `shared:` ref) that opens `…/docs/new?title=<ref>`; for `from=library` the button is "Create library page" (`library` gate) and opens `…/library/new?title=<ref>`, because only a library page can claim a library page's dangling link | member | `GET …/resolve?ref=&from=` (`from` is the space of the page holding the link; a library page only sets the rank, so a link to a doc or memory resolves normally) |
+| `/projects/:slug/graph?spaces=&kinds=&lifecycle=&superseded=1&unlinked=1&q=&focus=&depth=&view=list` | Map of the items and their links (§4.4); `/shared/graph` for the shared space | member | `GET …/graph`, `…/items/:ref`, `…/related`, `POST …/edges` (writers) |
 | `/projects/:slug/search?q=` | Search | member | `GET …/search` |
 | `/projects/:slug/review?section=` | Review queue | member (actions: editor) | `GET …/review`, `…/review/:section`, `…/decisions/undrafted` |
 | `/projects/:slug/audit` | Audit log | member | `GET …/audit` (infinite) |
@@ -82,16 +86,17 @@ Deep links to an item are `…/i/<handle>` (stable) so URLs can be pasted in cha
 - Query keys: `['me']`, `['instance']`, `['projects']`, `['project', slug]`, `['dashboard', slug]`, `['items', slug, space, filters]`, `['item', slug, ref]`, `['edges', slug, ref]`,
   `['revisions', slug, ref]`, `['revision', slug, ref, n]`, `['search', slug, params]`, `['review', slug]`, `['review', slug, section]`, `['audit', slug, filters]`, `['members', slug]`,
   `['tokens', slug]`, `['jobs', slug]`, `['users', filters]`, `['invites', filters]`, `['admin-jobs']`; also `['review', slug, 'counts']` (so `['review', slug]` refreshes counts and sections),
-  `['context', slug, params]`, `['resolve', slug, ref]`, `['instance-audit', filters]`, `['invite-preview', token]`, `['device-lookup', code]`. All keys come from `api/keys.ts`.
+  `['context', slug, params]`, `['resolve', slug, ref]`, `['instance-audit', filters]`, `['invite-preview', token]`, `['device-lookup', code]`,
+  `['graph', slug, params]` (prefix `['graph', slug]`), `['related', slug, ref, limit]` (prefix `['related', slug]`). All keys come from `api/keys.ts`.
 - Invalidation works on prefixes: a content write invalidates `['item', slug]` and `['revisions', slug]` for the whole project rather than one `ref`, because a page may have loaded
   the item by handle, uuid or slug. Revision snapshots (`['revision', slug, ref, n]`) are immutable and never invalidated.
 - Invalidation after a mutation (the whole policy):
 
 | mutation | invalidates |
 |---|---|
-| create / edit item | `['items', slug]`, `['item', slug, ref]`, `['revisions', slug, ref]`, `['edges', slug]`, `['dashboard', slug]`, `['review', slug]`, `['search', slug]` |
+| create / edit item | `['items', slug]`, `['item', slug, ref]`, `['revisions', slug, ref]`, `['edges', slug]`, `['graph', slug]`, `['related', slug]`, `['dashboard', slug]`, `['review', slug]`, `['search', slug]` |
 | pin, unpin, verify, archive, restore, supersede, delete | the same set, plus `['projects']` (counts); delete removes `['item', slug, ref]` from the cache |
-| edge add / remove | `['edges', slug]` |
+| edge add / remove | `['edges', slug]`, `['graph', slug]`, `['related', slug]` (suggestions exclude linked items), `['dashboard', slug]` (link-health line); also `['review', slug]` for every remove and for an added `conflicts_with` |
 | review actions | `['review', slug]`, `['dashboard', slug]`, `['items', slug]`, `['projects']` (row removed optimistically, rolled back on error) |
 | login, invite accept, logout | the whole cache is cleared |
 | members, tokens, settings | their own key, `['project', slug]` |
@@ -101,6 +106,8 @@ Deep links to an item are `…/i/<handle>` (stable) so URLs can be pasted in cha
 - The device lookup never refetches by itself (no retry, no refetch on focus or reconnect): every server-side miss counts toward the 10-minute lock, and malformed codes are rejected in the browser.
 - Search input: 250 ms debounce, the query lives in the URL (`?q=`, with `space=` and `inactive=1` for the space filter and "Include inactive"; hits show space, type, stale/archived badges and the snippet as plain text; a shared hit (`S:` handle) links to `/shared/i/<handle>`), previous results stay visible while the next load (`placeholderData: keepPreviousData`).
 - The digest preview (dashboard button "Preview digest", every member; `pages/DigestPreview.tsx`) opens a dialog that loads the default digest at once and reloads it with an optional query and file list (one path per line) typed in a small form; it renders the text in a `<pre>` with the token estimate, item count and how many items the budget left out. Read-only.
+- The map (`useGraph`) keeps the previous graph on screen while a filter change loads, but only for the same project: after a switch to another slug it
+  shows the loading skeleton, never the old project's map. `useRelated` is idle without a ref.
 - Writes the UI makes are always sent with the `revision` the user last saw; there is no "force" in the UI except the conflict dialog (§5.3).
 
 ## 4. Components
@@ -110,10 +117,11 @@ The account menu is a disclosure (button + list, Esc and outside click close it)
 
 | group | components |
 |---|---|
-| shell | `AppShell` (top bar: logo, project switcher, search box for the current project, user menu), `ProjectNav` (Dashboard, Memories, Decisions, Docs, Library (lucide `Library`), Search, Review with count badge, Audit log, Tokens, and for project admins Members, Settings; no Tokens or Members on the shared space, Settings there only for IA), `AdminNav` (IA: Projects → `/admin/projects`, Users, Invites, Jobs, Instance audit), `PageHeader` |
+| shell | `AppShell` (top bar: logo, project switcher, search box for the current project, user menu), `ProjectNav` (Dashboard, Memories, Decisions, Docs, Library (lucide `Library`), Map (lucide `Network`, every role), Search, Review with count badge, Audit log, Tokens, and for project admins Members, Settings; no Tokens or Members on the shared space, Settings there only for IA), `AdminNav` (IA: Projects → `/admin/projects`, Users, Invites, Jobs, Instance audit), `PageHeader` |
 | primitives | `Button`, `IconButton`, `Input`, `Textarea`, `Select`, `Checkbox`, `Badge`, `Tabs`, `Table`, `Dialog`, `ConfirmDialog` (type the handle or slug to confirm), `Toast`, `CopyField` (read-only input + copy button), `Spinner`, `Skeleton` |
 | states | `EmptyState`, `ErrorState` (shows `message`, `hint`, request id), `NotFound`, `Forbidden`, `StartingBanner`, `OfflineBanner` |
-| content | `MarkdownView`, `ItemHeader` (handle, space, status/lifecycle/type badges, revision, updated by), `ItemMeta` (tags, anchors, dates, source path, client), `LinksPanel`, `ItemActions`, `ItemTable`, `ItemRow`, `FilterBar`, `SnippetList` |
+| content | `MarkdownView`, `ItemHeader` (handle, space, status/lifecycle/type badges, revision, updated by), `ItemMeta` (tags, anchors, dates, source path, client, "Open in map"), `LinksPanel` (with "Suggested links"), `ItemActions`, `ItemTable`, `ItemRow`, `FilterBar`, `SnippetList` |
+| map | `GraphPage`, `GraphCanvas` (SVG, pan and zoom; memoised edge and node layers), `GraphFilters`, `GraphLegend`, `GraphList`, `NodeCard` (side card with suggested links) |
 | editing | `ItemEditor` (fields + `MarkdownEditor`), `MarkdownEditor` (CodeMirror), `TagInput`, `AnchorsInput`, `ConflictDialog` |
 | history | `RevisionList`, `DiffView`, `FrontmatterDiff` |
 | review | `ReviewTabs`, `ReviewRow`, `ConflictRow`, `BulkBar`, `SupersedeDialog`, `PromoteRestoreDialog` |
@@ -137,10 +145,21 @@ The regex is the shared wikilink grammar ([data-model.md](data-model.md) §3). T
 - A **library page** shows a "Library · human-maintained" badge instead of the status and lifecycle badges, and has no Pin, Verify, Supersede, promote, expiry or last-verified information. Edit, Archive and Restore need `library`; Delete needs `admin`. Without the right a notice reads "You can read this page. Editing needs the library right; ask a project admin." In its `LinksPanel`, "Add link" needs `library` and the picker offers all spaces; `conflicts_with` is not offered whenever either side is a library page. Backlinks are read-only, each labelled with its source handle (`~` for agent-written sources). A wikilink click resolves with `from=library`.
 - Body: `MarkdownView`. Side panel: tags (click → list filtered by tag), anchors (monospace), dates (created, updated, verified, last used), created/updated by and client,
   revision number with link to history; also type, status, confidence, ADR number and date, lifecycle, provenance (`~` for agent-written), expiry, the mirrored
-  `source_path`, the slug and the extra frontmatter keys (collapsed).
+  `source_path`, the slug and the extra frontmatter keys (collapsed). The side panel ("Details") starts with an **Open in map** button to
+  `graph?focus=<handle>&depth=2` (§4.4).
 - `LinksPanel`: outgoing and incoming edges grouped by kind (`refines`, `supports`, `depends_on`, `conflicts_with`, `supersedes`, `drafted_from`, wikilinks), each as handle + title link; dangling wikilinks muted with
   "create" when the user can write; "Add relation" (editor) opens a dialog with kind and a target picker (list filter `q_title`, plus a `S:` toggle for shared); typed edges have a remove button. On a shared item
   the server already filters both directions to the viewer's projects ([api.md](api.md) §5.5).
+- **Suggested links** (ADR-0022), a subsection at the end of `LinksPanel`: up to 5 unlinked items similar to this one from `GET …/items/:ref/related`
+  ([api.md](api.md) §5.7), each row a title link with type/status badges and "similar 0.81" (the best-chunk cosine, 2 decimals). Users who may add a
+  relation here (editors; on a library page the `library` right; the same gate as "Add relation") get a relation-kind select (refines, supports,
+  depends on, conflicts with; default refines; conflicts with is not offered when either item is a library page) and a **Link** button that adds
+  the edge, toasts "m42 supports m30" and refreshes links, map, suggestions and dashboard; the row leaves the list on the refetch. After its own
+  successful link a row's button stays disabled until the refetch drops the row, so a double click creates one edge. Readers see the rows without
+  controls. While the item has no vector the server's note "embedding pending: related items appear once the item is embedded" shows instead; with
+  nothing above the floor, "No suggestions yet". A failed request (any error) shows one muted line "Suggestions unavailable" with a small Retry
+  link, not a full error state (a 5xx is retried once by the query client first, so the line appears about a second later). Nothing is stored;
+  the list is computed on each request.
 - `ItemActions` (by role, none for viewers): Edit, **Accept** (a `proposed` decision: `PATCH {revision, status:"accepted"}` with the loaded revision; a conflict reloads the
   item and asks to accept again), Pin/Unpin (pinning also verifies: a stale item becomes active), Verify, Archive (one confirmation; reversible)/Restore (an expired
   observation opens "Promote it to a fact and restore?"), **Supersede** (memories only; the picker offers only memories of the same project, or a new memory written
@@ -154,6 +173,74 @@ The regex is the shared wikilink grammar ([data-model.md](data-model.md) §3). T
 Also: anchor path filter (same matcher as the digest), status only where the space has a vocabulary (not docs). Rows carry quick actions for editors: Pin/Unpin, Verify, Archive (no confirmation, all reversible; Restore stays on the item page because an expired observation needs a choice); a tag in a row adds it as a filter. `ItemTable` columns: handle, title,
 type/status badges, tags, updated, last verified; stale rows tinted. Memories show an "expires" column for observations. "New" button for editors. Empty state per space with one sentence on how items get here
 ("Agents add memories with spoor_remember. You can add one yourself.", "Decisions come from spoor_decide, ADR files in the repo, or here.", "Docs are pushed from the repo or written here."). The **Library** list (title "Library", subtitle "Guides and conventions that agents read and follow. Only people with the library right can change them.") has the docs columns, offers Active and Archived only in the lifecycle filter, shows "New page" and the Archive/Restore quick actions only with the library right, and on a project ends with a footer "Org-wide library pages live in Shared → Library and appear to agents as S:L…". Its empty state reads "No library pages yet. Write the guides agents must follow, such as a graphics guide, architecture guide or conventions. Agents see every page in their digest and can read it, never change it." with a New page button, or without the right "No library pages yet. A project admin or a library editor can add pages here."
+
+### 4.4 Map (`/projects/:slug/graph`, `/shared/graph`; ADR-0021)
+
+A read-only picture of the items and the links between them, drawn as SVG with the design tokens. One lazy chunk (`pages/graph/`), the only
+user of `d3-force`; the layout is computed in the browser by the pure functions of `lib/graphLayout.ts` from `GET …/graph` ([api.md](api.md) §5.6).
+"Map" sits in the project nav after Library, for every role. Two entry points: the whole project (default) and one item's neighbourhood
+(`?focus=<handle>&depth=1|2`), reached from **Open in map** on the item page or **Focus here** in the side card. There is no drag-to-link and
+no edge removal here; removal stays on the item page.
+
+- **URL state** (`graphState.ts`, written through `useSearchParamsState`, history replace; defaults are left out, so the default map has a
+  clean URL and one cache key): `spaces` (csv of memories, decisions, docs, library; default all), `kinds` (csv of the seven edge kinds;
+  default all), `lifecycle` (csv of active, stale, archived; default active,stale), `superseded=1` (include superseded and deprecated),
+  `unlinked=1` ("Unlinked only"), `q` (text highlight, debounced 250 ms), `focus=<handle>`, `depth=1|2` (default 2; written only as `depth=1`,
+  only with `focus`), `view=list` (default map). Unknown values in a csv are dropped and an empty list falls back to the default. The request
+  carries only the non-default server filters (`spaces`, `kinds`, `lifecycle`, `include_superseded=true`, `unlinked=true`, `focus` with
+  `depth`); `q` and `view` never reach the server, and `unlinked` is never sent together with `focus`.
+- **Filters** (a `role="search"` region): checkbox groups Spaces, Lifecycle and Link kinds (the last checked box of a group cannot be
+  unchecked), a "Highlight" search box (handle, title or tag), **Unlinked only**, **Include superseded and deprecated**, and **Reset
+  filters** (only when something is filtered or highlighted; it keeps focus, depth and view). "Unlinked only" is a server filter
+  (`unlinked=true`), so it is right on a map cut short by the cap. In a neighbourhood it is disabled, shown unchecked, with the hint "Whole
+  project only"; **Focus here** removes `unlinked` from the URL. In focus mode a strip shows "Neighbourhood of <handle>", a **Depth**
+  select (1 hop, 2 hops) and **Show whole project**.
+- **Header**: a Map / List toggle pair (`aria-pressed`).
+- **Status line**: "N items · M links · K items without links · J dangling references", plus "· X matches" while highlighting and
+  "· updating…" while refetching. Items do not count dangling targets. K and J are `meta.unlinked_count` and `meta.dangling_count`, counted
+  before the cap (K can exceed the items drawn); K shows in both normal and unlinked-only mode.
+- **Truncation**: when `meta.truncated`, a warning "The map is cut short" reads "Showing 1,500 of <total_nodes> items. Narrow the spaces,
+  link kinds or lifecycle, or focus on one item to see the rest."
+- **Empty states**: "Nothing to map yet" (no filters); "No items match these filters" (filtered, and also an empty unlinked-only reply that
+  was cut short); "No items without links" with "Every item these filters keep has a link. Turn off "Unlinked only" to see the whole map."
+  (unlinked only, not cut short).
+- **Nodes**: the shape gives the space, so colour is never the only cue: memories circles (accent), decisions diamonds (success), docs
+  squares (warning), library pages hexagons (neutral). Size grows with the degree (square-root scale, radius 6 to 16). A dashed outline marks
+  a ghost (outside the filters, or in another space such as shared); a hollow dashed circle labelled `[[ref]]` is a dangling wikilink target
+  (one per distinct ref). An outer accent ring means pinned; stale nodes are faded (opacity 0.65), archived more (0.45); `~` after the handle
+  marks agent-written, unreviewed items. A focus ring marks the selected and the focused node. With a highlight, matching nodes get a thick
+  outline and a bold label and the rest dim to 0.25.
+- **Edges**, all with arrowheads: refines solid accent, supports solid success, depends_on solid warning, conflicts_with solid danger with
+  arrowheads at both ends, supersedes dashed, drafted_from dotted, wikilink thin and muted. The **Legend** (a `<details>` open by default under
+  the map) lists every space, edge kind and state as text with a drawn sample.
+- **Pan and zoom** (hand-rolled, they change only the SVG view box; nodes and edges are memoised layers that re-render only when the
+  layout, selection or highlight changes): drag anywhere on the empty canvas to pan, including the side areas the drawing leaves when it does
+  not fill the canvas; a press on a node never starts a pan. A drag of more than 3 px keeps the side card open; a plain click on the
+  background closes it. The mouse wheel zooms around the pointer; line-mode (×16 px) and page-mode (×400 px) wheel events, as Firefox sends,
+  count like pixel deltas, and one wheel event zooms by at most ×2 or ×0.5. Zoom in, Zoom out and Fit to screen buttons sit at the top right.
+- **Side card** (an `aside` named after the item): handle and title link, the item's badges, where a ghost lives ("outside the filters",
+  "in the shared space", "in project x"), "N links (x outgoing, y incoming)", and the links on the map grouped by kind with the item page's
+  labels (Refines / Refined by, Supports / Supported by, Depends on / Needed by, Conflicts with, Supersedes / Superseded by, Drafted from /
+  Drafted into, Links to / Linked from); each linked node is a button that selects it on the map. Actions: **Open item**, **Focus here**
+  (`focus=<handle>&depth=2`), **Add relation** (**Add link** on a library page; the same `RelationDialog` as the item page, writers only) and
+  **Close details**; Escape also closes it and returns focus to the node. Opening a focus URL selects the focused item and opens its card;
+  switching to another project closes any open card.
+- **Suggested links in the card**: the same `GET …/related` list (up to 5) as the item page, each "handle title" with "similarity 0.81";
+  writers get a kind select and **Link** (toast "m12 supports m30", then the map, edges and suggestions refresh). The pending note shows when
+  there is no vector; "No similar unlinked items." when nothing qualifies; a failed request shows one muted line "Suggestions unavailable" with a
+  small Retry link, as on the item page. After its own successful link a row's button stays disabled until the refetch drops the row, so a
+  double click sends one POST.
+- **Other spaces**: a shared ghost (`S:` handle) on a project map opens at `/shared/i/<handle>`, its Focus here goes to
+  `/shared/graph?focus=<handle>&depth=2`, and it has no suggestions or write actions there. A dangling target's card reads `[[ref]]`, "No item
+  has this reference yet." and, for editors, **Create it as a doc** (`docs/new?title=<ref>`).
+- **List view** (`view=list`): table "Nodes on the map (N)" (Item linked to its page or `[[ref]]`, Space, Links with out/in counts for
+  screen readers, State, a **Details** button that opens the card) and table "Links (M)" (From, Kind as text, To). Rows matching the highlight
+  are tinted and marked "(matches)".
+- **Keyboard and screen readers**: every node is a focusable `role="button"` named "handle(~) title, space, [place], [pinned],
+  [stale|archived], [superseded], N links[, focus][, matches the text filter]"; Enter or Space opens its card, and a node focused outside the
+  visible area pulls the view to it. While focus is in the map, the arrow keys pan, `+` and `=` zoom in, `-` zooms out and `0` fits. An
+  sr-only figcaption says so. A "Show the map as a list" skip button (visible on focus) switches to the list view. Edges are visual only; their
+  information is in the card and the list.
 
 ## 5. The editor
 
@@ -239,7 +326,9 @@ non-empty one, else Stale. Sections: `stale | archived | expiring | conflicts | 
   (service: editor or viewer, **viewer preselected**; user: "same as my role" or "read-only"), optional expiry. `SecretOnceDialog` shows the secret in a `CopyField` with the text "This is the only time you can see it", and a checkbox
   "I have copied it" before the dialog can close. **Revoke** with confirmation. Short help text with the `spoor login` command for the project and the install doc link `/p/<slug>/install.md`.
 - **Settings** (`/projects/:slug/settings`, project admin): tabs `?tab=general|members|tokens|data|audit|danger` (Members, Tokens and Danger zone are not offered on the shared space; Danger zone only to IA). The tabs reuse the panels of the standalone `/members`, `/tokens` and `/audit` routes. General holds the forms below, each with its own Save that sends only the changed keys: General (name, description; slug read-only), Cleanup (`stale_days`, `archive_days`, `observation_days`, with the
-  allowed ranges and the note "applies at the next hourly run"), Digest (default budget, decision window), Duplicates (threshold 0.80–0.99), Memory (one checkbox "Spoor is the agents' only memory", `settings.memory.exclusive`; repos pick up a change at the next `spoor init`), **Embedding** (`EmbeddingPanel`: provider select from `GET instance`; picking a remote
+  allowed ranges and the note "applies at the next hourly run"), Digest (default budget, decision window), Duplicates (threshold 0.80–0.99, and "Related items minimum similarity", `dedupe.related_min_cos`
+  0.50–0.90, step 0.01, default 0.70, hint "Suggestions below this cosine are hidden; always kept below the duplicate threshold. 0.50 to 0.90."; the effective
+  floor is min(value, threshold − 0.01), [data-model.md](data-model.md) §2.1), Memory (one checkbox "Spoor is the agents' only memory", `settings.memory.exclusive`; repos pick up a change at the next `spoor init`), **Embedding** (`EmbeddingPanel`: provider select from `GET instance`; picking a remote
   provider shows "Item text will be sent to <vendor>. Keys stay in the server environment."; after saving, a progress bar from `embedding.remaining` until `embedding.target` is null; search keeps using the old model until
   the switch), **Export/Import** (`ExportImportPanel`: Export button = link to `…/export` with a "without history" checkbox; Import: file input, "Re-create ids" checkbox, always offered: a full Spoor export restores only into an empty project (the server answers 409 `project_not_empty` and the panel says so), a manifest-less Markdown-folder zip may also go into a project with items (api.md §9); result
   summary with dangling edges and notes), **Danger zone** (IA: delete project, type the slug). The shared space shows the same page without Members and Tokens, and only IA sees Import and Delete is absent.
@@ -267,6 +356,9 @@ non-empty one, else Stale. Sections: `stale | archived | expiring | conflicts | 
 | render error | route `errorElement` with a reload button and the error id; the router never shows a white page |
 
 Accessibility baseline: every control has a label, dialogs are native `<dialog>` with focus return, colour is never the only signal (badges carry text), tables are real tables, the editor has an accessible name.
+The map (§4.4) follows the same rules: node shape and outline patterns, edge dash patterns and arrowheads, and the legend's text carry everything the colours do;
+every node is a named, focusable button with keyboard pan and zoom; the list view and the side card hold all edge information in text. The settings number
+inputs carry `min`/`max` from their allowed range (validation messages still come from the shared schema, the form is `noValidate`).
 Dark mode follows `prefers-color-scheme`: components use semantic token utilities (`bg-bg`, `text-fg`, `text-muted`, `border-border`, `bg-accent`, …) whose CSS variables are redefined under
 `@media (prefers-color-scheme: dark)` in `src/index.css`, so no `dark:` variants are needed; there is no theme switch in the MVP.
 
@@ -286,3 +378,7 @@ port, on a database of its own (`<test db>_web_e2e_test`, dropped and created on
   → a new token's secret is shown once, cannot be dismissed before "I have copied it", and works on the bearer API → `/device` approves a code requested
   from `POST /p/:slug/device/code` and the next token poll succeeds → "Download export" downloads `spoor-<slug>-<date>.zip`.
 - `foundation.spec.ts`, `browse.spec.ts`, `item.spec.ts` mock `/api/v1` in the page (keyboard use, phone width, dark mode, editor details).
+- `graph.spec.ts`, no mocks: the admin seeds a project (a decision, a memory that refines it, a dangling wikilink) through the API, opens the map, sees
+  the nodes and the edge, opens a side card, closes it with Escape and reopens it with Enter, zooms with the wheel, pans by dragging the background
+  with the card still open, closes the card with a background click, switches to the list view, turns on "Unlinked only" (the server answers 200,
+  "No items without links") and follows "Open in map" from the item page.
