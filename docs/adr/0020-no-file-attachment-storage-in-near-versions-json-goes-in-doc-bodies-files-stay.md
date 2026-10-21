@@ -2,7 +2,7 @@
 spoor_id: 8d2d262c-c941-477c-8f17-84ca7178df00
 adr: 20
 title: "No file/attachment storage in near versions: JSON goes in doc bodies, files stay in the repo with anchors"
-status: proposed
+status: accepted
 date: 2026-10-21
 deciders: [ladislav.soukup@gmail.com]
 drafted_from: [m29]

@@ -2,7 +2,7 @@
 spoor_id: 52825ce6-9cc0-4285-9076-9819dc1447fb
 adr: 24
 title: MCP tools/list budget raised to 4,000 estimated tokens for relations on all write tools and spoor_get depth
-status: proposed
+status: accepted
 date: 2026-10-21
 deciders: [ladislav.soukup@gmail.com]
 drafted_from: [m37]

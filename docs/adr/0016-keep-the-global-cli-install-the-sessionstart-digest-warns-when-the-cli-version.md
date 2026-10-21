@@ -2,7 +2,7 @@
 spoor_id: b5a8408b-f8ee-49b2-8539-b282e8ad5d7f
 adr: 16
 title: Keep the global CLI install; the SessionStart digest warns when the CLI version differs from the server's
-status: proposed
+status: accepted
 date: 2026-10-20
 deciders: [ladislav.soukup@gmail.com]
 drafted_from: [m21]
