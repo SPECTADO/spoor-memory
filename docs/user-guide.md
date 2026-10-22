@@ -186,7 +186,8 @@ Tick rows for bulk Verify or Archive now. Viewers see the queue without actions.
 **New** (in a space list) or **Edit** (on an item) opens the editor: fields for title, type and confidence (memories), status and
 date (decisions), tags, anchors (one per line) and slug (only at creation), then a CodeMirror Markdown editor with live preview
 (Write and Preview toggle on small screens). Leaving with unsaved changes asks first and can keep a draft in your browser. Creating a
-memory or doc that closely resembles an existing one shows a "similar item exists" warning; you can tick "Skip the duplicate check".
+memory or doc that closely resembles an existing one shows a "similar item exists" warning (not when the two state different numbers
+or identifiers, such as `60` and `600`); you can tick "Skip the duplicate check".
 
 Saves always carry the revision you started from. If an agent or colleague saved in between you get the **conflict dialog**, never a
 silent overwrite: Compare shows a diff, Keep editing keeps your text, "Save my version over rN" re-sends only the fields you changed
@@ -230,7 +231,7 @@ expire after 90 days. The page does not accept a code from a link, on purpose.
 - **Instance audit**: user, invite, project and job events.
 
 Project admins also have **Members** (add by email, change role, remove; the last project admin cannot be demoted), **Settings**
-(name, cleanup days, digest budget and decision window, duplicate threshold 0.80 to 0.99, **Related items minimum similarity**
+(name, cleanup days, digest budget and decision window, duplicate threshold 0.80 to 0.99, default 0.87, **Related items minimum similarity**
 0.50 to 0.90, default 0.70 (suggested links below it are hidden; it always acts at least 0.01 below the duplicate threshold, so
 with threshold 0.85 a saved 0.90 acts as 0.84), embedding provider with a progress bar
 during a re-embed, export, import (a full Spoor export into an empty project; a zip of Markdown files into any project), and for

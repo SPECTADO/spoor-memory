@@ -127,12 +127,21 @@ export interface DuplicateHit {
   cos: number
 }
 
+/** The closest item at or above the duplicate threshold of a create that was saved anyway (ADR-0025). */
+export interface NearDuplicate extends DuplicateHit {
+  /** Values each side states and the other lacks (`60` vs `600`): a different claim. `null` = maybe the same. */
+  values: { new: string[]; existing: string[] } | null
+}
+
 export interface CreateResult {
   /** `null` when an MCP create was refused as a duplicate. */
   item: ItemJson | null
   row: LoadedItem | null
   warnings: Warning[]
+  /** Set only when an MCP create was refused: the same title and body already exist. */
   duplicate: DuplicateHit | null
+  /** Set when the create was saved next to a similar item (MCP: the `note: similar to` line). */
+  similar: NearDuplicate | null
   /** `duplicate check skipped` etc., for the MCP text result. */
   notes: string[]
 }
@@ -422,8 +431,9 @@ export class ItemService {
   }
 
   /**
-   * Near-duplicate check (search-and-digest.md section 5) against the per-project threshold. `null` when
-   * nothing reaches it; `skipped` when no probe vector exists.
+   * Near-duplicate check (search-and-digest.md section 5, ADR-0025). `same`: a candidate with the same title and
+   * body. `similar`: the first candidate at or above the per-project threshold whose values agree, else the first
+   * one at or above it whose values differ. `skipped` when no probe vector exists.
    */
   async dedupe(
     caller: Caller,
@@ -431,7 +441,7 @@ export class ItemService {
     type: string | null,
     excludeItemId: string | null,
     prepared: PreparedChunks,
-  ): Promise<{ hit: DedupeCandidate | null; skipped: boolean }> {
+  ): Promise<{ same: DedupeCandidate | null; similar: DedupeCandidate | null; skipped: boolean }> {
     const settings = await this.projectSettings(caller.project.id)
     const res = await this.deps.ports.search.dedupeCandidates(this.db, {
       projectId: caller.project.id,
@@ -440,8 +450,13 @@ export class ItemService {
       excludeItemId,
       prepared,
     })
-    if (res.skipped) return { hit: null, skipped: true }
-    return { hit: res.candidates.find((c) => c.cos >= settings.dedupe.threshold) ?? null, skipped: false }
+    if (res.skipped) return { same: null, similar: null, skipped: true }
+    const near = res.candidates.filter((c) => c.cos >= settings.dedupe.threshold)
+    return {
+      same: res.candidates.find((c) => c.sameText) ?? null,
+      similar: near.find((c) => c.values === null) ?? near[0] ?? null,
+      skipped: false,
+    }
   }
 
   private dupJson(caller: Caller, c: DedupeCandidate): DuplicateHit {
@@ -459,8 +474,10 @@ export class ItemService {
 
   /**
    * Create an item (web `POST …/spaces/:space/items`, MCP `spoor_remember` / `spoor_decide` /
-   * `spoor_doc_write`). Duplicates: the web only warns; MCP (`dedupe: 'block'`) writes nothing but
-   * `last_used_at` of the existing item and returns it. `allow_duplicate` skips the check.
+   * `spoor_doc_write`). Duplicates (ADR-0025): a similar item is reported and the create saved (web: a
+   * `near_duplicate` warning unless the values differ; MCP: `similar`). Only MCP (`dedupe: 'block'`) refuses, and
+   * only the same title and body: it writes nothing but `last_used_at` of the existing item and returns it.
+   * `allow_duplicate` skips the check.
    */
   async create(
     caller: Caller,
@@ -497,27 +514,32 @@ export class ItemService {
     const warnings: Warning[] = []
     const notes: string[] = []
     const mode = input.allow_duplicate ? 'off' : (opts.dedupe ?? (caller.via === 'mcp' ? 'block' : 'warn'))
+    let similar: NearDuplicate | null = null
     if (mode !== 'off' && space !== 'decisions') {
-      const { hit, skipped } = await this.dedupe(caller, space, fields.type, old?.id ?? null, prepared)
-      if (skipped) notes.push('duplicate check skipped')
-      if (hit) {
-        const dup = this.dupJson(caller, hit)
-        if (mode === 'block') {
-          await withTx(this.db, async (tx) => {
-            await touchUsed(tx, [hit.id])
-            const existing = (await loadItem(tx, hit.id)) as LoadedItem
-            await this.audit(tx, caller, 'item.dedupe_hit', existing, `duplicate of ${dup.handle} refused`, {
-              cos: Number(hit.cos.toFixed(4)),
-            })
+      const found = await this.dedupe(caller, space, fields.type, old?.id ?? null, prepared)
+      if (found.skipped) notes.push('duplicate check skipped')
+      const same = found.same
+      if (same && mode === 'block') {
+        const dup = this.dupJson(caller, same)
+        await withTx(this.db, async (tx) => {
+          await touchUsed(tx, [same.id])
+          const existing = (await loadItem(tx, same.id)) as LoadedItem
+          await this.audit(tx, caller, 'item.dedupe_hit', existing, `duplicate of ${dup.handle} refused`, {
+            cos: Number(same.cos.toFixed(4)),
           })
-          return { item: null, row: null, warnings, duplicate: dup, notes }
-        }
-        warnings.push({
-          code: 'near_duplicate',
-          handle: dup.handle,
-          cos: Number(hit.cos.toFixed(4)),
-          title: dup.title,
         })
+        return { item: null, row: null, warnings, duplicate: dup, similar: null, notes }
+      }
+      if (found.similar) {
+        similar = { ...this.dupJson(caller, found.similar), values: found.similar.values }
+        if (similar.values === null) {
+          warnings.push({
+            code: 'near_duplicate',
+            handle: similar.handle,
+            cos: Number(similar.cos.toFixed(4)),
+            title: similar.title,
+          })
+        }
       }
     }
 
@@ -561,7 +583,7 @@ export class ItemService {
     })
     this.pendingWarning(caller.project.id, pending, warnings)
     const fresh = (await loadItem(this.db, row.id)) as LoadedItem
-    return { item: await this.json(caller, fresh), row: fresh, warnings, duplicate: null, notes }
+    return { item: await this.json(caller, fresh), row: fresh, warnings, duplicate: null, similar, notes }
   }
 
   /**

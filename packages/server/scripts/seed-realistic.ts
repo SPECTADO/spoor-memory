@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { estimateTokens } from '@spoor/shared'
+import { estimateTokens, SETTINGS_DEFAULTS } from '@spoor/shared'
 import { sql } from 'drizzle-orm'
 import pg from 'pg'
 import { pino } from 'pino'
@@ -28,7 +28,7 @@ import type { ServerDeps } from '../src/lib/deps.js'
 import type { McpServices } from '../src/modules/mcp/handlers.js'
 import { buildMcpServer } from '../src/modules/mcp/server.js'
 import { formatSearchResults } from '../src/modules/search/format.js'
-import { createSearchModule, LocalE5Provider } from '../src/modules/search/index.js'
+import { createSearchModule, firstDuplicate, LocalE5Provider } from '../src/modules/search/index.js'
 import { NoopSearchPort } from '../src/ports.js'
 import { assertTestDatabase, testDatabaseUrl } from '../test/db-url.js'
 import { createItem, createProject, createSharedProject, type ItemOpts } from '../test/factories.js'
@@ -647,7 +647,7 @@ try {
         const t3 = performance.now()
         prep.push(t2 - t1)
         chk.push(t3 - t2)
-        const hit = (res.candidates[0]?.cos ?? 0) >= 0.92
+        const hit = firstDuplicate(res, SETTINGS_DEFAULTS.dedupe.threshold) !== undefined
         if (hit && kind === 'full_text') hits.full_text++
         if (hit && kind === 'title_only') hits.title_only++
         if (hit && kind === 'new') hits.new_text_false_positive++

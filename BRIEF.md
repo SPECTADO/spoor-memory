@@ -34,7 +34,8 @@ Self-hosted now; later SaaS as one container per client, so the app stays single
   name. A `re-embed` job rebuilds all vectors when the model changes; search ignores vectors
   from a different model than the active one.
 - Near-duplicate check on write (cosine ≥ 0.92 within the same space) returns the existing
-  item instead of creating a copy.
+  item instead of creating a copy. *Amended 2026-10-22 (ADR-0025): only the same text is refused; a similar item is
+  saved and named in the reply, items whose values differ never count, default threshold 0.87.*
 
 ### Agent access (MCP, Streamable HTTP)
 - Endpoint `/p/<slug>/mcp`, bearer token. Token is per user per project (inherits the user's

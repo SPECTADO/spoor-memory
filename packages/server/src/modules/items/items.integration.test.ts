@@ -577,21 +577,23 @@ describe('last_used_at, dedupe, chunks', () => {
     expect((await row(b.id)).lastUsedAt?.getTime()).toBe(first?.getTime())
   })
 
-  it('web create warns about a near duplicate and saves; MCP refuses and bumps the existing item', async () => {
+  it('web create warns about a near duplicate and saves; MCP saves it too and reports it as similar', async () => {
     const existing = await createItem(db(), { projectId: s.acme.id, title: 'Sessions are server-side' })
-    s.search.candidates = [
-      {
-        id: existing.id,
-        number: existing.number,
-        adrNumber: null,
-        space: 'memories',
-        title: existing.title,
-        type: 'fact',
-        revision: 1,
-        lifecycle: 'active',
-        cos: 0.95,
-      },
-    ]
+    const candidate = (over: Partial<DedupeCandidate> = {}): DedupeCandidate => ({
+      id: existing.id,
+      number: existing.number,
+      adrNumber: null,
+      space: 'memories',
+      title: existing.title,
+      type: 'fact',
+      revision: 1,
+      lifecycle: 'active',
+      cos: 0.95,
+      sameText: false,
+      values: null,
+      ...over,
+    })
+    s.search.candidates = [candidate()]
     const web = await json<{ item: { id: string }; warnings: unknown[] }>(
       await create(ed, 'memories', { title: 'Sessions are stored server-side', type: 'fact' }),
     )
@@ -601,10 +603,43 @@ describe('last_used_at, dedupe, chunks', () => {
     expect(web.item.id).toBeDefined()
 
     const caller = mcpCaller(s.editor, { id: s.acme.id, slug: 'acme', kind: 'project' })
+    const saved = await s.items.create(caller, 'memories', { title: 'Sessions server side', type: 'fact' })
+    expect(saved.item).not.toBeNull()
+    expect(saved.duplicate).toBeNull()
+    expect(saved.similar).toMatchObject({
+      handle: `m${existing.number}`,
+      cos: 0.95,
+      revision: 1,
+      values: null,
+    })
+
+    // values that differ on both sides: a different claim, no web warning, MCP still names the similar item
+    const values = { new: ['60'], existing: ['600'] }
+    s.search.candidates = [candidate({ values })]
+    const webValues = await json<{ warnings: unknown[] }>(
+      await create(ed, 'memories', { title: 'Admin API allows 60 requests/min', type: 'fact' }),
+    )
+    expect(webValues.warnings).toEqual([])
+    const mcpValues = await s.items.create(caller, 'memories', { title: 'Admin API: 60/min', type: 'fact' })
+    expect(mcpValues.item).not.toBeNull()
+    expect(mcpValues.similar).toMatchObject({ handle: `m${existing.number}`, values })
+    // a candidate whose values agree wins over a nearer one whose values differ
+    const agree = await createItem(db(), { projectId: s.acme.id, title: 'Sessions live server-side' })
+    s.search.candidates = [
+      candidate({ values, cos: 0.97 }),
+      candidate({ id: agree.id, number: agree.number, title: agree.title, cos: 0.93 }),
+    ]
+    expect(
+      (await s.items.create(caller, 'memories', { title: 'Server-side sessions', type: 'fact' })).similar,
+    ).toMatchObject({ handle: `m${agree.number}`, values: null })
+
+    // only the same title and body is refused (MCP); the web saves it with the warning
+    s.search.candidates = [candidate({ cos: 1, sameText: true })]
     const before = await db().select().from(items)
-    const r = await s.items.create(caller, 'memories', { title: 'Sessions server side', type: 'fact' })
+    const r = await s.items.create(caller, 'memories', { title: 'Sessions are server-side', type: 'fact' })
     expect(r.item).toBeNull()
-    expect(r.duplicate).toMatchObject({ handle: `m${existing.number}`, cos: 0.95, revision: 1 })
+    expect(r.similar).toBeNull()
+    expect(r.duplicate).toMatchObject({ handle: `m${existing.number}`, cos: 1, revision: 1 })
     expect(await db().select().from(items)).toHaveLength(before.length)
     expect((await row(existing.id)).lastUsedAt).not.toBeNull()
     const hits = await db().select().from(auditLog).where(eq(auditLog.action, 'item.dedupe_hit'))
@@ -630,20 +665,20 @@ describe('last_used_at, dedupe, chunks', () => {
         type: 'fact',
         revision: 1,
         lifecycle: 'active',
-        cos: 0.9,
+        cos: 0.86,
+        sameText: false,
+        values: null,
       },
     ]
     const caller = mcpCaller(s.editor, { id: s.acme.id, slug: 'acme', kind: 'project' })
-    // default 0.92: 0.9 is no hit
-    expect(
-      (await s.items.create(caller, 'memories', { title: 'A claim', type: 'fact' })).duplicate,
-    ).toBeNull()
+    // default 0.87: 0.86 is no hit
+    expect((await s.items.create(caller, 'memories', { title: 'A claim', type: 'fact' })).similar).toBeNull()
     await db()
       .update(projects)
       .set({ settings: { dedupe: { threshold: 0.85 } } })
       .where(eq(projects.id, s.acme.id))
     expect(
-      (await s.items.create(caller, 'memories', { title: 'A claim 2', type: 'fact' })).duplicate,
+      (await s.items.create(caller, 'memories', { title: 'A claim 2', type: 'fact' })).similar,
     ).not.toBeNull()
     await s.items
       .create(caller, 'memories', {

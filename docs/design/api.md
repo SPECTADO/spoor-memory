@@ -237,8 +237,8 @@ Create body (all spaces): `title`, `body?` (≤ 200,000 chars), `tags?`, `anchor
 - docs: nothing extra.
 - library: nothing extra, but only for callers who hold `library.write` (IA, PA, a member with the flag; `_shared`: IA, SE): others get 403 `read_only_space`, or `forbidden` without `item.write`. `pinned: true` is 400 `invalid_input`; `supersedes` is 400 `wrong_space`. The handle is `L<n>`; the lifecycle is `active` or `archived`, never `stale`.
 
-`warnings` entries: `{code:"near_duplicate", handle, cos, title}` when the near-duplicate check hits (the web
-path never blocks, [search-and-digest.md](search-and-digest.md) §5), `{code:"embedding_pending"}`.
+`warnings` entries: `{code:"near_duplicate", handle, cos, title}` when the near-duplicate check finds a similar item whose
+values agree (the web path never blocks, [search-and-digest.md](search-and-digest.md) §5), `{code:"embedding_pending"}`.
 409 `slug_taken` carries `details.handle`.
 
 ### 5.2 One item
@@ -398,7 +398,7 @@ Response 200 (`RelatedResponse`), not paginated:
   `archived`; status `superseded` or `deprecated`; expired items (`expires_at <= now()`). Stale items are allowed. The
   exclusions run inside the nearest-neighbour scan, so excluded items never take its slots.
 - **Floor**: `cos >= relatedMinCos(settings)` of the item's project, which is `min(dedupe.related_min_cos, dedupe.threshold −
-  0.01)` (default 0.70, threshold 0.92). A stored `related_min_cos` at or above the threshold is clamped on read (threshold
+  0.01)` (default 0.70, threshold 0.87). A stored `related_min_cos` at or above the threshold is clamped on read (threshold
   0.80 and 0.90 give 0.79), so a suggestion never falls in the duplicate band. No upper bound: a near-duplicate saved with
   `allow_duplicate` shows up at about 1.00.
 - **Scoring** is approximate by design: up to 32 probe chunks, the K nearest eligible chunks per probe chunk with

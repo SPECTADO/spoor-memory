@@ -223,13 +223,17 @@ COMMIT;
 This runs when an item is **created** through MCP (`spoor_remember`, `spoor_decide`,
 `spoor_doc_write` without `id`), within the same project and space. Updates, CLI pushes and imports
 skip it. The web UI runs it as a non-blocking warning. `allow_duplicate=true` skips it on all three
-tools.
+tools. Since ADR-0025 only the same text is refused; anything else similar is saved and reported, because a
+refused fact is lost when the agent ignores the reply, while a saved duplicate is only clutter.
 
 1. Chunk the candidate. Embed its chunk 0, which is needed for storage anyway.
 2. Run:
 ```sql
 SELECT i.id, i.number, i.adr_number, i.space, i.title, i.type, i.revision, i.lifecycle,
-       1 - (c.embedding::vector(<dims>) <=> $3::vector(<dims>)) AS cos
+       1 - (c.embedding::vector(<dims>) <=> $3::vector(<dims>)) AS cos, c.text,
+       (norm(i.title) = norm($6) AND norm(coalesce(i.body, '')) = norm($7)) AS same_text
+                                                               -- norm(x) = lower(regexp_replace(btrim(x),
+                                                               -- '[[:space:]]+', ' ', 'g')); $6/$7 = new title/body
 FROM chunks c JOIN items i ON i.id = c.item_id
 WHERE c.project_id = $1 AND c.space = $2 AND c.model = '<tag>' AND c.ordinal = 0
   AND c.embedding IS NOT NULL
@@ -243,18 +247,38 @@ WHERE c.project_id = $1 AND c.space = $2 AND c.model = '<tag>' AND c.ordinal = 0
 ORDER BY c.embedding::vector(<dims>) <=> $3::vector(<dims>)
 LIMIT 5;
 ```
-3. The first row with `cos >= settings.dedupe.threshold` (default 0.92) is a hit. On a hit, nothing
-   is written except `last_used_at = now()` on the existing item (audit `item.dedupe_hit`). The tool
-   returns a **non-error** result:
+3. **Values.** For each row, the values of the two chunk-0 texts are compared (`modules/search/values.ts`): numbers
+   (`\d+` with `.`, `,` or `:` groups), identifiers (words joined by `_ . / :`, or camelCase; `-` is prose), code spans and
+   quoted strings, lower-cased. When each side states a value the other lacks (`60` vs `600`), the row carries
+   `values: {new, existing}` and is a **different claim**. A one-sided difference (an elaboration) leaves `values` null.
+4. **Same text: refused (MCP only).** A row with `same_text` refuses the create: nothing is written except
+   `last_used_at = now()` on the existing item (audit `item.dedupe_hit`). The tool returns a **non-error** result:
 ```
-DUPLICATE m42 r3 cos=0.95 [fact] Sessions are stored server-side in Postgres, not as JWT
-Not saved; the existing item is kept.
+DUPLICATE m42 r3 cos=1.00 [fact] Sessions are stored server-side in Postgres, not as JWT
+Not saved; the existing item has the same text.
 next: still true → spoor_verify ids=["m42"] · changed → spoor_remember id="m42" revision=3 … · different fact → repeat with allow_duplicate=true
 ```
    A hit on a stale item adds `(stale; spoor_verify restores it)`. `allow_duplicate=true` skips the
    check (deviation D6).
-4. If the embedding fails (pending), the check is skipped and the result says
+5. **Similar: saved and reported.** Otherwise the similar item is the first row with
+   `cos >= settings.dedupe.threshold` (default 0.87) and `values` null, else the first such row with values. The create
+   is saved. MCP adds one line after the service notes and leaves that item out of the `related:` line; the request log
+   records `similar` and `similar_values_differ`:
+```
+note: similar to m53 r1 cos=0.94 [fact] "Public API keys are limited to 600 requ…" · same claim → spoor_supersede old="m53" new_id="m65" · different → nothing to do
+note: similar to m53 r1 cos=0.94 [fact] "Public API keys are limited to 600 requ…" but the values differ (60 vs 600) · replaces it → spoor_supersede old="m53" new_id="m65" · different → nothing to do
+note: similar to d3 r1 cos=0.95 [doc] "On-call runbook" · same doc → merge into d3 (spoor_doc_write id="d3" revision=1 …) and ask an editor to archive d8 · different → nothing to do
+```
+   At most three values per side are listed. The web returns `near_duplicate` only for a similar item whose values agree.
+6. If the embedding fails (pending), the check is skipped and the result says
    `note: duplicate check skipped`.
+
+**Calibration (2026-10-22, ADR-0025).** The spoor-bench pairs (10 reworded duplicates, 10 different facts on the same
+topics, title-only probes against title + body items), replayed with `multilingual-e5-small` q8: reworded duplicates
+scored 0.878 to 0.957; different facts up to 0.957, every one above 0.90 differing in a value. After the values guard the
+remaining different facts score at most 0.868, apart from one whose claim is stated verbatim in the matched item's body.
+Hence the default 0.87. `query:` prefixes on both sides did not separate the classes better. The sample is small;
+recheck on a larger labelled set.
 
 ## 5a. Related items (link suggestions, ADR-0022)
 
@@ -521,7 +545,7 @@ per call).
 
 - **Indexing**: 410 items / 472 chunks in 13.3 s sequentially (prepareChunks with embedding, then `indexItemChunks`):
   **30.8 items/s, 35.4 chunks/s**. Embedding dominates; the SerialQueue makes this the single-process ceiling.
-- **Dedupe at the 0.92 threshold** (10 probes each): re-stating an existing memory with its full text (title, tags, body)
+- **Dedupe at the 0.92 threshold** (10 probes each; the threshold before ADR-0025): re-stating an existing memory with its full text (title, tags, body)
   finds it 10/10; with the title only (the body left out) 8/10, because chunk 0 of a stored memory includes its body;
   1/10 brand-new texts was flagged, an artefact of the templated corpus (two memories generated from the same
   subject/predicate pair are near-identical by construction).

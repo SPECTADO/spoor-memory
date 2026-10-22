@@ -99,10 +99,17 @@ export interface DedupeCandidate {
   revision: number
   lifecycle: string
   cos: number
+  /** Same title and body as the probe, ignoring case and runs of whitespace: the only refused duplicate. */
+  sameText: boolean
+  /** Values (numbers, identifiers, ...) each chunk 0 states and the other lacks; non-null = a different claim. */
+  values: { new: string[]; existing: string[] } | null
 }
 
 export interface DedupeResult {
-  /** Best first, at most 5; a hit is the first with `cos >= threshold` (the caller applies the setting). */
+  /**
+   * Best first, at most 5; a hit is the first with `cos >= threshold` and `values === null` (the caller applies
+   * the setting).
+   */
   candidates: DedupeCandidate[]
   /** true when no probe vector exists (embedding pending, FTS-only project): `note: duplicate check skipped`. */
   skipped: boolean

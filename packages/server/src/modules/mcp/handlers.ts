@@ -11,6 +11,7 @@ import type { Logger } from 'pino'
 import type { z } from 'zod'
 import { type AuthContext, actorLabel } from '../../lib/auth-context.js'
 import { ApiError, loggableError } from '../../lib/errors.js'
+import type { Space } from '../../ports.js'
 import { assertCan, bearerPrincipal } from '../auth/index.js'
 import {
   type Caller,
@@ -19,6 +20,7 @@ import {
   itemHandle,
   type LoadedItem,
   markedHandle,
+  type NearDuplicate,
   viewOf,
 } from '../items/index.js'
 import { common, type RequestLog, type RequestNote } from '../requests/index.js'
@@ -36,6 +38,7 @@ import {
   ok,
   type RelatedView,
   relatedLine,
+  similarLine,
   tagOf,
 } from './format.js'
 import type {
@@ -164,6 +167,23 @@ async function relatedHint(
   const line = relatedLine(from, related)
   return line ? [line] : []
 }
+
+/**
+ * The `note: similar to` line of a create saved next to a similar item (ADR-0025); counts it in the request note.
+ * That item is left out of the `related:` line (`similarId`).
+ */
+function similarLines(
+  similar: NearDuplicate | null,
+  space: Space,
+  from: string,
+  note: RequestNote,
+): string[] {
+  if (!similar) return []
+  note.data = { ...note.data, similar: similar.handle, similar_values_differ: similar.values !== null }
+  return [similarLine({ ...similar, space }, from)]
+}
+
+const similarId = (res: { similar: NearDuplicate | null }): string[] => (res.similar ? [res.similar.id] : [])
 
 type Relation = NonNullable<z.output<typeof rememberInput>['relations']>[number]
 
@@ -416,8 +436,16 @@ export function rememberTool(s: McpServices): Handler<typeof rememberInput> {
       return [
         `OK created ${item.handle} r${item.revision} [${tagOf(item)}]`,
         ...noteLines(res.notes, res.warnings),
+        ...similarLines(res.similar, 'memories', item.handle, note),
         ...linkedLines(caller, rels),
-        ...(await relatedHint(s, caller, item.handle, res.row as LoadedItem, ids(rels), note)),
+        ...(await relatedHint(
+          s,
+          caller,
+          item.handle,
+          res.row as LoadedItem,
+          [...ids(rels), ...similarId(res)],
+          note,
+        )),
       ].join('\n')
     }
     // update: patch semantics, `revision` required (the service says `revision_required`); no dedupe runs.
@@ -524,6 +552,7 @@ export function decideTool(s: McpServices): Handler<typeof decideInput> {
     return [
       line,
       ...noteLines(res.notes, res.warnings),
+      ...similarLines(res.similar, 'memories', item.handle, note),
       ...linkedLines(caller, rels),
       'note: decision recorded; an ADR is drafted from it by spoor adr draft (Claude Code with Spoor hooks: automatically at turn end)',
       ...(await relatedHint(
@@ -531,7 +560,7 @@ export function decideTool(s: McpServices): Handler<typeof decideInput> {
         caller,
         item.handle,
         res.row as LoadedItem,
-        [...ids(rels), ...(old ? [old.id] : [])],
+        [...ids(rels), ...(old ? [old.id] : []), ...similarId(res)],
         note,
       )),
     ].join('\n')
@@ -568,8 +597,16 @@ export function docWriteTool(s: McpServices): Handler<typeof docWriteInput> {
       return [
         `OK created ${item.handle} r${item.revision}`,
         ...noteLines(res.notes, res.warnings),
+        ...similarLines(res.similar, 'docs', item.handle, note),
         ...linkedLines(caller, rels),
-        ...(await relatedHint(s, caller, item.handle, res.row as LoadedItem, ids(rels), note)),
+        ...(await relatedHint(
+          s,
+          caller,
+          item.handle,
+          res.row as LoadedItem,
+          [...ids(rels), ...similarId(res)],
+          note,
+        )),
       ].join('\n')
     }
     if (a.slug !== undefined) {

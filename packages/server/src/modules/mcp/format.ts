@@ -96,15 +96,42 @@ export interface DuplicateView {
   type: string | null
 }
 
-/** search-and-digest.md section 5: the non-error DUPLICATE result. */
+/** search-and-digest.md section 5: the non-error DUPLICATE result (the same title and body already exist). */
 export function duplicateText(dup: DuplicateView, tool: 'spoor_remember' | 'spoor_doc_write'): string {
   const stale = dup.lifecycle === 'stale' ? '(stale; spoor_verify restores it) ' : ''
   const what = dup.space === 'docs' ? 'different doc' : 'different fact'
   return [
     `DUPLICATE ${dup.handle} r${dup.revision} cos=${dup.cos.toFixed(2)} [${tagOf(dup)}] ${stale}${oneLine(dup.title)}`,
-    'Not saved; the existing item is kept.',
+    'Not saved; the existing item has the same text.',
     `next: still true → spoor_verify ids=["${dup.handle}"] · changed → ${tool} id="${dup.handle}" revision=${dup.revision} … · ${what} → repeat with allow_duplicate=true`,
   ].join('\n')
+}
+
+export interface SimilarView extends DuplicateView {
+  values: { new: string[]; existing: string[] } | null
+}
+
+const valueList = (vs: readonly string[]) =>
+  vs
+    .slice(0, 3)
+    .map((v) => oneLine(truncateTitle(v, 24)))
+    .join(', ') + (vs.length > 3 ? ', …' : '')
+
+/**
+ * search-and-digest.md section 5 (ADR-0025): the `note: similar to` line after a create `from` that was saved next to
+ * a similar item. A memory points at `spoor_supersede`, a doc at merging; differing values say the claims differ.
+ */
+export function similarLine(sim: SimilarView, from: string): string {
+  const stale = sim.lifecycle === 'stale' ? ' (stale)' : ''
+  const head = `note: similar to ${sim.handle} r${sim.revision} cos=${sim.cos.toFixed(2)} [${tagOf(sim)}]${stale} ${shortTitle(sim.title)}`
+  const values = sim.values
+    ? ` but the values differ (${valueList(sim.values.new)} vs ${valueList(sim.values.existing)})`
+    : ''
+  const same =
+    sim.space === 'docs'
+      ? `same doc → merge into ${sim.handle} (spoor_doc_write id="${sim.handle}" revision=${sim.revision} …) and ask an editor to archive ${from}`
+      : `${sim.values ? 'replaces it' : 'same claim'} → spoor_supersede old="${sim.handle}" new_id="${from}"`
+  return `${head}${values} · ${same} · different → nothing to do`
 }
 
 /** Service warnings and notes as `note:` lines (only the ones an agent can act on). */

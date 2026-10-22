@@ -55,6 +55,7 @@ export {
   type SearchResult,
   SearchService,
 } from './service.js'
+export { differentValues, factValues } from './values.js'
 
 export function createSearchModule(deps: ServerDeps) {
   const search = new SearchService(deps)

@@ -1,6 +1,6 @@
 # Architecture
 
-Status: implemented, 0.4.0 (2026-10-21). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3) and the map and link suggestions (0.4). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
+Status: implemented, 0.5.0 (2026-10-22). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) and the near-duplicate rework (0.5). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
 [docs/design/](docs/design/); terms are defined in [GLOSSARY.md](GLOSSARY.md). Where this file and a design file
 disagree, the design file wins and this file gets fixed. Open questions for the owner: [docs/design/deviations.md](docs/design/deviations.md).
 
@@ -106,8 +106,8 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 1. The agent calls the tool with `title`, `type`, optional body, anchors, tags. The request carries the bearer token and the MCP session id.
 2. The server checks the token and the effective role (editor or admin); viewers never see the write tools.
 3. It chunks the item and embeds chunk 0 (and the rest) before opening a transaction (20 s timeout; on failure the chunks are stored without vectors).
-4. Near-duplicate check: cosine >= threshold (0.92) within the space, ignoring expired observations, observations when the new item is not one, and the item being superseded. A hit returns the existing item as a
-   non-error `DUPLICATE` result and bumps its `last_used_at`.
+4. Near-duplicate check (ADR-0025): the nearest chunk-0 vectors within the space, ignoring expired observations, observations when the new item is not one, and the item being superseded. An item with the same title and body returns as a
+   non-error `DUPLICATE` result and bumps its `last_used_at`; nothing is saved. Otherwise the closest item with cosine >= threshold (0.87) is reported after the save as a `note: similar to …` line; one whose values (numbers, identifiers) differ on both sides is a different claim (`search/values.ts`).
 5. Otherwise, in one transaction: insert the item (observations get `expires_at`), revision 1, chunks, wikilink edges, typed relations, audit row (`via=mcp`, client name, token owner).
 6. The result is one short line, `OK created m58 r1 [fact]`, then one `note: linked …` per relation written and, after the commit, at most one `related:` line with up to three similar unlinked items and a ready `spoor_relate` hint (best effort: a failed lookup only drops the line). Updates carry the `revision` they read; a mismatch is `revision_conflict`, never last-write-wins. An update that also adds `relations` writes the edges in the same transaction (deviations.md H3).
 
@@ -248,6 +248,7 @@ Design files (the *what*): [docs/design/](docs/design/). Research the choices re
 | 22 | [`0022-link-suggestions-…md`](docs/adr/0022-link-suggestions-are-computed-on-demand-from-existing-embeddings-nothing-stored.md) | Link suggestions are computed on demand from existing embeddings; nothing stored, no server-side LLM (proposed) | `GET …/items/:ref/related`, the kNN approximation, MCP `related:` / `see also:` / `graph:`, Suggested links in the web UI | api, search-and-digest, mcp, web-ui |
 | 23 | [`0023-related-item-floor-…md`](docs/adr/0023-related-item-floor-lives-at-settings-dedupe-related-min-cos-0-50-0-90-default-0.md) | Related-item floor lives at `dedupe.related_min_cos` (0.50 to 0.90, default 0.70), clamped on read below the duplicate threshold (proposed) | `relatedMinCos` | data-model |
 | 24 | [`0024-mcp-tools-list-budget-…md`](docs/adr/0024-mcp-tools-list-budget-raised-to-4-000-estimated-tokens-for-relations-on-all.md) | MCP tools/list budget raised to 4,000 estimated tokens for relations on all write tools and `spoor_get` depth (accepted) | the `tools.test.ts` ceiling, measured 3,932 | mcp |
+| 25 | [`0025-near-duplicates-are-saved-…md`](docs/adr/0025-near-duplicates-are-saved-with-a-note-only-the-same-text-is-refused.md) | Near-duplicates are saved with a note; only the same text is refused, differing values never count, default threshold 0.87 (proposed) | `sameText`, `search/values.ts`, `note: similar to`, `dedupe.threshold` default | search-and-digest, mcp |
 
 [deviations.md](docs/design/deviations.md) §D lists nine slightly different topics (for example "session-managed MCP transport" and "in-process scheduler" as their own ADRs); the list above
 folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule. ADRs 0001 to 0020 and 0024 are decided (0017 is superseded by 0019);

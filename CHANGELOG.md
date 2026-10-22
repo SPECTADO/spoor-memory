@@ -4,6 +4,23 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-22
+
+### Changed
+
+- **Near-duplicates no longer lose facts** (ADR-0025). The MCP write tools refuse a create (`DUPLICATE`, nothing saved) only
+  when an item with the same title and body exists (case and whitespace ignored). A create that is merely similar is saved,
+  and the reply adds `note: similar to m53 r1 cos=0.94 [fact] "…" · same claim → spoor_supersede old="m53" new_id="m65" · …`;
+  that item is left out of the `related:` line. Before, every create at or above the threshold was refused, so an agent that
+  ignored the reply lost the fact (a benchmark refused 3 of 10 genuinely different facts).
+- **Different values are never duplicates**: when two similar texts each state a number, identifier, code span or quoted
+  string the other lacks (`60` vs `600` requests/min), the web shows no near-duplicate warning, and MCP names the item only
+  as `… but the values differ (60 vs 600) · replaces it → spoor_supersede …`.
+- **Default `dedupe.threshold` is 0.87** (was 0.92), calibrated on the benchmark pairs with the shipped e5 q8 model:
+  reworded duplicates score 0.878 to 0.957, so 0.92 caught 1 of 10. Projects that set a threshold keep it.
+- `spoor_remember` and `spoor_decide` tool descriptions say when `DUPLICATE` happens; the request log records `similar` and
+  `similar_values_differ` for creates saved next to a similar item.
+
 ## [0.4.0] - 2026-10-21
 
 ### Added

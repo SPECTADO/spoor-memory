@@ -314,7 +314,7 @@ describe('setting dedupe.related_min_cos', () => {
     expect((await set(0.45)).status).toBe(400)
     expect((await set(0.95)).status).toBe(400)
     expect((await set(0.75)).status).toBe(200)
-    expect(await get()).toMatchObject({ threshold: 0.92, related_min_cos: 0.75 })
+    expect(await get()).toMatchObject({ threshold: 0.87, related_min_cos: 0.75 })
     // above the threshold is stored as is; reads clamp (see the floor test)
     expect(
       (await ia.patch(P, { settings: { dedupe: { threshold: 0.85, related_min_cos: 0.9 } } })).status,

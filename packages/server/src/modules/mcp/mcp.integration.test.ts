@@ -414,7 +414,7 @@ describe('spoor_remember', () => {
     expect(r.text).toMatch(/^OK created m\d+ r1 \[fact\]/)
   })
 
-  it('a near duplicate returns DUPLICATE (not an error), writes nothing, bumps the existing item; allow_duplicate saves', async () => {
+  it('the same text returns DUPLICATE (not an error), writes nothing, bumps the existing item; allow_duplicate saves', async () => {
     const s = await setup()
     const { client } = await s.connect(s.tokens.editor.secret)
     const first = created(
@@ -435,7 +435,7 @@ describe('spoor_remember', () => {
     expect(lines[0]).toMatch(
       new RegExp(`^DUPLICATE ${first.handle} r1 cos=1\\.00 \\[fact\\] Sessions are stored`),
     )
-    expect(lines[1]).toBe('Not saved; the existing item is kept.')
+    expect(lines[1]).toBe('Not saved; the existing item has the same text.')
     expect(lines[2]).toContain(`spoor_verify ids=["${first.handle}"]`)
     expect(lines[2]).toContain(`spoor_remember id="${first.handle}" revision=1`)
     const after = Number(
@@ -454,6 +454,36 @@ describe('spoor_remember', () => {
       allow_duplicate: true,
     })
     expect(forced.text).toMatch(/^OK created m\d+ r1 \[fact\]/)
+  })
+
+  it('a reworded near duplicate is saved with a similar note; differing values are named (ADR-0025)', async () => {
+    const s = await setup()
+    const { client } = await s.connect(s.tokens.editor.secret)
+    const limit =
+      'rate limit of the API gateway for partner keys is 600 requests per minute with bursts allowed'
+    const first = created(await call(client, 'spoor_remember', { title: `The ${limit}` }))
+    const re = await call(client, 'spoor_remember', { title: `Our ${limit}` })
+    const reworded = created(re)
+    const lines = re.text.split('\n')
+    expect(lines[0]).toBe(`OK created ${reworded.handle} r1 [fact]`)
+    expect(lines[1]).toMatch(
+      new RegExp(
+        `^note: similar to ${first.handle} r1 cos=0\\.\\d\\d \\[fact\\] "The rate limit of the API gateway for p…" · same claim → spoor_supersede old="${first.handle}" new_id="${reworded.handle}" · different → nothing to do$`,
+      ),
+    )
+    // the similar item is not repeated on the related line
+    expect(lines.slice(2).join('\n')).not.toContain(`${first.handle}~ `)
+
+    const admin = await call(client, 'spoor_remember', {
+      title:
+        'The rate limit of the API gateway for partner keys is 60 requests per minute with bursts allowed',
+    })
+    expect(admin.text).toMatch(/^OK created m\d+ r1 \[fact\]\nnote: similar to m\d+ r1 cos=/)
+    expect(admin.text).toContain('but the values differ (60 vs 600) · replaces it → spoor_supersede')
+    const log = await db().execute<{ data: Record<string, unknown> }>(
+      sql`SELECT data FROM request_log WHERE operation = 'spoor_remember' ORDER BY id DESC LIMIT 1`,
+    )
+    expect(log.rows[0]?.data).toMatchObject({ similar_values_differ: true })
   })
 
   it('updates with revision (patch semantics), refuses a stale revision, requires one', async () => {

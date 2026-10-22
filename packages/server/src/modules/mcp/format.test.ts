@@ -16,6 +16,7 @@ import {
   relatedLine,
   seeAlsoLine,
   shortTitle,
+  similarLine,
   tagOf,
 } from './format.js'
 import { guarded, type McpAuthExtra } from './handlers.js'
@@ -98,7 +99,7 @@ describe('duplicateText', () => {
     expect(text).toBe(
       [
         'DUPLICATE m42 r3 cos=0.95 [fact] Sessions are stored server-side in Postgres, not as JWT',
-        'Not saved; the existing item is kept.',
+        'Not saved; the existing item has the same text.',
         'next: still true → spoor_verify ids=["m42"] · changed → spoor_remember id="m42" revision=3 … · different fact → repeat with allow_duplicate=true',
       ].join('\n'),
     )
@@ -121,6 +122,44 @@ describe('duplicateText', () => {
       'DUPLICATE d3 r1 cos=0.93 [doc] (stale; spoor_verify restores it) Runbook',
     )
     expect(text).toContain('different doc')
+  })
+})
+
+describe('similarLine', () => {
+  const sim = {
+    handle: 'm53',
+    revision: 1,
+    cos: 0.936,
+    title: 'Public API keys are limited to 600 requests each minute',
+    lifecycle: 'active',
+    space: 'memories' as const,
+    type: 'fact',
+    values: null,
+  }
+
+  it('points a possibly identical memory at spoor_supersede', () => {
+    expect(similarLine(sim, 'm65')).toBe(
+      'note: similar to m53 r1 cos=0.94 [fact] "Public API keys are limited to 600 requ…" · same claim → spoor_supersede old="m53" new_id="m65" · different → nothing to do',
+    )
+  })
+
+  it('names the differing values, at most three per side', () => {
+    expect(
+      similarLine(
+        { ...sim, lifecycle: 'stale', values: { new: ['60'], existing: ['600', '100', '429', 'retry'] } },
+        'm65',
+      ),
+    ).toBe(
+      'note: similar to m53 r1 cos=0.94 [fact] (stale) "Public API keys are limited to 600 requ…" but the values differ (60 vs 600, 100, 429, …) · replaces it → spoor_supersede old="m53" new_id="m65" · different → nothing to do',
+    )
+  })
+
+  it('points a similar doc at merging', () => {
+    expect(
+      similarLine({ ...sim, handle: 'd3', title: 'On-call runbook', space: 'docs', type: null }, 'd8'),
+    ).toBe(
+      'note: similar to d3 r1 cos=0.94 [doc] "On-call runbook" · same doc → merge into d3 (spoor_doc_write id="d3" revision=1 …) and ask an editor to archive d8 · different → nothing to do',
+    )
   })
 })
 

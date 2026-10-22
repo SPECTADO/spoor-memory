@@ -12,7 +12,7 @@
  *   (k = 60), project and shared merged by score.
  */
 import { spaces } from '@spoor/shared'
-import { eq, sql } from 'drizzle-orm'
+import { eq, type SQL, sql } from 'drizzle-orm'
 import { chunks as chunksTable } from '../../db/schema.js'
 import type { DbOrTx, Tx } from '../../lib/db.js'
 import type { ServerDeps } from '../../lib/deps.js'
@@ -46,6 +46,7 @@ import {
   vectorLiteral,
   vectorType,
 } from './sql.js'
+import { differentValues } from './values.js'
 
 export const EMBED_TIMEOUT_MS = 20_000
 export const BRANCH_LIMIT = 50
@@ -166,6 +167,9 @@ type HitRow = {
   chunk_text: string
 }
 
+/** Text compared for a duplicate's `sameText`: trimmed, whitespace runs as one space, lower-cased. */
+const norm = (e: SQL) => sql`lower(regexp_replace(btrim(${e}), '[[:space:]]+', ' ', 'g'))`
+
 // ---- the service --------------------------------------------------------------------------------------
 
 export class SearchService implements SearchPort {
@@ -279,6 +283,7 @@ export class SearchService implements SearchPort {
     const vt = vectorType(provider.dims)
     const tag = tagLiteral(p.model)
     const v = vectorLiteral(probe.embedding)
+    const src = q.prepared.source
     const rows = await db.transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL hnsw.ef_search = 100`)
       await tx.execute(sql`SET LOCAL hnsw.iterative_scan = relaxed_order`)
@@ -292,9 +297,13 @@ export class SearchService implements SearchPort {
         revision: number
         lifecycle: string
         cos: number
+        text: string
+        same_text: boolean
       }>(sql`
         SELECT i.id, i.number, i.adr_number, i.space, i.title, i.type, i.revision, i.lifecycle,
-               (1 - (c.embedding::${vt} <=> ${v}::${vt}))::float8 AS cos
+               (1 - (c.embedding::${vt} <=> ${v}::${vt}))::float8 AS cos, c.text,
+               (${norm(sql`i.title`)} = ${norm(sql`${src.title}::text`)}
+                AND ${norm(sql`coalesce(i.body, '')`)} = ${norm(sql`${src.body}::text`)}) AS same_text
         FROM chunks c JOIN items i ON i.id = c.item_id
         WHERE c.project_id = ${q.projectId} AND c.space = ${q.space} AND c.model = ${tag} AND c.ordinal = 0
           AND c.embedding IS NOT NULL
@@ -316,6 +325,8 @@ export class SearchService implements SearchPort {
       revision: r.revision,
       lifecycle: r.lifecycle,
       cos: Number(r.cos),
+      sameText: r.same_text,
+      values: differentValues(probe.text, r.text),
     }))
     return { candidates, skipped: false }
   }
@@ -464,7 +475,7 @@ export class SearchService implements SearchPort {
 
 /** Re-export for callers that only need the check: is a candidate a duplicate at this threshold? */
 export function firstDuplicate(result: DedupeResult, threshold: number): DedupeCandidate | undefined {
-  return result.candidates.find((c) => c.cos >= threshold)
+  return result.candidates.find((c) => c.cos >= threshold && c.values === null)
 }
 
 /** Items lacking chunks for the active model at their current revision (consistency sweep). */

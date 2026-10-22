@@ -425,6 +425,15 @@ describe('dedupeCandidates', () => {
     expect(hit.skipped).toBe(false)
     expect(hit.candidates[0]).toMatchObject({ id: item.id, space: 'memories', revision: 1 })
     expect(hit.candidates[0]?.cos).toBeGreaterThanOrEqual(0.92)
+    expect(hit.candidates[0]).toMatchObject({ sameText: true, values: null })
+    // case and whitespace runs do not matter for sameText
+    const loud = await mod.search.dedupeCandidates(db(), {
+      projectId: p.id,
+      space: 'memories',
+      type: 'fact',
+      prepared: await probe(mod, p.id, `  ${title.toUpperCase().replace(/ /g, '   ')} `),
+    })
+    expect(loud.candidates[0]).toMatchObject({ id: item.id, sameText: true })
     // the supersede target is never a duplicate
     const ex = await mod.search.dedupeCandidates(db(), {
       projectId: p.id,
@@ -453,6 +462,21 @@ describe('dedupeCandidates', () => {
       prepared,
     })
     expect(arch.candidates).toEqual([])
+    // a different value is not the same text, and is named
+    const { item: port } = await addItem(mod, {
+      projectId: p.id,
+      title: 'The session store listens on port 6379',
+    })
+    const other = await mod.search.dedupeCandidates(db(), {
+      projectId: p.id,
+      space: 'memories',
+      type: 'fact',
+      prepared: await probe(mod, p.id, 'The session store listens on port 6380'),
+    })
+    expect(other.candidates.find((c) => c.id === port.id)).toMatchObject({
+      sameText: false,
+      values: { new: ['6380'], existing: ['6379'] },
+    })
   })
 
   it('a fact is never a duplicate of an observation; an expired observation never matches', async () => {

@@ -157,12 +157,12 @@ export const TOOL_SPECS: Record<ToolName, ToolSpec> = {
   },
   spoor_remember: {
     description:
-      'Record one durable fact, procedure or observation (type, default fact) as a one-line claim, with optional body, anchors, tags. Update with id and revision. Returns the handle, or DUPLICATE naming the existing item.',
+      'Record one durable fact, procedure or observation (type, default fact) as a one-line claim, with optional body, anchors, tags. Update with id and revision. Returns the handle, any similar item, or DUPLICATE if identical.',
     inputSchema: rememberInput,
   },
   spoor_decide: {
     description:
-      'Record a decision made or confirmed now as a one-line note; put the why in body. An ADR is drafted from it later. Returns the handle, or DUPLICATE.',
+      'Record a decision made or confirmed now as a one-line note; put the why in body. An ADR is drafted from it later. Returns the handle, or DUPLICATE if identical.',
     inputSchema: decideInput,
   },
   spoor_doc_write: {
