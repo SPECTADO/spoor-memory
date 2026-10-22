@@ -1,6 +1,6 @@
 {
   "name": "spoor-memory",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Spoor CLI and Claude Code hooks: device login, ADR/doc mirror, session digest for a self-hosted Spoor memory server",
   "keywords": [
     "spoor",

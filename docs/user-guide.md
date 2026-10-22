@@ -10,6 +10,8 @@ mode. Terms are defined in [GLOSSARY.md](../GLOSSARY.md). Agents have their own 
   email: the admin copies the link to you. An invite for an email that already has an account is refused; ask to be added to the
   project instead. A forgotten password is fixed by an instance admin creating a reset invite for you.
 - Sessions last 30 days and end after 14 idle days. Account (top right menu): your name, password and every API token you hold.
+- The bottom of the left menu shows the versions, for example `Web 0.5.1 · Server 0.5.1`. If they differ after an upgrade, reload
+  the page to get the current web UI.
 
 ## 2. Roles
 

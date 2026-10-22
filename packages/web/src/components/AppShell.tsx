@@ -1,14 +1,15 @@
 /**
  * The shell (web-ui.md §4 "shell"): top bar (menu toggle on phones, logo, project switcher, project search,
- * account menu), a sidebar with the project nav and, for instance admins, the admin nav. Under the `md`
- * breakpoint the sidebar becomes a toggled panel.
+ * account menu), a sidebar with the project nav, for instance admins the admin nav, and the version footer.
+ * Under the `md` breakpoint the sidebar becomes a toggled panel.
  */
 import { useIsFetching, useIsMutating } from '@tanstack/react-query'
 import { Menu, Search, X } from 'lucide-react'
 import { type FormEvent, useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router'
-import { useMe } from '../api/hooks'
+import { useInstance, useMe } from '../api/hooks'
 import { projectPath, useCurrentProjectSlug } from '../lib/paths'
+import { WEB_VERSION } from '../lib/version'
 import { IconButton, Input } from '../ui'
 import { AccountMenu } from './AccountMenu'
 import { AdminNav, ProjectNav } from './Nav'
@@ -62,7 +63,7 @@ export function AppShell() {
         <aside
           id="sidebar"
           aria-label="Sidebar"
-          className={`${navOpen ? 'block' : 'hidden'} fixed inset-x-0 top-14 bottom-0 z-20 overflow-y-auto border-r border-border bg-bg p-3 md:sticky md:block md:h-[calc(100vh-3.5rem)] md:w-56 md:shrink-0`}
+          className={`${navOpen ? 'flex' : 'hidden'} fixed inset-x-0 top-14 bottom-0 z-20 flex-col overflow-y-auto border-r border-border bg-bg p-3 md:sticky md:flex md:h-[calc(100vh-3.5rem)] md:w-56 md:shrink-0`}
         >
           {slug && <ProjectNav slug={slug} />}
           {me.data?.user.is_admin && <AdminNav />}
@@ -73,6 +74,7 @@ export function AppShell() {
               </Link>
             </nav>
           )}
+          <VersionFooter />
         </aside>
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 sm:px-6 focus:outline-none">
           <Outlet />
@@ -108,6 +110,17 @@ function ProjectSearchBox({ slug }: { slug: string }) {
         inputClassName="pl-8"
       />
     </form>
+  )
+}
+
+/** Bottom of the sidebar: the web UI's version and, once known, the server's. */
+function VersionFooter() {
+  const server = useInstance().data?.version
+  return (
+    <p className="mt-auto px-2 pt-4 text-xs text-muted">
+      Web {WEB_VERSION}
+      {server && <> · Server {server}</>}
+    </p>
   )
 }
 

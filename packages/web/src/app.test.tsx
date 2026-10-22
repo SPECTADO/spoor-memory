@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { WEB_VERSION } from './lib/version'
 import { apiError, meFixture, mockApi, renderApp } from './test/utils'
 
 const project = (role: 'admin' | 'editor' | 'viewer', slug = 'demo') => ({
@@ -74,6 +75,18 @@ describe('app shell', () => {
     expect(within(nav).getByRole('link', { name: 'Settings' })).toBeInTheDocument()
     const admin = screen.getByRole('navigation', { name: 'Instance administration' })
     expect(within(admin).getByRole('link', { name: 'Users' })).toHaveAttribute('href', '/admin/users')
+  })
+
+  it('shows the web and server versions at the bottom of the sidebar', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture()],
+      'GET /api/v1/projects': [200, projectList],
+      'GET /api/v1/instance': [200, { version: '9.8.7', providers: [] }],
+    })
+    renderApp('/projects')
+    const sidebar = await screen.findByRole('complementary', { name: 'Sidebar' })
+    await waitFor(() => expect(sidebar).toHaveTextContent(`Web ${WEB_VERSION} · Server 9.8.7`))
+    expect(WEB_VERSION).toMatch(/^\d+\.\d+\.\d+/)
   })
 
   it('serves the shared space under /shared without Tokens or Members', async () => {

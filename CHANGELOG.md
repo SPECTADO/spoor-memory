@@ -4,6 +4,13 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-22
+
+### Added
+
+- The web sidebar ends with the versions, `Web 0.5.1 · Server 0.5.1`: the web build's own version (from its `package.json`,
+  set at build time) and the server's (`GET /api/v1/instance`), so a stale browser bundle or a half-finished upgrade shows.
+
 ## [0.5.0] - 2026-10-22
 
 ### Changed

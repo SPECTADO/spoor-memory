@@ -1,6 +1,6 @@
 # Architecture
 
-Status: implemented, 0.5.0 (2026-10-22). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) and the near-duplicate rework (0.5). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
+Status: implemented, 0.5.1 (2026-10-22). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) and the near-duplicate rework (0.5). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
 [docs/design/](docs/design/); terms are defined in [GLOSSARY.md](GLOSSARY.md). Where this file and a design file
 disagree, the design file wins and this file gets fixed. Open questions for the owner: [docs/design/deviations.md](docs/design/deviations.md).
 
