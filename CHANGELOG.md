@@ -4,6 +4,8 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-10
+
 ### Fixed
 
 - **The server no longer stalls while the built-in model embeds** (ADR-0029). Inference ran on the main thread, and
