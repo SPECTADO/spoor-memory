@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
-import { WEB_VERSION } from './lib/version'
+import { UNKNOWN_VERSION, versionsDiffer, WEB_VERSION } from './lib/version'
 import { apiError, meFixture, mockApi, renderApp } from './test/utils'
 
 const project = (role: 'admin' | 'editor' | 'viewer', slug = 'demo') => ({
@@ -87,6 +87,42 @@ describe('app shell', () => {
     const sidebar = await screen.findByRole('complementary', { name: 'Sidebar' })
     await waitFor(() => expect(sidebar).toHaveTextContent(`Web ${WEB_VERSION} · Server 9.8.7`))
     expect(WEB_VERSION).toMatch(/^\d+\.\d+\.\d+/)
+    // 9.8.7 is not this build: the line warns and offers a reload
+    expect(within(sidebar).getByRole('button', { name: 'Reload to update' })).toBeInTheDocument()
+  })
+
+  it('shows no warning when the web and server versions match', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture()],
+      'GET /api/v1/projects': [200, projectList],
+      'GET /api/v1/instance': [200, { version: WEB_VERSION, providers: [] }],
+    })
+    renderApp('/projects')
+    const sidebar = await screen.findByRole('complementary', { name: 'Sidebar' })
+    await waitFor(() => expect(sidebar).toHaveTextContent(`Web ${WEB_VERSION} · Server ${WEB_VERSION}`))
+    expect(within(sidebar).queryByRole('button', { name: 'Reload to update' })).not.toBeInTheDocument()
+  })
+
+  it('leaves out a server version of 0.0.0 (the server could not read its own version)', async () => {
+    const { find } = mockApi({
+      'GET /api/v1/me': [200, meFixture()],
+      'GET /api/v1/projects': [200, projectList],
+      'GET /api/v1/instance': [200, { version: UNKNOWN_VERSION, providers: [] }],
+    })
+    renderApp('/projects')
+    const sidebar = await screen.findByRole('complementary', { name: 'Sidebar' })
+    await waitFor(() => expect(find('GET', '/api/v1/instance')).toHaveLength(1))
+    await waitFor(() => expect(sidebar).toHaveTextContent(`Web ${WEB_VERSION}`))
+    expect(sidebar).not.toHaveTextContent('Server')
+    expect(within(sidebar).queryByRole('button', { name: 'Reload to update' })).not.toBeInTheDocument()
+  })
+
+  it('compares versions only when both are known', () => {
+    expect(versionsDiffer('0.5.1', '0.5.2')).toBe(true)
+    expect(versionsDiffer('0.5.1', '0.5.1')).toBe(false)
+    expect(versionsDiffer('0.5.1', undefined)).toBe(false)
+    expect(versionsDiffer('0.5.1', UNKNOWN_VERSION)).toBe(false)
+    expect(versionsDiffer(UNKNOWN_VERSION, '0.5.1')).toBe(false)
   })
 
   it('serves the shared space under /shared without Tokens or Members', async () => {

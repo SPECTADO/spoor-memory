@@ -4,6 +4,16 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+### Changed
+
+- The sidebar's version line turns into a warning with a "Reload to update" button when the web and server versions differ.
+  The server's version is checked again every 5 minutes, so a tab left open through an upgrade notices it.
+
+### Fixed
+
+- A server that cannot read its own version (`0.0.0`) is no longer shown in the sidebar as a real version.
+- The web UI no longer fails to load when it is built without the version constant; it shows `Web` without a number.
+
 ## [0.5.1] - 2026-10-22
 
 ### Added

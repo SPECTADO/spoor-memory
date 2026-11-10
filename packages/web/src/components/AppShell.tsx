@@ -9,7 +9,7 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router'
 import { useInstance, useMe } from '../api/hooks'
 import { projectPath, useCurrentProjectSlug } from '../lib/paths'
-import { WEB_VERSION } from '../lib/version'
+import { isKnownVersion, versionsDiffer, WEB_VERSION } from '../lib/version'
 import { IconButton, Input } from '../ui'
 import { AccountMenu } from './AccountMenu'
 import { AdminNav, ProjectNav } from './Nav'
@@ -113,13 +113,25 @@ function ProjectSearchBox({ slug }: { slug: string }) {
   )
 }
 
-/** Bottom of the sidebar: the web UI's version and, once known, the server's. */
+/**
+ * Bottom of the sidebar: the web UI's version and, once known, the server's (a `0.0.0` fallback is not shown).
+ * When the two differ the line turns into a warning with a reload button: this tab runs an old web build.
+ */
 function VersionFooter() {
   const server = useInstance().data?.version
+  const stale = versionsDiffer(WEB_VERSION, server)
   return (
-    <p className="mt-auto px-2 pt-4 text-xs text-muted">
-      Web {WEB_VERSION}
-      {server && <> · Server {server}</>}
+    <p className={`mt-auto px-2 pt-4 text-xs ${stale ? 'text-warning' : 'text-muted'}`}>
+      {isKnownVersion(WEB_VERSION) ? `Web ${WEB_VERSION}` : 'Web'}
+      {isKnownVersion(server) && <> · Server {server}</>}
+      {stale && (
+        <>
+          {' · '}
+          <button type="button" className="underline" onClick={() => window.location.reload()}>
+            Reload to update
+          </button>
+        </>
+      )}
     </p>
   )
 }

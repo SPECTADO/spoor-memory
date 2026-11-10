@@ -22,7 +22,8 @@ src/
   components/  shell (AppShell, Nav, AccountMenu, ProjectSwitcher), guards (AuthGuard, RequireRole, ProjectScope), RouteError
   pages/       one module per route, one chunk per page: single-module pages are `lazy:` routes in router.tsx; the
                groups item/, review/, settings/, admin/ lazy-load theirs in their own index.tsx (re-exported by pages/index.tsx)
-  lib/         paths.ts, roles.ts, wikilinks.ts (remark plugin), diff.ts, format.ts
+  lib/         paths.ts, roles.ts, wikilinks.ts (remark plugin), diff.ts, format.ts, version.ts (`WEB_VERSION`: this
+               package's version, injected at build time by `define.__WEB_VERSION__` in vite.config.ts)
   test/        setup.ts, utils.tsx (fetch mock, app renderer)
 e2e/           Playwright specs; support/ has the server launcher (server.mjs), env.ts (port, databases, admin) and db.ts (SQL)
 ```

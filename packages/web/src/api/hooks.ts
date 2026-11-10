@@ -106,11 +106,13 @@ export const meQueryOptions = () =>
 
 export const useMe = () => useQuery(meQueryOptions())
 
+/** Polled every 5 minutes while the tab is visible: the shell's version footer must notice a server upgrade. */
 export const useInstance = () =>
   useQuery({
     queryKey: qk.instance(),
     queryFn: ({ signal }) => E.getInstance({ signal }),
     staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
   })
 
 /** On success the whole cache is dropped: nothing of a previous user may survive a login. */
