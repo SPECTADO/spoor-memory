@@ -328,4 +328,52 @@ describe('LocalE5Provider', () => {
       expect(p.countTokens('hello')).toBeGreaterThan(3) // special tokens + `passage: ` prefix
     },
   )
+
+  // ADR-0029: the worker writes out the pipeline's steps; they must stay equal to the pipeline's own output
+  it.skipIf(!hasModel)(
+    'real model: worker vectors are bit-identical to the feature-extraction pipeline, and the loop keeps turning',
+    { timeout: 120_000 },
+    async () => {
+      const t = await import('@huggingface/transformers')
+      t.env.allowRemoteModels = false
+      t.env.allowLocalModels = true
+      t.env.localModelPath = `${modelDir}/`
+      t.env.cacheDir = null
+      const pipe = await t.pipeline('feature-extraction', 'Xenova/multilingual-e5-small', {
+        dtype: 'q8',
+        session_options: { intraOpNumThreads: 2 },
+      })
+      const texts = [
+        'Sessions are stored in Postgres.',
+        'Session data lives in the database, and it expires after fourteen days without activity.',
+        'Žluťoučký kůň úpěl ďábelské ódy.',
+        'x'.repeat(900),
+      ]
+      const ref = await pipe(
+        texts.map((x) => `passage: ${x}`),
+        { pooling: 'mean', normalize: true },
+      )
+      const p = new LocalE5Provider({ modelDir: modelDir as string, threads: 2 })
+      await p.ready()
+      const got = await p.embedPassages(texts)
+      const data = ref.data as Float32Array
+      for (const [i, v] of got.entries()) {
+        const row = l2normalize(Float32Array.from(data.subarray(i * 384, (i + 1) * 384)))
+        expect(Array.from(v)).toEqual(Array.from(row))
+      }
+      expect(p.countTokens(texts[1] as string)).toBe(pipe.tokenizer.encode(`passage: ${texts[1]}`).length)
+
+      // 16 full chunks: with inference on this thread the loop turned about once per batch
+      let turns = 0
+      const timer = setInterval(() => {
+        turns++
+      }, 5)
+      await p.embedPassages(
+        Array.from({ length: 16 }, (_, i) => `chunk ${i} ${'stored in Postgres '.repeat(90)}`),
+      )
+      clearInterval(timer)
+      expect(turns).toBeGreaterThan(20)
+      await pipe.dispose()
+    },
+  )
 })

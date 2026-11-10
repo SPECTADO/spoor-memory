@@ -234,8 +234,8 @@ expire after 90 days. The page does not accept a code from a link, on purpose.
 - **Instance audit**: user, invite, project and job events.
 
 Project admins also have **Members** (add by email, change role, remove; the last project admin cannot be demoted), **Settings**
-(name, cleanup days, digest budget and decision window, duplicate threshold 0.80 to 0.99, default 0.87, **Related items minimum similarity**
-0.50 to 0.90, default 0.70 (suggested links below it are hidden; it always acts at least 0.01 below the duplicate threshold, so
+(name, cleanup days, digest budget and decision window, duplicate threshold 0.60 to 0.99, default 0.87, **Related items minimum similarity**
+0.40 to 0.90, default 0.70 (the two defaults are 0.75 and 0.50 in a project that embeds with embeddinggemma; suggested links below it are hidden; it always acts at least 0.01 below the duplicate threshold, so
 with threshold 0.85 a saved 0.90 acts as 0.84), embedding provider with a progress bar
 during a re-embed, export, import (a full Spoor export into an empty project; a zip of Markdown files into any project), and for
 instance admins delete) and the project **Audit log** (who or which

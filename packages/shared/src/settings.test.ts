@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  dedupeDefaults,
+  embeddingModelKey,
   mergeSettings,
   projectSettings,
   projectSettingsPatch,
   relatedMinCos,
+  resolveProjectSettings,
   settingsPatchPaths,
 } from './settings.js'
 
@@ -29,7 +32,8 @@ describe('project settings', () => {
     expect(projectSettingsPatch.safeParse({ cleanup: { stale_days: 0 } }).success).toBe(false)
     expect(projectSettingsPatch.safeParse({ cleanup: { stale_days: 1.5 } }).success).toBe(false)
     expect(projectSettingsPatch.safeParse({ other: {} }).success).toBe(false)
-    expect(projectSettingsPatch.safeParse({ dedupe: { threshold: 0.79 } }).success).toBe(false)
+    expect(projectSettingsPatch.safeParse({ dedupe: { threshold: 0.59 } }).success).toBe(false)
+    expect(projectSettingsPatch.safeParse({ dedupe: { threshold: 0.6 } }).success).toBe(true)
   })
 
   it('deep-merges a patch over stored keys without filling defaults', () => {
@@ -45,8 +49,8 @@ describe('project settings', () => {
     expect(projectSettings.parse(merged).cleanup.observation_days).toBe(7)
   })
 
-  it('related_min_cos: 0.50-0.90, default 0.70, read clamped below the duplicate threshold', () => {
-    expect(projectSettings.safeParse({ dedupe: { related_min_cos: 0.49 } }).success).toBe(false)
+  it('related_min_cos: 0.40-0.90, default 0.70, read clamped below the duplicate threshold', () => {
+    expect(projectSettings.safeParse({ dedupe: { related_min_cos: 0.39 } }).success).toBe(false)
     expect(projectSettings.safeParse({ dedupe: { related_min_cos: 0.91 } }).success).toBe(false)
     expect(projectSettingsPatch.parse({ dedupe: { related_min_cos: 0.8 } })).toEqual({
       dedupe: { related_min_cos: 0.8 },
@@ -62,5 +66,49 @@ describe('project settings', () => {
       'cleanup.stale_days',
       'embedding.provider',
     ])
+  })
+
+  it('reads the provider and model family out of a model tag', () => {
+    expect(embeddingModelKey('ollama:embeddinggemma/768')).toBe('ollama:embeddinggemma')
+    expect(embeddingModelKey('ollama:embeddinggemma:latest/768')).toBe('ollama:embeddinggemma')
+    expect(embeddingModelKey('ollama:hf.co/org/EmbeddingGemma:300m/768')).toBe('ollama:embeddinggemma')
+    expect(embeddingModelKey('local:Xenova/multilingual-e5-small@q8/384')).toBe('local:multilingual-e5-small')
+    expect(embeddingModelKey('openai:text-embedding-3-small/1536')).toBe('openai:text-embedding-3-small')
+    expect(embeddingModelKey('embeddinggemma')).toBeNull()
+    expect(embeddingModelKey('')).toBeNull()
+  })
+
+  it('dedupe defaults are per embedding model; unknown models take the e5 defaults', () => {
+    expect(dedupeDefaults('ollama:embeddinggemma/768')).toEqual({ threshold: 0.75, related_min_cos: 0.5 })
+    const e5 = { threshold: 0.87, related_min_cos: 0.7 }
+    expect(dedupeDefaults('local:Xenova/multilingual-e5-small@q8/384')).toEqual(e5)
+    expect(dedupeDefaults('ollama:nomic-embed-text/768')).toEqual(e5)
+    expect(dedupeDefaults('openai:embeddinggemma/768')).toEqual(e5) // the scale was measured through Ollama only
+    expect(dedupeDefaults(null)).toEqual(e5)
+    expect(dedupeDefaults()).toEqual(e5)
+  })
+
+  it('resolves stored settings for a model: unset dedupe keys follow the model, set ones stay', () => {
+    const gemma = 'ollama:embeddinggemma/768'
+    expect(resolveProjectSettings({}, gemma).dedupe).toEqual({ threshold: 0.75, related_min_cos: 0.5 })
+    expect(resolveProjectSettings(null, gemma).dedupe).toEqual({ threshold: 0.75, related_min_cos: 0.5 })
+    expect(resolveProjectSettings({ dedupe: { threshold: 0.9 } }, gemma).dedupe).toEqual({
+      threshold: 0.9,
+      related_min_cos: 0.5,
+    })
+    expect(resolveProjectSettings({ dedupe: { related_min_cos: 0.6 } }, gemma).dedupe).toEqual({
+      threshold: 0.75,
+      related_min_cos: 0.6,
+    })
+    // without a tag, and for every other section, it is the plain schema
+    expect(resolveProjectSettings({ cleanup: { stale_days: 5 } })).toEqual(
+      projectSettings.parse({ cleanup: { stale_days: 5 } }),
+    )
+    expect(resolveProjectSettings({ cleanup: { stale_days: 5 } }, gemma).cleanup.stale_days).toBe(5)
+    // a stored object the schema rejects falls back to the defaults of that model
+    expect(resolveProjectSettings({ dedupe: { threshold: 2 } }, gemma).dedupe.threshold).toBe(0.75)
+    expect(resolveProjectSettings({ nope: 1 }, gemma).dedupe.threshold).toBe(0.75)
+    expect(resolveProjectSettings([], gemma).dedupe.threshold).toBe(0.75)
+    expect(relatedMinCos(resolveProjectSettings({}, gemma))).toBe(0.5)
   })
 })

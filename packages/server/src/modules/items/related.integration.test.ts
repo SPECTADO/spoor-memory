@@ -19,15 +19,21 @@ import { FakeEmbeddingProvider, StaticEmbeddingRegistry, stubPorts } from '../..
 import { edges, items, projects } from '../../db/schema.js'
 import type { AuthContext } from '../../lib/auth-context.js'
 import { withTx } from '../../lib/db.js'
+import type { EmbeddingProvider } from '../../ports.js'
 import { RELATED_KNN } from '../search/index.js'
 import type { Caller } from './writes.js'
 
 const db = () => testDb()
 const fake = new FakeEmbeddingProvider()
 const other = new FakeEmbeddingProvider({ model: 'fake/other', dims: 8 })
+// the same bag-of-words vectors under embeddinggemma's tag (the fake's name and tag are readonly, hence the cast)
+const gemma = Object.assign(new FakeEmbeddingProvider({ model: 'embeddinggemma' }), {
+  name: 'ollama',
+  tag: 'ollama:embeddinggemma/384',
+}) as EmbeddingProvider
 
 async function seed(settings: Record<string, unknown> = {}) {
-  const ports = stubPorts({ embeddings: new StaticEmbeddingRegistry(fake, [other]) })
+  const ports = stubPorts({ embeddings: new StaticEmbeddingRegistry(fake, [other, gemma]) })
   const { app, modules } = testApp({ ports })
   ports.search = modules.search.search
   const shared = await createProject(db(), { kind: 'shared', embeddingModel: fake.tag })
@@ -305,13 +311,13 @@ describe('ItemService.relatedByProbe', () => {
 })
 
 describe('setting dedupe.related_min_cos', () => {
-  it('defaults to 0.70, accepts 0.50-0.90, rejects values outside', async () => {
+  it('defaults to 0.70, accepts 0.40-0.90, rejects values outside', async () => {
     const ia = await s.login(s.ia)
     const get = async () =>
       (await json<{ settings: { dedupe: { related_min_cos: number } } }>(await ia.get(P))).settings.dedupe
     expect((await get()).related_min_cos).toBe(0.7)
     const set = (v: number) => ia.patch(P, { settings: { dedupe: { related_min_cos: v } } })
-    expect((await set(0.45)).status).toBe(400)
+    expect((await set(0.35)).status).toBe(400)
     expect((await set(0.95)).status).toBe(400)
     expect((await set(0.75)).status).toBe(200)
     expect(await get()).toMatchObject({ threshold: 0.87, related_min_cos: 0.75 })
@@ -321,5 +327,55 @@ describe('setting dedupe.related_min_cos', () => {
     ).toBe(200)
     // editors may not change settings
     expect((await ed.patch(P, { settings: { dedupe: { related_min_cos: 0.6 } } })).status).toBe(403)
+  })
+})
+
+describe('dedupe defaults follow the active embedding model (ADR-0028)', () => {
+  /** A project on embeddinggemma's tag with a probe text and items at cos 0.8 (m1) and 0.6 (m2) to it. */
+  async function gemmaProject(settings: Record<string, unknown> = {}) {
+    const gem = await createProject(db(), { slug: 'gem', embeddingModel: gemma.tag, settings })
+    await addMember(db(), gem.id, s.editor.id, 'editor')
+    await add({ projectId: gem.id, title: 'orbital rocket engine thrust valve' })
+    await add({ projectId: gem.id, title: 'orbital rocket engine pump valve' })
+    return gem
+  }
+  const dedupeIn = async (project: { id: string; slug: string }) => {
+    const caller = {
+      ...callerOf(),
+      project: { id: project.id, slug: project.slug, kind: 'project' as const },
+    }
+    const prepared = await s.search.prepareChunks({
+      projectId: project.id,
+      space: 'memories',
+      title: 'orbital rocket engine thrust nozzle',
+      tags: [],
+      body: '',
+    })
+    return s.items.dedupe(caller, 'memories', 'fact', null, prepared)
+  }
+
+  it('an embeddinggemma project notes a near-duplicate at 0.75 and suggests from 0.50', async () => {
+    const gem = await gemmaProject()
+    const body = await json<{ settings: { dedupe: unknown } }>(await ed.get('/api/v1/projects/gem'))
+    expect(body.settings.dedupe).toEqual({ threshold: 0.75, related_min_cos: 0.5 })
+
+    const d = await dedupeIn(gem)
+    expect(d.similar?.cos).toBeCloseTo(0.8, 3)
+
+    const probe = await add({ projectId: gem.id, title: 'orbital rocket engine thrust nozzle' })
+    const r = await json<RelatedResponse>(await ed.get(`/api/v1/projects/gem/items/m${probe.number}/related`))
+    expect(handles(r)).toEqual(['m1', 'm2']) // 0.8 and 0.6: the e5 default floor (0.70) would hide m2
+  })
+
+  it('the same texts in an e5 project stay under the 0.87 default', async () => {
+    await add({ projectId: s.acme.id, title: 'orbital rocket engine thrust valve' })
+    expect((await dedupeIn({ id: s.acme.id, slug: 'acme' })).similar).toBeNull()
+  })
+
+  it('a value the admin set wins over the model default, key by key', async () => {
+    const gem = await gemmaProject({ dedupe: { threshold: 0.9 } })
+    const body = await json<{ settings: { dedupe: unknown } }>(await ed.get('/api/v1/projects/gem'))
+    expect(body.settings.dedupe).toEqual({ threshold: 0.9, related_min_cos: 0.5 })
+    expect((await dedupeIn(gem)).similar).toBeNull()
   })
 })

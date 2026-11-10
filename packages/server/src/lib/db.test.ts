@@ -1,5 +1,8 @@
+import { EventEmitter } from 'node:events'
+import { type AddressInfo, createServer, type Socket } from 'node:net'
+import pg from 'pg'
 import { describe, expect, it } from 'vitest'
-import { isTransientPgError, retryTransient } from './db.js'
+import { isDbUnavailable, isTransientPgError, retryTransient } from './db.js'
 import { ApiError } from './errors.js'
 
 const pgErr = (code: string) => Object.assign(new Error(`pg ${code}`), { code })
@@ -81,5 +84,104 @@ describe('retryTransient', () => {
     expect(c.delays).toHaveLength(1)
     expect(c.delays[0]).toBeGreaterThanOrEqual(10)
     expect(c.delays[0]).toBeLessThan(20)
+  })
+})
+
+describe('isDbUnavailable', () => {
+  it('is true when no connection could be had, also under a drizzle wrapper', () => {
+    // the two errors of the 2026-11-10 production log: pushUpdate's transaction and loadSession's query
+    const connectTimeout = new Error('Connection terminated due to connection timeout', {
+      cause: new Error('Connection terminated unexpectedly'),
+    })
+    expect(isDbUnavailable(connectTimeout)).toBe(true)
+    expect(
+      isDbUnavailable(
+        Object.assign(new Error('Failed query: select 1'), {
+          cause: new Error('Connection terminated due to connection timeout'),
+        }),
+      ),
+    ).toBe(true)
+    expect(isDbUnavailable(new Error('timeout exceeded when trying to connect'))).toBe(true)
+    expect(isDbUnavailable(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))).toBe(
+      true,
+    )
+    expect(
+      isDbUnavailable(Object.assign(new Error('the database system is starting up'), { code: '57P03' })),
+    ).toBe(true)
+    expect(isDbUnavailable(Object.assign(new Error('too many clients'), { code: '53300' }))).toBe(true)
+  })
+
+  it('is false for a connection lost mid-statement and for ordinary errors', () => {
+    expect(isDbUnavailable(new Error('Connection terminated unexpectedly'))).toBe(false)
+    expect(isDbUnavailable(Object.assign(new Error('deadlock detected'), { code: '40P01' }))).toBe(false)
+    expect(isDbUnavailable(Object.assign(new Error('duplicate key'), { code: '23505' }))).toBe(false)
+    expect(isDbUnavailable(new ApiError('not_found'))).toBe(false)
+    expect(isDbUnavailable(new Error('boom'))).toBe(false)
+    expect(isDbUnavailable(undefined)).toBe(false)
+  })
+
+  // The classifier matches message text, because pg gives these errors no code. Provoke the real ones.
+  it('recognises a real pg handshake that stalls (connect timeout)', async () => {
+    // a server that accepts the TCP connection and never answers the Postgres handshake
+    const sockets = new Set<Socket>()
+    const blackhole = createServer((s) => {
+      sockets.add(s)
+      s.on('error', () => undefined)
+    })
+    await new Promise<void>((r) => blackhole.listen(0, '127.0.0.1', r))
+    const { port } = blackhole.address() as AddressInfo
+    const pool = new pg.Pool({ host: '127.0.0.1', port, max: 1, connectionTimeoutMillis: 100 })
+    pool.on('error', () => undefined)
+    try {
+      const err = await pool.query('select 1').catch((e: unknown) => e)
+      expect((err as Error).message).toBe('Connection terminated due to connection timeout')
+      expect(isDbUnavailable(err)).toBe(true)
+    } finally {
+      for (const s of sockets) s.destroy()
+      await pool.end().catch(() => undefined)
+      await new Promise((r) => blackhole.close(r))
+    }
+  })
+
+  it('recognises a real pg-pool wait that runs out (every client in use)', async () => {
+    // a client that connects at once, so the pool's only slot is held without a database
+    class InstantClient extends EventEmitter {
+      connect(cb: (err?: Error) => void) {
+        process.nextTick(cb)
+      }
+      end(cb?: () => void) {
+        cb?.()
+      }
+    }
+    const pool = new pg.Pool({
+      max: 1,
+      connectionTimeoutMillis: 50,
+      Client: InstantClient as unknown as typeof pg.Client,
+    })
+    const held = await pool.connect()
+    try {
+      const err = await pool.connect().catch((e: unknown) => e)
+      expect((err as Error).message).toBe('timeout exceeded when trying to connect')
+      expect(isDbUnavailable(err)).toBe(true)
+    } finally {
+      held.release()
+      await pool.end()
+    }
+  })
+
+  it('recognises a real refused connection by its code', async () => {
+    const closed = createServer()
+    await new Promise<void>((r) => closed.listen(0, '127.0.0.1', r))
+    const { port } = closed.address() as AddressInfo
+    await new Promise((r) => closed.close(r)) // nothing listens on the port any more
+    const pool = new pg.Pool({ host: '127.0.0.1', port, connectionTimeoutMillis: 2000 })
+    pool.on('error', () => undefined)
+    try {
+      const err = await pool.query('select 1').catch((e: unknown) => e)
+      expect((err as { code?: string }).code).toBe('ECONNREFUSED')
+      expect(isDbUnavailable(err)).toBe(true)
+    } finally {
+      await pool.end().catch(() => undefined)
+    }
   })
 })

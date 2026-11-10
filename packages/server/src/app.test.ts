@@ -1,14 +1,16 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Hono } from 'hono'
 import { pino } from 'pino'
 import { describe, expect, it, vi } from 'vitest'
 import { stubPorts } from '../test/ports.js'
-import { createApp, createAppModules } from './app.js'
+import { createApp, createAppModules, handleAppError } from './app.js'
 import { loadConfig } from './config.js'
 import { createDb } from './db/client.js'
+import { ApiError } from './lib/errors.js'
 import { createEmbeddingRegistry, LOCAL_TAG } from './modules/search/index.js'
-import { newReadyState } from './types.js'
+import { type AppEnv, newReadyState } from './types.js'
 
 const logger = pino({ level: 'silent' })
 const body = async (r: Response) =>
@@ -147,5 +149,35 @@ describe('app', () => {
     expect(await spa.text()).toContain('<title>spa</title>')
     const missing = await app.request('/p/nothing')
     expect(missing.status).toBe(404)
+  })
+})
+
+describe('handleAppError', () => {
+  const failing = (err: unknown) => {
+    const app = new Hono<AppEnv>()
+    app.get('/x', () => {
+      throw err
+    })
+    app.onError(handleAppError)
+    return app.request('/x')
+  }
+
+  it('answers 503 busy with Retry-After when no database connection could be had', async () => {
+    const res = await failing(
+      Object.assign(new Error('Failed query: select 1'), {
+        cause: new Error('Connection terminated due to connection timeout'),
+      }),
+    )
+    expect(res.status).toBe(503)
+    expect(res.headers.get('Retry-After')).toBe('5')
+    expect(await res.json()).toMatchObject({ error: 'busy' })
+  })
+
+  it('keeps 500 internal for any other unexpected error and passes ApiErrors through', async () => {
+    const res = await failing(new Error('Connection terminated unexpectedly'))
+    expect(res.status).toBe(500)
+    expect(res.headers.get('Retry-After')).toBeNull()
+    expect(await res.json()).toMatchObject({ error: 'internal', message: 'Internal error.' })
+    expect((await failing(new ApiError('not_found'))).status).toBe(404)
   })
 })

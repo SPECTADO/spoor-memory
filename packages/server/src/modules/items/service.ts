@@ -214,13 +214,16 @@ export class ItemService {
     return itemJson(db, row, viewOf(caller.project))
   }
 
-  /** Inside a transaction pass its `tx`: a second pooled connection while one is held can starve the pool. */
+  /**
+   * Settings resolved for the project's active embedding model (the dedupe defaults are per model, ADR-0028).
+   * Inside a transaction pass its `tx`: a second pooled connection while one is held can starve the pool.
+   */
   async projectSettings(projectId: string, db: DbOrTx = this.db) {
     const [p] = await db
-      .select({ settings: projects.settings })
+      .select({ settings: projects.settings, model: projects.embeddingModel })
       .from(projects)
       .where(eq(projects.id, projectId))
-    return resolveSettings(p?.settings)
+    return resolveSettings(p?.settings, p?.model)
   }
 
   /**

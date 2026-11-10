@@ -4,6 +4,24 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The server no longer stalls while the built-in model embeds** (ADR-0029). Inference ran on the main thread, and
+  onnxruntime's `run` is synchronous, so every batch of 8 chunks froze all requests for its length. During an import this made
+  ordinary requests take seconds and new Postgres connections time out, which surfaced as 500 `internal` on pushes and web
+  pages and as a failing `/healthz`. The model now runs in a worker thread; vectors are unchanged.
+- A request that fails because no database connection could be had is answered `503 busy` with `Retry-After: 5` instead of
+  `500 internal`; the CLI retries it.
+
+### Changed
+
+- **Dedupe defaults follow the project's embedding model** (ADR-0028). A project whose active model is `embeddinggemma`
+  (Ollama) now defaults to `dedupe.threshold` 0.75 and `dedupe.related_min_cos` 0.50; every other model keeps 0.87 and 0.70.
+  With the old shared defaults the "similar to" note rarely appeared on embeddinggemma: on our 40 calibration pairs it
+  fired for 12 reworded duplicates at 0.87 and fires for 35 at 0.75, with 1 of 40 different facts flagged. Values a project saved are kept as they are.
+- The allowed ranges are wider so they fit both cosine scales: `dedupe.threshold` 0.60 to 0.99 (was 0.80 to 0.99),
+  `dedupe.related_min_cos` 0.40 to 0.90 (was 0.50 to 0.90).
+
 ## [0.6.0] - 2026-11-10
 
 ### Added
