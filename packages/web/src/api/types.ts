@@ -405,6 +405,70 @@ export interface ProjectJobsJson {
   embedding: { model: string; target: string | null; remaining: number; providers_enabled: string[] }
   runs: JobRunJson[]
 }
+/** `GET /api/v1/status` (IA, api.md §10.4). */
+export interface InstanceStatusJson {
+  instance: {
+    version: string
+    public_url: string
+    started_at: string
+    uptime_s: number
+    node: string
+    platform: string
+    hostname: string
+    jobs_enabled: boolean
+  }
+  embedding: {
+    default: {
+      name: string
+      model: string
+      variant: string
+      dims: number
+      tag: string
+      max_input_tokens: number
+    }
+    providers: { name: string; model: string; dims: number; tag: string; remote: boolean }[]
+    local_threads: number
+    chunks: { model: string; dims: number; chunks: number; pending: number }[]
+    projects_by_model: { model: string; projects: number; reembedding: number }[]
+  }
+  records: {
+    projects: number
+    users: number
+    users_active: number
+    memberships: number
+    tokens_active: number
+    web_sessions: number
+    items: Record<string, Record<string, number>>
+    items_total: number
+    revisions: number
+    edges: number
+    chunks: number
+    chunks_pending: number
+    audit_rows: number
+    request_log_rows: number
+    job_runs: number
+  }
+  database: {
+    version: string | null
+    name: string | null
+    size_bytes: number
+    connections: number | null
+    extensions: { name: string; version: string }[]
+    tables: { name: string; bytes: number; rows_estimate: number }[]
+    pool: { max: number; total: number | null; idle: number | null; waiting: number | null }
+  }
+  runtime: {
+    rss_bytes: number
+    heap_used_bytes: number
+    heap_total_bytes: number
+    external_bytes: number
+    load_avg: number[]
+    cpus: number
+    system_memory_bytes: number
+    system_free_bytes: number
+    mcp_sessions: number
+  }
+}
 export interface InstanceJobsJson {
   scheduler: { enabled: boolean }
   jobs: {

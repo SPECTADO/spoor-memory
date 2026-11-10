@@ -20,6 +20,7 @@ import { createMirrorModule } from './modules/mirror/index.js'
 import { createProjectsModule } from './modules/projects/index.js'
 import { createRequestsModule } from './modules/requests/index.js'
 import { createSearchModule, type SearchModule } from './modules/search/index.js'
+import { createStatusModule } from './modules/status/index.js'
 import { createTokensModule } from './modules/tokens/index.js'
 import { createTransferModule } from './modules/transfer/index.js'
 import type { Ports } from './ports.js'
@@ -81,6 +82,13 @@ export function createAppModules(
   const items = createItemsModule(deps)
   const search = shared.search ?? createSearchModule(deps)
   const requests = createRequestsModule(deps)
+  const jobs = createJobsModule(deps, { scheduler: shared.scheduler, requests: requests.service })
+  const mcp = createMcpModule(deps, {
+    items: items.items,
+    search: search.search,
+    context: search.context,
+    requests: requests.log,
+  })
   return {
     auth: createAuthModule(deps),
     projects: createProjectsModule(deps),
@@ -89,16 +97,15 @@ export function createAppModules(
     items,
     search,
     requests,
-    jobs: createJobsModule(deps, { scheduler: shared.scheduler, requests: requests.service }),
+    jobs,
     transfer: createTransferModule(deps),
     device: createDeviceModule(deps, shared.device),
     install: createInstallModule(deps, { version: shared.installVersion }),
     mirror: createMirrorModule(deps, items),
-    mcp: createMcpModule(deps, {
-      items: items.items,
-      search: search.search,
-      context: search.context,
-      requests: requests.log,
+    mcp,
+    status: createStatusModule(deps, {
+      mcpSessions: () => mcp.sessions.size,
+      jobsEnabled: () => jobs.scheduler.enabled,
     }),
   }
 }
@@ -200,6 +207,7 @@ export function createApp({ config, logger, state, ports, pingDb, modules: m }: 
   api.route('/', m.jobs.routes)
   api.route('/', m.transfer.routes)
   api.route('/', m.device.routes)
+  api.route('/', m.status.routes)
   // every api.md section 12 route is built (deviations.md G16); anything else falls through to the JSON 404
   app.route('/api/v1', api)
 

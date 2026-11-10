@@ -41,6 +41,7 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │    │          purge-ephemeral; review queue, dashboard, undrafted, job status      │
  │    ├─ requests ── agent request log (MCP tool calls, bearer REST), 14 days        │
  │    ├─ transfer ── export / import (zip, lossless or Markdown folder)               │
+ │    ├─ status ── IA status page: version, embedding, record counts, DB size, runtime  │
  │    └─ healthz, instance, SPA static files (packages/web build); any other unknown  │
  │       API path or method is a JSON 404                                             │
  │  runtime.ts ── binds the ports: EmbeddingRegistry + SearchPort (search module),    │

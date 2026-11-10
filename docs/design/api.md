@@ -580,6 +580,12 @@ marked, never attributed to live users ([data-model.md](data-model.md) §8 step 
 
 Audit `data` never contains secrets or bodies.
 
+### 10.4 Instance status (**new**, 0.7)
+
+| method | path | role | notes |
+|---|---|---|---|
+| GET | `/api/v1/status` | IA | `Cache-Control: no-store`. Read-only, secret-free snapshot for the `/admin/status` page: `{instance:{version, public_url, started_at, uptime_s, node, platform, hostname, jobs_enabled}, embedding:{default:{name, model, variant, dims, tag, max_input_tokens}, providers:[{name, model, dims, tag, remote}], local_threads, chunks:[{model, dims, chunks, pending}], projects_by_model:[{model, projects, reembedding}]}, records:{projects, users, users_active, memberships, tokens_active, web_sessions, items:{<space>:{<lifecycle>:n}}, items_total, revisions, edges, chunks, chunks_pending, audit_rows, request_log_rows, job_runs}, database:{version, name, size_bytes, connections, extensions:[{name, version}], tables:[{name, bytes, rows_estimate}], pool:{max, total, idle, waiting}}, runtime:{rss_bytes, heap_used_bytes, heap_total_bytes, external_bytes, load_avg, cpus, system_memory_bytes, system_free_bytes, mcp_sessions}}`. Counts are exact except `tables[].rows_estimate` (`pg_class.reltuples`); `projects` excludes `_shared`; `connections` counts `pg_stat_activity` rows of this database |
+
 ### 10.3 Agent request log (ADR-0018)
 
 | method | path | role | notes |
@@ -633,7 +639,7 @@ POST /p/:slug/device/code                         POST /p/:slug/device/token
 GET  /p/:slug/api/{whoami,context,decisions/undrafted,activity}
 POST /p/:slug/api/{push,adr/import,adr/push,docs/push}  ALL  /p/:slug/mcp
 POST /api/v1/auth/{login,logout}                  GET|PATCH /api/v1/me      POST /api/v1/me/password
-GET  /api/v1/instance                             GET  /api/v1/{jobs,audit}  POST /api/v1/jobs/:name/run
+GET  /api/v1/instance                             GET  /api/v1/{jobs,audit,status}  POST /api/v1/jobs/:name/run
 POST /api/v1/invites/{preview,accept}             GET|POST /api/v1/invites  DELETE /api/v1/invites/:id
 GET  /api/v1/users  GET|PATCH|DELETE /api/v1/users/:id
 GET  /api/v1/device/lookup                        POST /api/v1/device/{approve,deny}
