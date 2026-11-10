@@ -17,8 +17,8 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 - **Dedupe defaults follow the project's embedding model** (ADR-0028). A project whose active model is `embeddinggemma`
   (Ollama) now defaults to `dedupe.threshold` 0.75 and `dedupe.related_min_cos` 0.50; every other model keeps 0.87 and 0.70.
-  With the old shared defaults the "similar to" note almost never appeared on embeddinggemma (12 of 40 reworded duplicates
-  on our pairs; 35 of 40 at 0.75, with 1 of 40 different facts flagged). Values a project saved are kept as they are.
+  With the old shared defaults the "similar to" note rarely appeared on embeddinggemma: on our 40 calibration pairs it
+  fired for 12 reworded duplicates at 0.87 and fires for 35 at 0.75, with 1 of 40 different facts flagged. Values a project saved are kept as they are.
 - The allowed ranges are wider so they fit both cosine scales: `dedupe.threshold` 0.60 to 0.99 (was 0.80 to 0.99),
   `dedupe.related_min_cos` 0.40 to 0.90 (was 0.50 to 0.90).
 

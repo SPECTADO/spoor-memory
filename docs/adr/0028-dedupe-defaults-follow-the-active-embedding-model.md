@@ -14,9 +14,9 @@ anchors: [packages/shared/src/settings.ts, packages/server/src/modules/projects/
 
 ## Context
 
-`dedupe.threshold` (0.87) and `dedupe.related_min_cos` (0.70) were calibrated for `multilingual-e5-small` q8 and were the defaults of every project. The `ollama` provider (ADR-0026) embeds with `embeddinggemma`, whose cosines sit lower. The owner's benchmark after enabling it showed the consequence: the "similar to" note fired for 0 of 10 reworded duplicates, and related suggestions thinned out. The range of `dedupe.threshold` started at 0.80, so a project admin could not even set a value that fits the model. ADR-0026 left "no per-model defaults yet" as a known gap and told operators to tune each project by hand.
+`dedupe.threshold` (0.87) and `dedupe.related_min_cos` (0.70) were calibrated for `multilingual-e5-small` q8 and were the defaults of every project. The `ollama` provider (ADR-0026) embeds with `embeddinggemma`, whose cosines sit lower. The owner's benchmark after enabling it (spoor-bench, 10 reworded duplicates written through MCP into the hosted server) showed the consequence: the "similar to" note fired for 0 of 10, and related suggestions thinned out. The range of `dedupe.threshold` started at 0.80, so a project admin could not even set a value that fits the model. ADR-0026 left "no per-model defaults yet" as a known gap and told operators to tune each project by hand.
 
-Measured on 2026-11-10 through the real `OllamaProvider` and chunker (256-item spoor-bench corpus, 40 reworded duplicates and 40 different facts on the same topics, title-only probes against title + body items):
+A separate, larger measurement on 2026-11-10, offline through the real `OllamaProvider` and chunker (256-item spoor-bench corpus, 40 reworded duplicates and 40 different facts on the same topics, title-only probes against title + body items). Its counts are of this sample, not of the owner's 10:
 
 - Every duplicate had its item as nearest neighbour, at 0.65 to 0.94 (median 0.85).
 - After the values guard, different facts scored at most 0.65, apart from two whose claim is stated in the matched item's body (0.72 and 0.91).

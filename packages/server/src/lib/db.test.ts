@@ -1,3 +1,5 @@
+import { createServer } from 'node:net'
+import pg from 'pg'
 import { describe, expect, it } from 'vitest'
 import { isDbUnavailable, isTransientPgError, retryTransient } from './db.js'
 import { ApiError } from './errors.js'
@@ -115,5 +117,49 @@ describe('isDbUnavailable', () => {
     expect(isDbUnavailable(new ApiError('not_found'))).toBe(false)
     expect(isDbUnavailable(new Error('boom'))).toBe(false)
     expect(isDbUnavailable(undefined)).toBe(false)
+  })
+
+  // The classifier matches message text, because pg gives these errors no code. Provoke the real ones.
+  it('recognises the errors a real pg.Pool raises when it cannot get a connection', async () => {
+    // a server that accepts the TCP connection and never answers the Postgres handshake
+    const sockets = new Set<import('node:net').Socket>()
+    const blackhole = createServer((s) => {
+      sockets.add(s)
+      s.on('error', () => undefined)
+    })
+    await new Promise<void>((r) => blackhole.listen(0, '127.0.0.1', r))
+    const { port } = blackhole.address() as import('node:net').AddressInfo
+    const pool = new pg.Pool({ host: '127.0.0.1', port, max: 1, connectionTimeoutMillis: 100 })
+    pool.on('error', () => undefined)
+    try {
+      // the first caller's handshake stalls; the second waits for the only slot of the pool
+      const [stalled, queued] = await Promise.allSettled([pool.query('select 1'), pool.query('select 1')])
+      expect(stalled.status).toBe('rejected')
+      expect(queued.status).toBe('rejected')
+      const messages = [stalled, queued].map((r) => ((r as PromiseRejectedResult).reason as Error).message)
+      expect(messages).toContain('Connection terminated due to connection timeout')
+      expect(messages).toContain('timeout exceeded when trying to connect')
+      expect(isDbUnavailable((stalled as PromiseRejectedResult).reason)).toBe(true)
+      expect(isDbUnavailable((queued as PromiseRejectedResult).reason)).toBe(true)
+    } finally {
+      for (const s of sockets) s.destroy()
+      await pool.end().catch(() => undefined)
+      await new Promise((r) => blackhole.close(r))
+    }
+
+    // nothing listens here: connection refused carries a code
+    const closed = createServer()
+    await new Promise<void>((r) => closed.listen(0, '127.0.0.1', r))
+    const free = (closed.address() as import('node:net').AddressInfo).port
+    await new Promise((r) => closed.close(r))
+    const refused = new pg.Pool({ host: '127.0.0.1', port: free, connectionTimeoutMillis: 1000 })
+    refused.on('error', () => undefined)
+    try {
+      const err = await refused.query('select 1').catch((e: unknown) => e)
+      expect((err as { code?: string }).code).toBe('ECONNREFUSED')
+      expect(isDbUnavailable(err)).toBe(true)
+    } finally {
+      await refused.end().catch(() => undefined)
+    }
   })
 })

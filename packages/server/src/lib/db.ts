@@ -76,6 +76,8 @@ export function isUniqueViolation(err: unknown, constraint?: string): boolean {
 export const isTransientPgError = (err: unknown): boolean =>
   ['40P01', '40001'].includes(pgError(err)?.code ?? '')
 
+// pg and pg-pool raise these as plain `Error`s with no code, so the text is the only handle. db.test.ts
+// provokes both from a real `pg.Pool`, so a library upgrade that rewords them fails a test, not a request.
 const NO_CONNECTION_MESSAGES = [
   'Connection terminated due to connection timeout', // pg: a new connection did not finish its handshake in time
   'timeout exceeded when trying to connect', // pg-pool: no free client within connectionTimeoutMillis

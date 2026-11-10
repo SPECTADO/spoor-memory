@@ -81,7 +81,7 @@ Notes:
   listed. `ignoredBuiltDependencies` names the scripts reviewed and deliberately not run (`protobufjs`, whose postinstall only
   prints a warning), so installs stay warning-free without turning the check off.
 - **Size**: roughly 0.7 to 1 GB (node_modules, 118 MB model). **Memory**: the embedder needs about 1.5 GB with batches of 8;
-  compose sets `mem_limit: 2g`. CPU: 2 vCPU recommended; embedding is serialised (one inference at a time) and runs in a worker thread, so requests are served while it runs (ADR-0029). The worker adds about 50 to 150 MB (measured on macOS: 0.69 GB loaded and 1.16 GB after embedding 32 full chunks, against 0.64 and 0.7 to 1.0 GB before); the 1.5 GB figure was not re-measured in the container.
+  compose sets `mem_limit: 2g`. CPU: 2 vCPU recommended; embedding is serialised (one inference at a time) and runs in a worker thread, so requests are served while it runs (ADR-0029). Measured on macOS, the worker adds about 50 MB once the model is loaded (0.69 GB against 0.64 GB) and about 160 to 460 MB after embedding 32 full chunks (1.16 GB against 0.7 to 1.0 GB). Memory in the container is not verified: neither these figures nor the 1.5 GB one were measured there against `mem_limit: 2g`.
 - `.dockerignore`: `.git`, `node_modules`, `**/dist`, `.env*` (except `.env.example`), `docs`, `.spoor`, `.claude`, `playwright-report`, `test-results`.
 - The CLI package is built in the same workspace but not shipped in the image; it is published to npm separately.
 - Init and signals: compose `init: true`; the app handles SIGTERM (close the HTTP server and stop the scheduler together, the
