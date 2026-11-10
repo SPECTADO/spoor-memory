@@ -71,6 +71,7 @@ export const qk = {
   invites: (filters?: Omit<InviteFilters, 'cursor'>) =>
     filters ? (['invites', filters] as const) : (['invites'] as const),
   adminJobs: () => ['admin-jobs'] as const,
+  adminStatus: () => ['admin-status'] as const,
   instanceAudit: (filters?: Omit<AuditFilters, 'cursor' | 'item'>) =>
     filters ? (['instance-audit', filters] as const) : (['instance-audit'] as const),
 }

@@ -19,6 +19,7 @@ import type {
   ImportResult,
   InstanceJobsJson,
   InstanceJson,
+  InstanceStatusJson,
   InviteAcceptBody,
   InviteCreateBody,
   InviteCreateResponse,
@@ -267,6 +268,7 @@ export const listProjectRequests = (slug: string, f: RequestFilters = {}, o: Sig
   api<Page<RequestRowJson>>(`${P(slug)}/requests`, { query: { ...f }, ...o })
 export const getProjectJobs = (slug: string, o: Sig = {}) => api<ProjectJobsJson>(`${P(slug)}/jobs`, o)
 export const getInstanceJobs = (o: Sig = {}) => api<InstanceJobsJson>('/jobs', o)
+export const getInstanceStatus = (o: Sig = {}) => api<InstanceStatusJson>('/status', o)
 export const runJob = (name: string) => api<RunJobResult>(`/jobs/${seg(name)}/run`, { method: 'POST' })
 
 /** Public install doc of a project (served by the server, not under /api). */

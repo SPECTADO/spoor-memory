@@ -100,12 +100,37 @@ describe('assembled app: routes of every module are mounted', () => {
     ['GET', '/api/v1/projects/acme/review'],
     ['GET', '/api/v1/projects/acme/jobs'],
     ['GET', '/api/v1/jobs'],
+    ['GET', '/api/v1/status'],
     ['GET', '/api/v1/projects/acme/export'],
     ['GET', '/api/v1/projects/acme/dashboard'],
   ])('%s %s answers', async (method, path) => {
     const { client } = await setup()
     const res = await client.request(method, path)
     expect(res.status).toBe(200)
+  })
+
+  it('GET /api/v1/status reports the embedding, record counts and database size to instance admins only', async () => {
+    const { client, devClient, provider } = await setup()
+    await createMemory(client, 'Status memory', 'Counted on the status page.')
+    expect((await devClient.get('/api/v1/status')).status).toBe(403)
+    const res = await client.get('/api/v1/status')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    const s = await json<{
+      embedding: { default: { tag: string }; chunks: { model: string; chunks: number }[] }
+      records: { projects: number; items_total: number; items: Record<string, Record<string, number>> }
+      database: { size_bytes: number; tables: { name: string }[]; pool: { max: number } }
+      runtime: { rss_bytes: number; mcp_sessions: number }
+    }>(res)
+    expect(s.embedding.default.tag).toBe(provider.tag)
+    expect(s.embedding.chunks.find((c) => c.model === provider.tag)?.chunks).toBeGreaterThan(0)
+    expect(s.records.projects).toBe(1)
+    expect(s.records.items.memories?.active).toBe(1)
+    expect(s.records.items_total).toBe(1)
+    expect(s.database.size_bytes).toBeGreaterThan(0)
+    expect(s.database.tables.map((t) => t.name)).toContain('items')
+    expect(s.runtime.rss_bytes).toBeGreaterThan(0)
+    expect(s.runtime.mcp_sessions).toBe(0)
   })
 
   it('the bearer surface serves context, push, adr/import, decisions/undrafted, activity and adr|docs/push', async () => {

@@ -9,6 +9,7 @@ import {
   Briefcase,
   ClipboardCheck,
   FileText,
+  Gauge,
   History,
   KeyRound,
   LayoutDashboard,
@@ -108,6 +109,7 @@ export function AdminNav() {
       label="Instance administration"
       title="Instance"
       entries={[
+        { to: '/admin/status', label: 'Status', icon: Gauge },
         { to: '/admin/projects', label: 'Projects', icon: Briefcase },
         { to: '/admin/users', label: 'Users', icon: Users },
         { to: '/admin/invites', label: 'Invites', icon: Mail },

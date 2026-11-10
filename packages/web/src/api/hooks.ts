@@ -808,6 +808,14 @@ export const useProjectJobs = (slug: string, enabled = true) =>
 export const useInstanceJobs = () =>
   useQuery({ queryKey: qk.adminJobs(), queryFn: ({ signal }) => E.getInstanceJobs({ signal }) })
 
+/** The instance status page; refreshed every 15 s while open. */
+export const useInstanceStatus = () =>
+  useQuery({
+    queryKey: qk.adminStatus(),
+    queryFn: ({ signal }) => E.getInstanceStatus({ signal }),
+    refetchInterval: 15_000,
+  })
+
 export function useRunJob() {
   const qc = useQueryClient()
   return useMutation({

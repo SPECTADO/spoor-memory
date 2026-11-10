@@ -4,6 +4,13 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Instance status page** (`/admin/status`, instance admins): the deployment's version, uptime, Node and platform; the
+  embedding provider and model in use, chunks per model and pending embeddings; record counts (projects, users, items by
+  space and lifecycle, revisions, links, tokens, sessions, log rows); PostgreSQL version, database size, connections, app pool
+  and per-table sizes; process memory, load and open MCP sessions. Backed by the new `GET /api/v1/status`.
+
 ## [0.6.1] - 2026-11-10
 
 ### Fixed

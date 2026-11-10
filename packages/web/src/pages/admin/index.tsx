@@ -5,6 +5,7 @@ const Users = lazy(() => import('./UsersPage').then((m) => ({ default: m.UsersPa
 const Invites = lazy(() => import('./InvitesPage').then((m) => ({ default: m.InvitesPage })))
 const Projects = lazy(() => import('./ProjectsAdminPage').then((m) => ({ default: m.ProjectsAdminPage })))
 const Audit = lazy(() => import('./AuditPage').then((m) => ({ default: m.AuditPage })))
+const Status = lazy(() => import('./StatusPage').then((m) => ({ default: m.StatusPage })))
 const Jobs = lazy(() => import('./JobsPage').then((m) => ({ default: m.JobsPage })))
 
 const fallback = <SkeletonRows rows={4} />
@@ -42,6 +43,13 @@ export function AdminAuditPage() {
   return (
     <Suspense fallback={fallback}>
       <Audit />
+    </Suspense>
+  )
+}
+export function AdminStatusPage() {
+  return (
+    <Suspense fallback={fallback}>
+      <Status />
     </Suspense>
   )
 }
