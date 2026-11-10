@@ -1,11 +1,19 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { LOCAL_TAG, LocalE5Provider } from './local.js'
 import { OllamaProvider, ollamaModelFamily } from './ollama.js'
 import { createEmbeddingRegistry, providerForSettings } from './registry.js'
 import { type FetchFn, OpenAIProvider, VoyageProvider } from './remote.js'
-import { assertSafeTag, dimsOfTag, fallbackCount, l2normalize, SerialQueue, withTimeout } from './util.js'
+import {
+  assertSafeTag,
+  batchesByLength,
+  dimsOfTag,
+  fallbackCount,
+  l2normalize,
+  SerialQueue,
+  withTimeout,
+} from './util.js'
 
 function fakeFetch(dims: number) {
   const calls: { url: string; init: RequestInit; body: Record<string, unknown> }[] = []
@@ -275,6 +283,23 @@ describe('util', () => {
     expect(fallbackCount('abc')).toBe(11)
     expect(fallbackCount('🚀')).toBe(10)
   })
+  it("batchesByLength groups similar lengths, shortest first, and keeps each text's index", () => {
+    const texts = ['dddd', 'a', 'ccc', 'bb', 'eeeee', 'a2']
+    const got = batchesByLength(texts, 2, (t) => t.length)
+    expect(got.map((b) => b.map((e) => e.text))).toEqual([
+      ['a', 'bb'],
+      ['a2', 'ccc'],
+      ['dddd', 'eeeee'],
+    ])
+    for (const e of got.flat()) expect(texts[e.index]).toBe(e.text)
+    expect(got.flat().map((e) => e.index)).toEqual([1, 3, 5, 2, 0, 4]) // equal lengths keep input order
+    // one batch or less: nothing to group, so nothing is measured and the order stays
+    const length = vi.fn((t: string) => t.length)
+    expect(batchesByLength(['ccc', 'a'], 2, length).map((b) => b.map((e) => e.index))).toEqual([[0, 1]])
+    expect(batchesByLength([], 8, length)).toEqual([])
+    expect(length).not.toHaveBeenCalled()
+  })
+
   it('SerialQueue runs one task at a time, in order, surviving failures', async () => {
     const q = new SerialQueue()
     const log: string[] = []
@@ -326,6 +351,36 @@ describe('LocalE5Provider', () => {
         dot(a as Float32Array, c as Float32Array),
       )
       expect(p.countTokens('hello')).toBeGreaterThan(3) // special tokens + `passage: ` prefix
+    },
+  )
+
+  // batches are grouped by length, so a run of more than 8 texts is embedded out of order
+  it.skipIf(!hasModel)(
+    'real model: vectors come back in input order when lengths are mixed across batches',
+    { timeout: 120_000 },
+    async () => {
+      const p = new LocalE5Provider({ modelDir: modelDir as string, threads: 2 })
+      await p.ready()
+      const topics = [
+        'Postgres sessions',
+        'yellow bananas',
+        'tram timetables',
+        'invoice rounding',
+        'chess openings',
+      ]
+      const texts = Array.from({ length: 20 }, (_, i) => {
+        const topic = `${topics[i % topics.length]} number ${i}`
+        return i % 2 === 0 ? `${topic}. ${`More about ${topic}. `.repeat(40)}` : topic
+      })
+      const together = await p.embedPassages(texts)
+      expect(together).toHaveLength(texts.length)
+      const dot = (x: Float32Array, y: Float32Array) => x.reduce((s, v, i) => s + v * (y[i] as number), 0)
+      for (const [i, text] of texts.entries()) {
+        const [alone] = await p.embedPassages([text])
+        const sims = together.map((v) => dot(v, alone as Float32Array))
+        expect(sims.indexOf(Math.max(...sims))).toBe(i)
+        expect(sims[i]).toBeGreaterThan(0.98)
+      }
     },
   )
 

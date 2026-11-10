@@ -10,12 +10,12 @@
  *   would stall the server's event loop for the length of every batch. The tokenizer is on the main thread
  *   (the chunker counts tokens synchronously), which tokenizes each batch and sends the tensors over.
  * - `query: ` / `passage: ` prefixes are added here only; mean pooling + L2 normalisation.
- * - One inference at a time (SerialQueue), passages in batches of 8, `intra_op_num_threads` from
- *   SPOOR_EMBED_THREADS.
+ * - One inference at a time (SerialQueue), passages in batches of 8 grouped by length (a batch is padded to
+ *   its longest text), `intra_op_num_threads` from SPOOR_EMBED_THREADS.
  */
 import type { EmbeddingProvider } from '../../../ports.js'
 import { InferenceWorker } from './inference-worker.js'
-import { batches, l2normalize, providerTag, SerialQueue } from './util.js'
+import { batchesByLength, l2normalize, providerTag, SerialQueue } from './util.js'
 
 export const LOCAL_MODEL = 'Xenova/multilingual-e5-small'
 export const LOCAL_DTYPE = 'q8'
@@ -126,20 +126,24 @@ export class LocalE5Provider implements EmbeddingProvider {
   async #embed(texts: string[]): Promise<Float32Array[]> {
     await this.ready()
     const { tokenizer, worker } = this.#require()
-    const out: Float32Array[] = []
-    for (const batch of batches(texts, BATCH)) {
+    const out = new Array<Float32Array>(texts.length)
+    // similar lengths share a batch (less padding to compute); vectors go back in the order of `texts`
+    for (const batch of batchesByLength(texts, BATCH, (t) => tokenizer.encode(t).length)) {
       // tokenize exactly as transformers.js's feature-extraction pipeline does; the worker does the rest
-      const encoded = tokenizer(batch, { padding: true, truncation: true })
+      const encoded = tokenizer(
+        batch.map((e) => e.text),
+        { padding: true, truncation: true },
+      )
       const input: Record<string, TokenTensor> = {}
       for (const [name, t] of Object.entries(encoded)) input[name] = { data: t.data, dims: t.dims }
       const buffers = Object.values(input).map((t) => t.data.buffer as ArrayBuffer)
       const res = await this.#queue.run(() => worker.run(input, buffers))
       const dims = res.dims[res.dims.length - 1] ?? this.dims
-      for (let i = 0; i < batch.length; i++) {
-        out.push(
-          l2normalize(Float32Array.from(Array.prototype.slice.call(res.data, i * dims, (i + 1) * dims))),
+      batch.forEach((e, i) => {
+        out[e.index] = l2normalize(
+          Float32Array.from(Array.prototype.slice.call(res.data, i * dims, (i + 1) * dims)),
         )
-      }
+      })
     }
     return out
   }
