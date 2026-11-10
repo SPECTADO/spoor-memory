@@ -33,7 +33,8 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │    │                                 projects + settings, tokens, audit log        │
  │    ├─ items ── item service, revisions (append-only), edges, wikilinks, resolver,  │
  │    │           repo mirror (push, adr/import), project graph (graph.ts), related   │
- │    ├─ search ── chunker, providers (local ONNX e5-small q8 | OpenAI | Voyage),     │
+ │    ├─ search ── chunker, providers (local ONNX e5-small q8 | OpenAI | Voyage |    │
+ │    │            Ollama),                                                           │
  │    │            hybrid FTS+vector RRF, dedupe, related items (related.ts),         │
  │    │            digest (6 tiers), anchor matcher                                   │
  │    ├─ jobs ── scheduler (in process, DB leases): cleanup, embed-pending, reembed,  │
@@ -129,7 +130,7 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 
 ### 3.5 ADR push and draft
 **Import and push (repo to Spoor):**
-1. `spoor adr import` sends every `docs/adr/*.md` (batches) to `POST /p/<slug>/api/adr/import`; the server keeps existing numbers, renumbers collisions, continues numbering from the highest.
+1. `spoor adr import` sends every `docs/adr/*.md` to `POST /p/<slug>/api/adr/import` in requests of at most 10 files / 128 KiB, in two passes (content first, then the links between ADRs), through a resumable local queue (`.spoor/import-queue.json`, `.spoor/import.lock`, backoff that honours `Retry-After`); the server keeps existing numbers, renumbers collisions, continues numbering from the highest, stores imported items at once and embeds them later (`embed-pending`), and answers `503 busy` above `SPOOR_PUSH_CONCURRENCY` pushes per project (ADR-0027).
 2. The CLI writes each assigned `spoor_id` back into the file's frontmatter (first key, body untouched), renames files the server renumbered, records bases in `.spoor/state.json`.
 3. Later, the agent edits an ADR file; the PostToolUse hook (`Write|Edit`) runs `spoor hook post-tool-use`, which pushes only paths under `docs/adr/` and the configured doc list, silently. Edits made any other way are found by a
    local hash sweep at the next SessionStart and pushed then.
@@ -249,6 +250,7 @@ Design files (the *what*): [docs/design/](docs/design/). Research the choices re
 | 23 | [`0023-related-item-floor-…md`](docs/adr/0023-related-item-floor-lives-at-settings-dedupe-related-min-cos-0-50-0-90-default-0.md) | Related-item floor lives at `dedupe.related_min_cos` (0.50 to 0.90, default 0.70), clamped on read below the duplicate threshold (proposed) | `relatedMinCos` | data-model |
 | 24 | [`0024-mcp-tools-list-budget-…md`](docs/adr/0024-mcp-tools-list-budget-raised-to-4-000-estimated-tokens-for-relations-on-all.md) | MCP tools/list budget raised to 4,000 estimated tokens for relations on all write tools and `spoor_get` depth (accepted) | the `tools.test.ts` ceiling, measured 3,932 | mcp |
 | 25 | [`0025-near-duplicates-are-saved-…md`](docs/adr/0025-near-duplicates-are-saved-with-a-note-only-the-same-text-is-refused.md) | Near-duplicates are saved with a note; only the same text is refused, differing values never count, default threshold 0.87 (proposed) | `sameText`, `search/values.ts`, `note: similar to`, `dedupe.threshold` default | search-and-digest, mcp |
+| 27 | [`0027-imports-are-a-resumable-client-queue-…md`](docs/adr/0027-imports-are-a-resumable-client-queue-the-server-defers-embeddings-for-imports-and-limits-concurrent-pushes.md) | Imports are a resumable client queue; the server defers embeddings for imports and limits concurrent pushes (proposed) | `import-queue.ts`, `backoff.ts`, `items/admission.ts`, `Spoor-Defer-Embedding`, `SPOOR_PUSH_CONCURRENCY` | cli-and-hooks, api, data-model, search-and-digest |
 
 [deviations.md](docs/design/deviations.md) §D lists nine slightly different topics (for example "session-managed MCP transport" and "in-process scheduler" as their own ADRs); the list above
 folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule. ADRs 0001 to 0020 and 0024 are decided (0017 is superseded by 0019);

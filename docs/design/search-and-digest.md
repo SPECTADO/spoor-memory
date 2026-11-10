@@ -9,7 +9,7 @@ Packages (release-age rule: published on or before 2026-10-16):
 | @huggingface/transformers | 4.3.1 (exact pin) | 2026-10-06 |
 | onnxruntime-node (transitive, pinned by transformers) | 1.30.0 | 2026-09-14 |
 
-OpenAI and Voyage are called with `fetch`, no SDKs. No tokenizer package for the digest (§6).
+OpenAI, Voyage and Ollama are called with `fetch`, no SDKs. No tokenizer package for the digest (§6).
 
 ## 1. Chunking
 
@@ -55,12 +55,12 @@ digest.ts, jobs.ts, routes.ts); the anchor matcher is `packages/shared/src/ancho
 
 ```ts
 export interface EmbeddingProvider {
-  readonly name: 'local' | 'openai' | 'voyage';
+  readonly name: 'local' | 'openai' | 'voyage' | 'ollama';
   readonly model: string;          // 'Xenova/multilingual-e5-small'
   readonly variant: string;        // 'q8' (dtype) | '' for remote
   readonly dims: number;           // 384
   readonly tag: string;            // `${name}:${model}${variant ? '@' + variant : ''}/${dims}`
-  readonly maxInputTokens: number; // 512 for e5; 8191 openai; 32000 voyage
+  readonly maxInputTokens: number; // 512 for e5; 8191 openai; 32000 voyage; 2048 ollama embeddinggemma
   ready(): Promise<void>;          // load model / check key; readiness gate for /healthz
   countTokens(text: string): number;               // chunker only
   embedQuery(text: string): Promise<Float32Array>;  // L2-normalised
@@ -83,7 +83,17 @@ export interface EmbeddingProvider {
   with `input_type: 'query' | 'document'`. The model comes from `SPOOR_VOYAGE_EMBED_MODEL` and the dims
   from `SPOOR_VOYAGE_EMBED_DIMS` (sent as `output_dimension`). Batches of 64. Model names and defaults
   must be verified against the vendor docs at implementation time.
-- Remote providers send chunk text off the instance. The settings UI says this before an admin
+- **ollama** (enabled when `SPOOR_OLLAMA_URL` is set, ADR-0026): `POST {url}/api/embed` with
+  `{ model, input, truncate: false }`, no key. The model comes from `SPOOR_OLLAMA_EMBED_MODEL` (default
+  `embeddinggemma`) and the dims from `SPOOR_OLLAMA_EMBED_DIMS` (default 768; not sent, a response of another
+  width is refused). Ollama adds no task prompt, so the provider does, by model family (the name without path
+  and `:tag`): `embeddinggemma` gets `task: search result | query: ` and `title: none | text: `,
+  `nomic-embed-text` (also `-v2-moe`) gets `search_query: ` and `search_document: `, any other model gets
+  none. Without its prompts embeddinggemma ranks clearly worse (body MRR 0.72 against 0.97). Batches of 32.
+  Ollama exposes no tokenizer: `countTokens = ceil(chars/3)` for the 2048-token models and the conservative
+  one-per-code-point count for the others (`maxInputTokens` 512), so `truncate: false` never rejects a
+  chunk. `ready()` makes no request. Tag: `ollama:embeddinggemma/768`.
+- Remote providers send chunk text off the instance (for `ollama`, to the configured host). The settings UI says this before an admin
   selects one.
 - The registry builds providers once from env. `SPOOR_EMBEDDING_DEFAULT` (default `local`) is the
   provider new projects get. A project's `settings.embedding.provider` names the provider it uses.
@@ -100,7 +110,15 @@ export interface EmbeddingProvider {
   was not embedded before the transaction (the set changed meanwhile, or the provider failed or timed out)
   gets its chunks with `embedding = NULL`, so FTS works at once and the `embed-pending` job fills them in.
   The MCP result then carries the line `note: embedding pending`.
-- **embed-pending job** (every minute): select up to 64 chunks
+- **Deferred embedding on push and import.** A request to `push`, `adr/push`, `docs/push` or `adr/import` with the header
+  `Spoor-Defer-Embedding: 1` (and any `adr/import` of more than 10 files) never calls the model: the chunks are written with
+  `embedding = NULL` for every model of the locked set, `embed-pending` is nudged, and the result carries the warning
+  `embedding_pending` ([api.md](api.md) §7.2). The items are findable by keyword at once and by meaning after the job has run.
+  The cause was the import of an existing repository: embedding up to 100 files inline kept one request open for minutes on the
+  single process-wide embedding queue (ADR-0027).
+- **embed-pending job** (every minute): select up to 16 chunks with the local provider and up to 64 with a remote one (OpenAI, Voyage, Ollama):
+  a local batch must finish inside `EMBED_TIMEOUT_MS` (a timed-out batch is thrown away and retried a minute later) and must not hold the
+  embedding queue that query embeddings share. It takes chunks
   `WHERE embedding IS NULL AND model = <a tag in use that has a provider>` and embed them. It updates with
   `UPDATE chunks SET embedding = $v WHERE id = $id AND embedding IS NULL`. This is idempotent; a chunk
   deleted meanwhile updates 0 rows. Tags with no provider in this image are skipped (see the default-model
@@ -279,6 +297,11 @@ scored 0.878 to 0.957; different facts up to 0.957, every one above 0.90 differi
 remaining different facts score at most 0.868, apart from one whose claim is stated verbatim in the matched item's body.
 Hence the default 0.87. `query:` prefixes on both sides did not separate the classes better. The sample is small;
 recheck on a larger labelled set.
+
+**Other models (2026-11-10, ADR-0026).** The threshold and `dedupe.related_min_cos` are calibrated for e5 only. The same
+pairs with `embeddinggemma` (retrieval prompts): reworded duplicates 0.57 to 0.83, different facts 0.41 to 0.88. The classes
+separate better than with e5 (AUC 0.83 against 0.75) but far lower on the scale, below the setting's minimum of 0.80, so a
+project on `ollama` rarely gets the similar-item note and should lower `related_min_cos`. There are no per-model defaults yet.
 
 ## 5a. Related items (link suggestions, ADR-0022)
 

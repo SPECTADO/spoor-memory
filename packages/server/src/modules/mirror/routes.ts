@@ -10,7 +10,7 @@ import { Hono } from 'hono'
 import { readJson, readQuery } from '../../lib/validate.js'
 import type { AppEnv } from '../../types.js'
 import { assertCan, bearerPrincipal, requireBearer } from '../auth/index.js'
-import type { Caller, PushService } from '../items/index.js'
+import { admitted, type Caller, type PushService, pushFlags } from '../items/index.js'
 import { activityQuery, spacePushRequest } from './schemas.js'
 import type { ActivityService } from './service.js'
 
@@ -25,10 +25,16 @@ export function mirrorBearerRoutes(push: PushService, activity: ActivityService)
       project: { id: ctx.project.id, slug: ctx.project.slug, kind: ctx.project.kind },
     }
   }
-  const pushTo = (space: 'decisions' | 'docs') => async (c: Context<AppEnv>) => {
+  // token and role checks first, then admission (503 busy), then the body; `Spoor-Import-Edges` is the
+  // import's only and ignored here
+  const pushTo = (space: 'decisions' | 'docs') => (c: Context<AppEnv>) => {
     const caller = writer(c)
-    const body = await readJson(c, spacePushRequest)
-    return c.json(await push.push(caller, { space, ...body }))
+    return admitted(c, push.admission, caller.project.id, async () => {
+      const body = await readJson(c, spacePushRequest)
+      return c.json(
+        await push.push(caller, { space, ...body }, { deferEmbedding: pushFlags(c).deferEmbedding }),
+      )
+    })
   }
   return new Hono<AppEnv>()
     .get('/activity', async (c) => {

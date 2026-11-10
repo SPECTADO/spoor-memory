@@ -45,6 +45,7 @@ Then restart Claude Code (or run `/mcp`), approve the `spoor` MCP server, and im
 ```sh
 spoor adr import      # docs/adr/*.md → decisions; writes spoor_id into each file (commit that)
 spoor docs import     # ARCHITECTURE.md, GLOSSARY.md, docs/*.md (minus docs/adr/) → docs
+                      # both resume where they stopped when you run them again (see "Imports" below)
 spoor status --remote # project, role, token expiry (asks the server), push conflicts, queued pushes
 spoor context --git   # the digest an agent gets at session start
 ```
@@ -75,6 +76,7 @@ Commit `.mcp.json`, `.claude/settings.json`, the ADR files and `spoor.config.jso
 | `SPOOR_URL`, `SPOOR_PROJECT`, `SPOOR_TOKEN` | override `.claude/settings.local.json` (flags `--server`, `--project`, `--token` override both) |
 | `SPOOR_DRAFT_CMD` (or `SPOOR_DRAFT_COMMAND`) | shell command that drafts an ADR: gets the instruction as its last argument and the note on stdin, prints Markdown (or `claude --output-format json`) |
 | `SPOOR_DISABLE=1` | every hook and `adr draft` do nothing |
+| `SPOOR_IMPORT_TIMEOUT_MS` | fixed per-request timeout of `adr import` / `docs import` (integer 100..600000), replacing the size-based one (30 s + 250 ms per KiB, at most 120 s); invalid values are ignored |
 | `SPOOR_DRAFTING=1` | set by the CLI for the drafting child, so its own hooks do nothing |
 | `CI` | drafting is skipped unless `spoor.config.json` sets `draft.in_ci: true` |
 
@@ -90,7 +92,7 @@ in_ci}`, `context.{max_tokens, max_files}`. Details: [cli-and-hooks.md](../../do
 | `spoor init [--dry-run]` | human | reads the server version from `/p/<slug>/install.json`, merges `.mcp.json`, `.claude/settings.json` (hooks, `mcp__spoor`) and `.gitignore`, writes the `AGENTS.md` block and `CLAUDE.md` import and sets `autoMemoryEnabled` in `.claude/settings.local.json` (ADR-0015), with blocks it renders itself (`@spoor/shared` install.ts); idempotent |
 | `spoor whoami [--json]`, `spoor status [--remote]` | human | identity; local config, push conflicts, queue, orphans, breaker |
 | `spoor context [--query T] [--files a,b \| --git] [--budget N] [--no-shared] [--json]` | agent | prints the digest |
-| `spoor adr import [--dir D] [--dry-run]`, `spoor docs import [--dry-run]` | human | one-time push of existing files |
+| `spoor adr import [--dir D] [--dry-run] [--all]`, `spoor docs import [--dry-run] [--all]` | human | push of existing files, resumable: see "Imports" below |
 | `spoor adr push <file> [--force]`, `spoor docs push <file>` | agent | push one file (`--force` needs a TTY and a typed `y`) |
 | `spoor adr draft [--since ISO] [--max N] [--dry-run] [--session ID]` | agent | drafts proposed ADRs from undrafted decision memories |
 | `spoor hook session-start\|stop\|post-tool-use` | hook | always exit 0 within 7 / 6 / 8 s |
@@ -114,6 +116,8 @@ src/
   hook-guard.ts       runHook: SPOOR_DRAFTING / SPOOR_DISABLE guard, exceptions swallowed
   state.ts            .spoor/state.json (bases, drafted, pending, conflicts) under .spoor/state.lock
   mirror.ts           mirrored-file lists, push + result handling, import batches, queue replay, sweep, orphans
+  backoff.ts          import limits and timeouts, which failures are retried, backoff with jitter and Retry-After, pacing
+  import-queue.ts     .spoor/import-queue.json (progress of an import) and the single-flight .spoor/import.lock
   safety.ts           checks on server answers before they touch files (uuid spoor_id, paths inside the repo, ADR numbers)
   writeback.ts        spoor_id / adr: frontmatter edits that keep the file byte-identical otherwise
   settings-files.ts   pure merges of .mcp.json, settings.json, settings.local.json, .gitignore; dry-run diff
@@ -128,7 +132,30 @@ scripts/
 ```
 
 Local files live in `<repo>/.spoor/` (gitignored by `spoor login`): `state.json`, `session/<id>.json|.nagged`,
-`offline-until`, `draft.lock`, `notice-day`, `last-run.log`.
+`offline-until`, `draft.lock`, `notice-day`, `last-run.log`, `import-queue.json`, `import.lock`.
+
+## Imports
+
+`spoor adr import` and `spoor docs import` record their progress per file in `.spoor/import-queue.json` and hold
+`.spoor/import.lock` while they run, so a stopped import resumes where it stopped: run the same command again. Files
+already imported and unchanged (by the queue or by the push bases) are not sent again; `--all` sends every file. While an
+import holds the lock, the hooks do not push (PostToolUse queues the file, SessionStart skips the replay and the sweep),
+and PostToolUse, the SessionStart replay and the sweep leave the files of an unfinished import to the import for 7 days. A
+file refused for its content (too large, a per-file 4xx) does not count as unfinished while it is unchanged.
+
+ADR files go in batches of at most 10 files / 128 KiB, in two passes: pass 1 stores every file's content
+(`Spoor-Import-Edges: defer`), pass 2 sends the files with links (relations, supersedes, renumbered files) once more,
+when every target is on the server. A file whose text names the number of a repo ADR not imported yet keeps its links
+for a later run, so they never resolve to a different ADR with that number. Both passes and every `docs import` push send `Spoor-Defer-Embedding: 1`, so the
+server stores the items at once (keyword-searchable) and embeds them later. Older servers ignore both headers.
+
+Timeouts, 5xx, 429 and `503 busy` are retried with exponential backoff and jitter (at least `Retry-After`, at most 60 s
+per wait, 5 consecutive failures, 300 s in all per run); after a timeout (or a proxy's 502, 504 or 524) the CLI waits
+15 s before sending again and halves the batch. Refused connections, DNS failures, 401 and other 4xx stop at once. A stopped import exits 3 with the
+number of files remaining; a file the server refused, or links not applied, exits 2.
+
+Losing `import-queue.json` is harmless for files that were not imported yet. Losing it while files wait for pass 2
+makes them look imported, so their links are not sent: run the import with `--all` to repair that.
 
 ## Development
 

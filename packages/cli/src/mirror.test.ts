@@ -4,7 +4,6 @@ import { join, relative } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readState, updateState } from './state.js'
 import {
-  bodyOf,
   deadUrl,
   type FakeServer,
   fakeServer,
@@ -34,113 +33,6 @@ const res = (over: Record<string, unknown>) => ({
   renumbered: null,
   warnings: [],
   ...over,
-})
-
-describe('spoor adr import', () => {
-  it('sends one batch with reserve_above, writes spoor_id back, renumbers collisions, summarises', async () => {
-    const repo = makeRepo({
-      local: localEnv(srv.url),
-      files: {
-        'docs/adr/0001-first.md': '---\n# keep me\nstatus: accepted\n---\n# First\n\nbody\n',
-        'docs/adr/0002-second.md': '---\nadr: 2\n---\n# ADR-0002: Second\n',
-        'docs/adr/0003-third.md': '# Third\n',
-        'docs/adr/README.md': '# index\n',
-        'docs/adr/template.md': '# t\n',
-        'docs/adr/notes.txt': 'x',
-      },
-    })
-    const ids = [uuid(), uuid(), uuid()]
-    srv.on('POST /p/acme/api/adr/import', (req) => {
-      const b = req.body as { files: { source_path: string }[]; reserve_above: number }
-      expect(b.reserve_above).toBe(3)
-      expect(b.files.map((f) => f.source_path)).toEqual([
-        'docs/adr/0001-first.md',
-        'docs/adr/0002-second.md',
-        'docs/adr/0003-third.md',
-      ])
-      return {
-        body: {
-          results: [
-            res({ source_path: 'docs/adr/0001-first.md', spoor_id: ids[0] }),
-            res({
-              source_path: 'docs/adr/0002-second.md',
-              spoor_id: ids[1],
-              handle: 'ADR-0004',
-              renumbered: { from: 2, to: 4 },
-              warnings: [{ code: 'ambiguous_ref', ref: 'ADR-0002', candidates: [] }],
-            }),
-            { source_path: 'docs/adr/0003-third.md', error: 'invalid_input', message: 'bad' },
-          ],
-        },
-      }
-    })
-    srv.on('POST /p/acme/api/push', (req) => ({
-      body: res({
-        source_path: (req.body as { source_path: string }).source_path,
-        spoor_id: ids[1],
-        status: 'updated',
-        revision: 2,
-      }),
-    }))
-    const r = await run(['adr', 'import'], { cwd: repo })
-    expect(r.code).toBe(2)
-    expect(r.out).toContain('skipped docs/adr/README.md')
-    expect(r.out).toContain('skipped docs/adr/notes.txt')
-    expect(r.out).toContain('renumbered docs/adr/0002-second.md → docs/adr/0004-second.md (ADR 2 → 4)')
-    expect(r.out).toContain('rewrote the H1 of docs/adr/0002-second.md (ADR 2 → 4)')
-    expect(r.out).toContain('ambiguous reference ADR-0002')
-    expect(r.out).toContain('error docs/adr/0003-third.md: invalid_input (bad)')
-    expect(r.out).toContain('2 created, 0 updated, 0 unchanged, 1 renumbered, 1 errors')
-    expect(readFileSync(join(repo, 'docs/adr/0001-first.md'), 'utf8')).toBe(
-      `---\nspoor_id: ${ids[0]}\n# keep me\nstatus: accepted\n---\n# First\n\nbody\n`,
-    )
-    expect(readFileSync(join(repo, 'docs/adr/0004-second.md'), 'utf8')).toBe(
-      `---\nspoor_id: ${ids[1]}\nadr: 4\n---\n# ADR-0004: Second\n`,
-    )
-    expect(existsSync(join(repo, 'docs/adr/0002-second.md'))).toBe(false)
-    expect(readFileSync(join(repo, 'docs/adr/0003-third.md'), 'utf8')).toBe('# Third\n')
-    // follow-up push moves Spoor's source_path to the renamed file
-    expect(
-      bodyOf<{ source_path: string }>(srv.requests.find((q) => q.path.endsWith('/push'))).source_path,
-    ).toBe('docs/adr/0004-second.md')
-    expect(readState(repo).bases[ids[1] as string]).toMatchObject({
-      path: 'docs/adr/0004-second.md',
-      revision: 2,
-    })
-  })
-
-  it('splits batches at 100 files; --dry-run writes nothing and sends nothing', async () => {
-    const files: Record<string, string> = {}
-    for (let i = 1; i <= 150; i++) files[`docs/adr/${String(i).padStart(4, '0')}-a.md`] = `# A ${i}\n`
-    const repo = makeRepo({ local: localEnv(srv.url), files })
-    const dry = await run(['adr', 'import', '--dry-run'], { cwd: repo })
-    expect(dry.out).toContain('150 files in 2 request(s), reserve_above 150')
-    expect(srv.requests).toHaveLength(0)
-    srv.on('POST /p/acme/api/adr/import', (req) => ({
-      body: {
-        results: (req.body as { files: { source_path: string }[] }).files.map((f) =>
-          res({ source_path: f.source_path, status: 'unchanged' }),
-        ),
-      },
-    }))
-    const r = await run(['adr', 'import'], { cwd: repo })
-    expect(r.code).toBe(0)
-    expect(srv.requests.map((q) => (q.body as { files: unknown[] }).files.length)).toEqual([100, 50])
-    expect(r.out).toContain('0 created, 0 updated, 150 unchanged, 0 renumbered, 0 errors')
-  })
-
-  it('human mode: server down exits 3, not configured exits 1', async () => {
-    const repo = makeRepo({ local: localEnv(await deadUrl()), files: { 'docs/adr/0001-a.md': '# A\n' } })
-    const r = await run(['adr', 'import'], { cwd: repo })
-    expect(r.code).toBe(3)
-    expect(r.err).toMatch(/^spoor: server unreachable \(ECONNREFUSED http:\/\/127\.0\.0\.1:\d+\)/)
-    const bare = makeRepo({ files: { 'docs/adr/0001-a.md': '# A\n' } })
-    const r2 = await run(['adr', 'import'], { cwd: bare })
-    expect(r2.code).toBe(1)
-    expect(r2.err).toBe(
-      'spoor: not configured for this repo (missing SPOOR_URL, SPOOR_PROJECT, SPOOR_TOKEN). Run: spoor login\n',
-    )
-  })
 })
 
 describe('server answers are not trusted with paths or ids (review-log-phase5 S1-S3)', () => {

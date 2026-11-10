@@ -630,9 +630,10 @@ reserved `api`, `assets`, `device`, `invite`, `login`, `admin`, `projects`, `sha
   item is a collision and is renumbered (step 3 below), so a new file can never overwrite another ADR
   (deviations.md G3). A `spoor_id` that is not in this project is ignored for matching (warning
   `foreign_spoor_id`); it never updates the foreign item.
-- `spoor adr import` processes files sorted by path. The request carries `reserve_above` = the highest
-  number among **all** local ADR files (the CLI computes it before the first batch and sends it with every
-  batch). Per file:
+- `spoor adr import` processes files sorted by path, in requests of at most 10 files and 128 KiB
+  ([cli-and-hooks.md](cli-and-hooks.md) §4.2). Every request carries `reserve_above` = the highest
+  number among **all** local ADR files, including the ones skipped as already imported (the CLI computes it once
+  before the first request). The server works in two passes per request; per file, pass 1 (content) does:
   1. Matched by `spoor_id` or `source_path` → treated as a push (update, fast-forward rules below), number
      unchanged; the response carries the existing `spoor_id` so the CLI writes it back. A file number that
      differs from the item's gives `number_mismatch` (warning only).
@@ -641,13 +642,31 @@ reserved `api`, `assets`, `device`, `invite`, `login`, `admin`, `projects`, `sha
      `greatest(next_adr_number, reserve_above + 1)`, response `{renumbered: {from: 7, to: 15}}`, and store
      `renumbered_from: 7` as a server-owned extra. Only true collisions move; the repo's own later numbers
      stay free. The CLI renames the file to `0015-<slug>.md` and sets `adr: 15` when the file has an `adr`
-     key. Existing Spoor items never change number.
+     key. Existing Spoor items never change number. Because `next_adr_number` is always above every held number
+     and a collision takes `greatest(next_adr_number, reserve_above + 1)`, collisions in different requests get
+     different numbers, and a renumber target is never a number a later repo file still needs.
   4. A concurrent insert of the same new file (`23505` on `items_source_uq`) is retried once as an update.
 - **ADR refs inside a batch** (`supersedes: ADR-0007`, `## Status: Superseded by ADR-0007`, `[[ADR-0007]]`,
   `drafted_from`) resolve first through the request's map `{repo number → assigned number}`, then in the
   project. A ref to a number that was renumbered in this or an earlier import (an item carries
   `renumbered_from` equal to it, or the number is a map key) is **not applied**: the response carries
   `{code:"ambiguous_ref", ref:"ADR-0007", candidates:["ADR-0007","ADR-0015"]}` and a human fixes the file.
+- **The number map is per request.** Across requests a reference to ADR-N resolves in the project only: when an item
+  with `renumbered_from = N` exists the result is `ambiguous_ref` (the same outcome as inside one batch), otherwise it is
+  the item whose number is N. That is only right once every file of the import is on the server, so the import has two
+  passes. Pass 1 sends every file with `Spoor-Import-Edges: defer`: the server stores content and writes no edges, and a
+  file with edge work answers `edges_deferred`. Pass 2 sends those files again without the header (plus files that answered
+  `edges_failed` or `unresolved_*`, and renamed files), and the server resolves the references against the complete
+  set. Re-sending unchanged content is `unchanged` and still applies the edges. Against a server that ignores the header,
+  every request runs both passes and the client repeats `unresolved_*` files in its second pass.
+- **A file that is not on the server is never a fallback target.** Inside one request, a ref to the number of a file whose
+  pass 1 failed in that request (an `internal` result or a per-file error) stays `unresolved_*` instead of resolving to
+  another item that holds the number. Across requests the client keeps the links of a file that names the number of a repo
+  file not imported yet (pending or failed) for a later run (`edges`), so pass 2 never links a different ADR by number.
+- **Renumber repair.** If the answer of the request that renumbered a file is lost (timeout, killed process), the file
+  still has the old number and no `spoor_id`. Sending it again matches by `source_path` an item whose `renumbered_from`
+  equals the file's number and whose `adr_number` differs; the server repeats `renumbered: {from, to}` (instead of
+  `number_mismatch`) so the client renames the file. The import never has to send a separate follow-up push for a rename.
 - Gaps are allowed and never reused. Hard-deleted numbers are not reused (counter only grows).
 
 **Repo push** (`POST /p/:slug/api/push`, used by the PostToolUse hook and `spoor adr push`):

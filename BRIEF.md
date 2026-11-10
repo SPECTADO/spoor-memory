@@ -29,7 +29,7 @@ Self-hosted now; later SaaS as one container per client, so the app stays single
 ### Search and embeddings
 - Hybrid search: Postgres full-text + pgvector cosine, fused (reciprocal rank fusion).
 - Embedding provider is pluggable. Default: local ONNX `multilingual-e5-small` inside the app
-  container, no API key. Optional OpenAI / Voyage via env.
+  container, no API key. Optional OpenAI / Voyage / Ollama via env.
 - Long items are chunked (~400 tokens, overlap); each chunk has a vector tagged with the model
   name. A `re-embed` job rebuilds all vectors when the model changes; search ignores vectors
   from a different model than the active one.

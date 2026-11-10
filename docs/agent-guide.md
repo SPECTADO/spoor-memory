@@ -170,11 +170,13 @@ decision tier and the memory drops out.
 
 The mirror is **one way, repository to Spoor**. Nothing is pulled back.
 
-- `spoor adr import` (once) pushes every `docs/adr/*.md` into the decisions space and writes the assigned `spoor_id` into each file's
+- `spoor adr import` pushes every `docs/adr/*.md` into the decisions space and writes the assigned `spoor_id` into each file's
   frontmatter. Existing numbers are kept; a colliding number is renumbered and the file renamed; numbering continues from the highest.
-  Commit the changed files.
+  Commit the changed files. It sends small batches (10 files), retries when the server is busy, and keeps its progress in
+  `.spoor/import-queue.json`: if it stops ("N files remaining"), run the same command again to resume. Imported items are
+  findable by keyword at once and by meaning a few minutes later. While an import runs, the hooks do not push.
 - `spoor docs import` does the same for the doc list (default `ARCHITECTURE.md`, `GLOSSARY.md`, `docs/*.md` except `docs/adr/`;
-  configurable in `spoor.config.json`). No drafting for docs.
+  configurable in `spoor.config.json`), one file per request, with the same resume. No drafting for docs.
 - After that the PostToolUse hook pushes on change, and a hash sweep at session start catches edits made another way.
 - A mirrored item has a `source_path`, which follows renames. Mirrored items cannot be edited over MCP (`mirrored_item`).
 - A human edit in the web UI stays in Spoor. The next push of that file is refused (`pushed_over_spoor_edit`) and recorded as a **push

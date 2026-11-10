@@ -48,7 +48,12 @@ const OPTIONS: Record<string, Record<string, Opt>> = {
     'no-shared': { type: 'boolean' },
     json: { type: 'boolean' },
   },
-  'adr import': { dir: { type: 'string' }, 'dry-run': { type: 'boolean' }, json: { type: 'boolean' } },
+  'adr import': {
+    dir: { type: 'string' },
+    'dry-run': { type: 'boolean' },
+    json: { type: 'boolean' },
+    all: { type: 'boolean' },
+  },
   'adr push': { force: { type: 'boolean' } },
   'adr draft': {
     since: { type: 'string' },
@@ -57,7 +62,7 @@ const OPTIONS: Record<string, Record<string, Opt>> = {
     session: { type: 'string' },
     background: { type: 'boolean' },
   },
-  'docs import': { 'dry-run': { type: 'boolean' }, json: { type: 'boolean' } },
+  'docs import': { 'dry-run': { type: 'boolean' }, json: { type: 'boolean' }, all: { type: 'boolean' } },
   'docs push': {},
 }
 
@@ -230,7 +235,7 @@ async function runCommand(
       return cmdContext(ctx, o)
     }
     case 'adr import': {
-      const o: Parameters<typeof cmdAdrImport>[1] = { dryRun: b('dry-run'), json: b('json') }
+      const o: Parameters<typeof cmdAdrImport>[1] = { dryRun: b('dry-run'), json: b('json'), all: b('all') }
       const dir = s('dir')
       if (dir) o.dir = dir
       return cmdAdrImport(ctx, o)
@@ -238,7 +243,7 @@ async function runCommand(
     case 'adr push':
       return cmdPush(ctx, 'adr', rest[0], { force: b('force'), strict: b('strict') })
     case 'docs import':
-      return cmdDocsImport(ctx, { dryRun: b('dry-run'), json: b('json') })
+      return cmdDocsImport(ctx, { dryRun: b('dry-run'), json: b('json'), all: b('all') })
     case 'docs push':
       return cmdPush(ctx, 'doc', rest[0], { strict: b('strict') })
     case 'adr draft': {

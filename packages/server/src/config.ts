@@ -76,12 +76,14 @@ const schema = z
     SPOOR_ADMIN_NAME: withDefault(z.string().min(1).max(100), 'Admin'),
     LOG_LEVEL: withDefault(z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']), 'info'),
     SPOOR_DB_POOL_MAX: withDefault(int(1, 500), 10),
+    /** Pushes / ADR imports in flight per project (admission control of the push routes). */
+    SPOOR_PUSH_CONCURRENCY: withDefault(int(1, 64), 3),
     SPOOR_JOBS: withDefault(z.enum(['on', 'off']), 'on'),
     SPOOR_TRUST_PROXY: optional(z.string().max(4000)),
     SPOOR_WEB_DIR: optional(z.string().min(1)),
     SPOOR_MIGRATIONS_DIR: optional(z.string().min(1)),
     SPOOR_MODEL_DIR: withDefault(z.string().min(1), '/opt/spoor/models'),
-    SPOOR_EMBEDDING_DEFAULT: withDefault(z.enum(['local', 'openai', 'voyage']), 'local'),
+    SPOOR_EMBEDDING_DEFAULT: withDefault(z.enum(['local', 'openai', 'voyage', 'ollama']), 'local'),
     SPOOR_EMBED_THREADS: withDefault(int(1, 64), 2),
     SPOOR_OPENAI_API_KEY: optional(z.string().min(1)),
     SPOOR_OPENAI_EMBED_MODEL: withDefault(z.string().min(1), 'text-embedding-3-small'),
@@ -89,6 +91,22 @@ const schema = z
     SPOOR_VOYAGE_API_KEY: optional(z.string().min(1)),
     SPOOR_VOYAGE_EMBED_MODEL: optional(z.string().min(1)),
     SPOOR_VOYAGE_EMBED_DIMS: optional(int(1, 2000)),
+    SPOOR_OLLAMA_URL: optional(
+      z
+        .string()
+        .url()
+        .refine((u) => /^https?:$/.test(new URL(u).protocol), 'must be http or https'),
+    ),
+    /** Goes into the model tag, which is inlined into vector SQL: the tag's character set only. */
+    SPOOR_OLLAMA_EMBED_MODEL: withDefault(
+      z
+        .string()
+        .min(1)
+        .max(120)
+        .regex(/^[A-Za-z0-9:/@._-]+$/, 'letters, digits and : / @ . _ - only'),
+      'embeddinggemma',
+    ),
+    SPOOR_OLLAMA_EMBED_DIMS: withDefault(int(1, 2000), 768),
   })
   .superRefine((c, ctx) => {
     const need = (ok: boolean, path: string, message: string) => {
@@ -115,6 +133,11 @@ const schema = z
       c.SPOOR_EMBEDDING_DEFAULT !== 'voyage' || !!c.SPOOR_VOYAGE_API_KEY,
       'SPOOR_EMBEDDING_DEFAULT',
       'voyage needs SPOOR_VOYAGE_API_KEY',
+    )
+    need(
+      c.SPOOR_EMBEDDING_DEFAULT !== 'ollama' || !!c.SPOOR_OLLAMA_URL,
+      'SPOOR_EMBEDDING_DEFAULT',
+      'ollama needs SPOOR_OLLAMA_URL',
     )
   })
 

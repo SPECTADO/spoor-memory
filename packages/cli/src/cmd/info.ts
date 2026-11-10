@@ -12,6 +12,7 @@ import {
 } from '../ctx.js'
 import { gitAnchors } from '../git.js'
 import { offlineUntil } from '../http.js'
+import { unfinishedImports } from '../import-queue.js'
 import { orphans } from '../mirror.js'
 import { readState } from '../state.js'
 
@@ -88,6 +89,13 @@ export async function cmdStatus(ctx: Ctx, o: { remote?: boolean }): Promise<numb
   if (state.pending.length > 0) {
     out.push('', `Queued pushes (${state.pending.length}), replayed at the next session start:`)
     for (const p of state.pending) out.push(`  ${p.path} (since ${p.since})`)
+  }
+  for (const u of unfinishedImports(ctx.root)) {
+    const label = u.kind === 'adr' ? 'adr' : 'docs'
+    out.push(
+      '',
+      `Unfinished import (${label}): ${u.remaining} of ${u.total} files remaining; run: spoor ${label} import`,
+    )
   }
   const orph = orphans(ctx, state)
   if (orph.length > 0) {

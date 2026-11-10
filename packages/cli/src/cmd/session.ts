@@ -37,6 +37,7 @@ import {
 } from '../fsutil.js'
 import { gitAnchors, gitDiffNames, gitHead, gitStatusPaths, isNoisePath, mtimeMs } from '../git.js'
 import { offlineUntil } from '../http.js'
+import { importRunning, unfinishedImportPaths, unfinishedImports } from '../import-queue.js'
 import {
   classify,
   orphans,
@@ -159,6 +160,14 @@ export function statusLines(ctx: Ctx): string[] {
       `Spoor: ${o.length} mirrored ${plural(o.length, 'file was', 'files were')} deleted or renamed: ${list}. Ask the user to retire ${plural(o.length, 'it', 'them')} in the web UI.`,
     )
   }
+  try {
+    for (const u of unfinishedImports(ctx.root))
+      lines.push(
+        `Spoor: an import of this repo is unfinished (${u.remaining} of ${u.total} files remaining). Ask the user to run spoor ${u.kind === 'adr' ? 'adr' : 'docs'} import.`,
+      )
+  } catch {
+    // a broken queue file must not break the digest
+  }
   return lines
 }
 
@@ -271,11 +280,14 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
       version = versionLines(VERSION, r.headers?.get(SERVER_VERSION_HEADER))
       const text = typeof r.body === 'string' ? r.body : JSON.stringify(r.body)
       main = text.endsWith('\n') ? text.slice(0, -1) : text
-      // 6. queue replay and mirror sweep in the time left (marked automatic: not the agent's own recording)
+      // 6. queue replay and mirror sweep in the time left (marked automatic: not the agent's own recording);
+      // skipped while an import runs in this checkout, so the two never overlap on the server
       const auto = clientFor(ctx, { breaker: 'check', auto: true })
       try {
-        if (!deadline.expired(1000)) await replayPending(ctx, auto, deadline)
-        if (!deadline.expired(1000)) await sweepMirror(ctx, auto, deadline)
+        if (!importRunning(ctx.root, ctx.rt.now())) {
+          if (!deadline.expired(1000)) await replayPending(ctx, auto, deadline)
+          if (!deadline.expired(1000)) await sweepMirror(ctx, auto, deadline)
+        }
       } catch (e) {
         logRun(ctx.root, `session-start: sweep failed (${(e as Error).message})`, ctx.rt.now())
       }
@@ -417,6 +429,12 @@ export async function postToolUse(ctx: Ctx, input: HookInput, deadline: Deadline
   if (!kind) return ''
   if (ctx.optedOut || authProblem(ctx)) return ''
   if (offlineUntil({ repoRoot: ctx.root, now: ctx.rt.now })) {
+    await updateState(ctx.root, (s) => addPending(s, kind, rel, ctx.rt.now()))
+    return ''
+  }
+  // an import runs in this checkout: queue the file (the import sends the latest content of the files it planned);
+  // a file of an unfinished import is queued too: the import resumes it with reserve_above, not a push of its own
+  if (importRunning(ctx.root, ctx.rt.now()) || unfinishedImportPaths(ctx.root, ctx.rt.now()).has(rel)) {
     await updateState(ctx.root, (s) => addPending(s, kind, rel, ctx.rt.now()))
     return ''
   }

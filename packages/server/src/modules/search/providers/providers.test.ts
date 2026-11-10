@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { LOCAL_TAG, LocalE5Provider } from './local.js'
+import { OllamaProvider, ollamaModelFamily } from './ollama.js'
 import { createEmbeddingRegistry, providerForSettings } from './registry.js'
 import { type FetchFn, OpenAIProvider, VoyageProvider } from './remote.js'
 import { assertSafeTag, dimsOfTag, fallbackCount, l2normalize, SerialQueue, withTimeout } from './util.js'
@@ -36,7 +37,123 @@ const baseConfig = {
   SPOOR_VOYAGE_API_KEY: undefined,
   SPOOR_VOYAGE_EMBED_MODEL: undefined,
   SPOOR_VOYAGE_EMBED_DIMS: undefined,
+  SPOOR_OLLAMA_URL: undefined,
+  SPOOR_OLLAMA_EMBED_MODEL: 'embeddinggemma',
+  SPOOR_OLLAMA_EMBED_DIMS: 768,
 }
+
+/** Ollama's `/api/embed` shape: `{embeddings: number[][]}` in input order. */
+function fakeOllama(dims: number, status = 200) {
+  const calls: {
+    url: string
+    init: RequestInit
+    body: { model: string; input: string[]; truncate: boolean }
+  }[] = []
+  const fn: FetchFn = async (url, init) => {
+    const body = JSON.parse(String(init.body)) as { model: string; input: string[]; truncate: boolean }
+    calls.push({ url, init, body })
+    if (status !== 200) return new Response('{"error":"model \\"x\\" not found"}', { status })
+    const embeddings = body.input.map((_, i) =>
+      Array.from({ length: dims }, (_, d) => (d === i % dims ? 3 : 0)),
+    )
+    return new Response(JSON.stringify({ model: body.model, embeddings }), { status: 200 })
+  }
+  return { fn, calls }
+}
+
+describe('OllamaProvider', () => {
+  it('posts to /api/embed without a key or truncation, adds the embeddinggemma prompts, normalises', async () => {
+    const f = fakeOllama(4)
+    const p = new OllamaProvider({
+      baseUrl: 'http://ollama:11434/',
+      model: 'embeddinggemma',
+      dims: 4,
+      fetch: f.fn,
+    })
+    expect(p.tag).toBe('ollama:embeddinggemma/4')
+    expect(assertSafeTag(p.tag)).toBe(p.tag)
+    expect(p.maxInputTokens).toBe(2048)
+    await p.ready()
+
+    const vs = await p.embedPassages(['a', 'b'])
+    expect(f.calls).toHaveLength(1)
+    expect(f.calls[0]?.url).toBe('http://ollama:11434/api/embed')
+    expect(f.calls[0]?.body).toEqual({
+      model: 'embeddinggemma',
+      input: ['title: none | text: a', 'title: none | text: b'],
+      truncate: false,
+    })
+    const headers = (f.calls[0] as { init: RequestInit }).init.headers as Record<string, string>
+    expect(headers).toEqual({ 'content-type': 'application/json' })
+    expect(Array.from(vs[0] as Float32Array)).toEqual([1, 0, 0, 0])
+    expect(Array.from(vs[1] as Float32Array)).toEqual([0, 1, 0, 0])
+
+    await p.embedQuery('q')
+    expect(f.calls[1]?.body.input).toEqual(['task: search result | query: q'])
+  })
+
+  it('picks prompts and limits by model family; an unknown model gets none and the safe counter', async () => {
+    expect(ollamaModelFamily('embeddinggemma:300m')).toBe('embeddinggemma')
+    expect(ollamaModelFamily('hf.co/org/EmbeddingGemma:300m')).toBe('embeddinggemma')
+    expect(ollamaModelFamily('nomic-embed-text')).toBe('nomic-embed-text')
+
+    const f = fakeOllama(4)
+    const nomic = new OllamaProvider({
+      baseUrl: 'http://o',
+      model: 'nomic-embed-text:v1.5',
+      dims: 4,
+      fetch: f.fn,
+    })
+    expect(nomic.tag).toBe('ollama:nomic-embed-text:v1.5/4')
+    await nomic.embedQuery('q')
+    await nomic.embedPassages(['d'])
+    expect(f.calls.map((c) => c.body.input[0])).toEqual(['search_query: q', 'search_document: d'])
+    expect(nomic.countTokens('abcdefg')).toBe(3) // chars / 3 with a 2048 window
+
+    const other = new OllamaProvider({ baseUrl: 'http://o', model: 'bge-m3', dims: 4, fetch: f.fn })
+    await other.embedPassages(['d'])
+    expect(f.calls[2]?.body.input).toEqual(['d'])
+    expect(other.maxInputTokens).toBe(512)
+    expect(other.countTokens('abc')).toBe(fallbackCount('abc'))
+    const moe = new OllamaProvider({ baseUrl: 'http://o', model: 'nomic-embed-text-v2-moe', dims: 4 })
+    expect(moe.maxInputTokens).toBe(512)
+  })
+
+  it('batches passages by 32, keeping order', async () => {
+    const f = fakeOllama(8)
+    const p = new OllamaProvider({ baseUrl: 'http://o', model: 'embeddinggemma', dims: 8, fetch: f.fn })
+    const vs = await p.embedPassages(Array.from({ length: 70 }, (_, i) => `t${i}`))
+    expect(f.calls.map((c) => c.body.input.length)).toEqual([32, 32, 6])
+    expect(vs).toHaveLength(70)
+    expect(f.calls[2]?.body.input[0]).toBe('title: none | text: t64')
+  })
+
+  it('errors carry the status only; a wrong width or count is refused', async () => {
+    const missing = new OllamaProvider({
+      baseUrl: 'http://o',
+      model: 'embeddinggemma',
+      dims: 4,
+      fetch: fakeOllama(4, 404).fn,
+    })
+    await expect(missing.embedQuery('x')).rejects.toThrow('ollama embeddings request failed with HTTP 404')
+
+    const wide = new OllamaProvider({
+      baseUrl: 'http://o',
+      model: 'embeddinggemma',
+      dims: 4,
+      fetch: fakeOllama(5).fn,
+    })
+    await expect(wide.embedQuery('x')).rejects.toThrow(/width 5, expected 4/)
+
+    const empty = new OllamaProvider({
+      baseUrl: 'http://o',
+      model: 'embeddinggemma',
+      dims: 4,
+      fetch: async () => new Response('{}', { status: 200 }),
+    })
+    await expect(empty.embedQuery('x')).rejects.toThrow(/no vectors, expected 1/)
+  })
+})
 
 describe('OpenAIProvider', () => {
   it('posts model, input and dimensions with the key as bearer; normalises and keeps input order', async () => {
@@ -132,6 +249,17 @@ describe('registry', () => {
     expect(providerForSettings(r2, { embedding: { provider: 'voyage' } }).name).toBe('voyage')
     expect(providerForSettings(r2, {}).name).toBe('local') // settings default
     expect(providerForSettings(r1, { embedding: { provider: 'openai' } }).name).toBe('local') // not enabled
+  })
+
+  it('ollama only with SPOOR_OLLAMA_URL; it can be the default', () => {
+    const r = createEmbeddingRegistry({
+      ...baseConfig,
+      SPOOR_EMBEDDING_DEFAULT: 'ollama',
+      SPOOR_OLLAMA_URL: 'http://ollama:11434',
+    })
+    expect(r.list().map((p) => p.name)).toEqual(['local', 'ollama'])
+    expect(r.defaultProvider.tag).toBe('ollama:embeddinggemma/768')
+    expect(providerForSettings(r, { embedding: { provider: 'ollama' } }).dims).toBe(768)
   })
 })
 

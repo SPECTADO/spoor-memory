@@ -12,6 +12,14 @@ import { PushService } from './push.js'
 import { itemBearerRoutes, itemRoutes } from './routes.js'
 import { ItemService } from './service.js'
 
+export {
+  admitted,
+  DEFER_EMBEDDING_HEADER,
+  IMPORT_EDGES_HEADER,
+  PUSH_RETRY_AFTER_S,
+  PushAdmission,
+  pushFlags,
+} from './admission.js'
 export { type CanonicalInput, canonicalFrontmatter } from './markdown.js'
 export { type PushError, type PushResult, PushService } from './push.js'
 export {

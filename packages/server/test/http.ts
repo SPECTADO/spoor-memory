@@ -5,6 +5,7 @@
 import { pino } from 'pino'
 import { createApp, createAppModules } from '../src/app.js'
 import { type Config, loadConfig } from '../src/config.js'
+import type { Db } from '../src/lib/db.js'
 import type { DeviceServiceOptions } from '../src/modules/device/index.js'
 import type { Ports } from '../src/ports.js'
 import { newReadyState } from '../src/types.js'
@@ -30,6 +31,8 @@ export interface TestAppOptions {
   device?: DeviceServiceOptions
   /** The version the install templates print (default: the server's VERSION). */
   version?: string
+  /** The app's database handle (default: the test file's pool); the factories keep using `testDb()`. */
+  db?: Db
 }
 
 export function testApp(opts: TestAppOptions = {}) {
@@ -39,7 +42,7 @@ export function testApp(opts: TestAppOptions = {}) {
   const ports = opts.ports ?? stubPorts()
   const logger = pino({ level: 'silent' })
   const modules = createAppModules(
-    { config, logger, db: testDb(), ports },
+    { config, logger, db: opts.db ?? testDb(), ports },
     { device: opts.device, installVersion: opts.version },
   )
   const app = createApp({ config, logger, state, ports, modules })

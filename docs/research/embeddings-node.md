@@ -178,6 +178,11 @@ Counting every block with the real tokenizer is cheap (sub-ms for short strings)
 - nomic-embed-text-v2-moe: 475M params (305M active), 768 dims (Matryoshka to 256), 512 max tokens,
   prefixes `search_query: ` / `search_document: `, custom_code (nomic_bert) with no verified
   transformers.js ONNX build found. Skip for MVP.
+- embeddinggemma through Ollama (added 2026-11-10, ADR-0026): 308M params, 768 dims, 2048 tokens, 100+ languages,
+  621 MB in Ollama, Gemma licence. Measured against e5-small q8 on the spoor-bench corpus (256 items, vectors only,
+  M3 Max): paraphrase MRR 0.78 vs 0.48, Czech queries 0.70 vs 0.36, body 0.93 vs 0.91; 72 passages/s on the GPU
+  vs 163 for e5 on CPU; query about 10 ms vs 3 ms. Needs its prompts and a second service: shipped as the opt-in
+  `ollama` provider. Ollama's default `nomic-embed-text` (v1.5) is English only.
 Sources: HF API tree listings at huggingface.co/api/models/{Xenova/multilingual-e5-base,Xenova/bge-m3,
 nomic-ai/nomic-embed-text-v2-moe}; nomic README.
 

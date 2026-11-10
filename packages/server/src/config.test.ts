@@ -64,6 +64,31 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...base, SPOOR_VOYAGE_API_KEY: 'k' })).toThrow(/SPOOR_VOYAGE_EMBED_MODEL/)
   })
 
+  it('ollama is off without a URL, defaults to embeddinggemma/768, and cannot be the default without one', () => {
+    expect(loadConfig(base).SPOOR_OLLAMA_URL).toBeUndefined()
+    const c = loadConfig({
+      ...base,
+      SPOOR_OLLAMA_URL: 'http://ollama:11434',
+      SPOOR_EMBEDDING_DEFAULT: 'ollama',
+    })
+    expect(c).toMatchObject({ SPOOR_OLLAMA_EMBED_MODEL: 'embeddinggemma', SPOOR_OLLAMA_EMBED_DIMS: 768 })
+    expect(() => loadConfig({ ...base, SPOOR_EMBEDDING_DEFAULT: 'ollama' })).toThrow(
+      /ollama needs SPOOR_OLLAMA_URL/,
+    )
+    expect(() => loadConfig({ ...base, SPOOR_OLLAMA_URL: 'ollama:11434' })).toThrow(/SPOOR_OLLAMA_URL/)
+    expect(() =>
+      loadConfig({ ...base, SPOOR_OLLAMA_URL: 'http://o', SPOOR_OLLAMA_EMBED_MODEL: "x'; drop" }),
+    ).toThrow(/SPOOR_OLLAMA_EMBED_MODEL/)
+  })
+
+  it('SPOOR_PUSH_CONCURRENCY: 3 by default, 1..64, an empty string is unset', () => {
+    expect(loadConfig(base).SPOOR_PUSH_CONCURRENCY).toBe(3)
+    expect(loadConfig({ ...base, SPOOR_PUSH_CONCURRENCY: '1' }).SPOOR_PUSH_CONCURRENCY).toBe(1)
+    expect(loadConfig({ ...base, SPOOR_PUSH_CONCURRENCY: '' }).SPOOR_PUSH_CONCURRENCY).toBe(3)
+    expect(() => loadConfig({ ...base, SPOOR_PUSH_CONCURRENCY: '0' })).toThrow(/SPOOR_PUSH_CONCURRENCY/)
+    expect(() => loadConfig({ ...base, SPOOR_PUSH_CONCURRENCY: '65' })).toThrow(/SPOOR_PUSH_CONCURRENCY/)
+  })
+
   it('rejects a public URL with a path', () => {
     expect(() => loadConfig({ ...base, SPOOR_PUBLIC_URL: 'https://x.example/app' })).toThrow(
       /SPOOR_PUBLIC_URL/,

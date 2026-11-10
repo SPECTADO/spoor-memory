@@ -13,8 +13,28 @@
  * - Content keys follow the file (missing ones take defaults); `pinned` / `last_verified` only on create;
  *   server-owned extras survive; `superseded` is sticky while a live superseder exists.
  * - Edges from `relations`, `supersedes`, `drafted_from` and `Superseded by …` are added in a second pass,
- *   so refs to files later in the same import batch resolve. ADR refs go through the batch's
- *   `{repo number → assigned number}` map; a ref to a renumbered number is not applied (`ambiguous_ref`).
+ *   so refs to files later in the same import batch resolve. ADR refs go through the request's
+ *   `{repo number → assigned number}` map (one map per request); a ref to a number renumbered in this
+ *   request is not applied (`ambiguous_ref`).
+ * - Across requests (the CLI imports in small batches) a ref to ADR-N resolves through the stored rows: an
+ *   item whose frontmatter `renumbered_from` is N makes it `ambiguous_ref` (not applied), otherwise the item
+ *   numbered N. Correct once every file of the import is on the server, which is why the CLI sends pass 1
+ *   of all files first and the edges afterwards.
+ * - Embedding deferral: with `Spoor-Defer-Embedding: 1` (push and import), and for an import of more than
+ *   ADR_IMPORT_INLINE_MAX_FILES files (an old CLI's 100-file batch), no model call happens in the request:
+ *   chunks are stored with NULL embeddings (full-text searchable at once), the embed-pending job fills them,
+ *   and a written result carries `embedding_pending`.
+ * - Edges-deferred pass: with `Spoor-Import-Edges: defer` an import runs pass 1 only; a file with edge work
+ *   gets `edges_deferred` and is sent again without the header (an unchanged re-send runs pass 2; edge
+ *   inserts and supersedes are idempotent).
+ * - Per-file isolation of an import: an unexpected error on one file is that file's `internal` result (pass
+ *   1) or an `edges_failed` warning (pass 2), never a failed batch; after IMPORT_MAX_INTERNAL_FAILURES of
+ *   them the rest is `not processed`. Transient DB errors (deadlock, serialization) re-run the transaction.
+ *   A ref (in pass 2 of the same request) to the number of a file whose pass 1 failed stays `unresolved_*`
+ *   rather than resolving to another item that holds that number.
+ * - Lost-renumber recovery: a file without `spoor_id` matching by source_path an ADR that was renumbered
+ *   from the file's number (`renumbered_from`) gets `renumbered` again instead of `number_mismatch`, so a
+ *   client that lost the creating answer renames the file on its re-send.
  */
 import {
   extrasOf,
@@ -27,10 +47,18 @@ import {
 } from '@spoor/shared'
 import { and, desc, eq, ne, sql } from 'drizzle-orm'
 import { edges, itemRevisions, items } from '../../db/schema.js'
-import { type DbOrTx, isUniqueViolation, lockProjectForWrite, type Tx, withTx } from '../../lib/db.js'
+import {
+  type DbOrTx,
+  isUniqueViolation,
+  lockProjectForWrite,
+  retryTransient,
+  type Tx,
+  withTxRetry,
+} from '../../lib/db.js'
 import type { ServerDeps } from '../../lib/deps.js'
-import { ApiError } from '../../lib/errors.js'
+import { ApiError, loggableError } from '../../lib/errors.js'
 import type { Space } from '../../ports.js'
+import { PushAdmission } from './admission.js'
 import { addEdge, rewriteWikilinks, sharedProjectId, TYPED_KINDS, type TypedKind } from './links.js'
 import {
   dateFromSection,
@@ -105,7 +133,26 @@ interface Batch {
   reserveAbove: number | null
   /** repo number → assigned number, for ADR refs inside the batch. */
   map: Map<number, number>
+  /**
+   * Repo numbers of the files whose pass 1 failed in this request. Such a file is not on the server, so a ref to
+   * its number must not fall back to whatever item holds that number: it stays unresolved (sent again later).
+   */
+  missing: Set<number>
+  /** Store pending (NULL) embeddings without calling the model; the embed-pending job fills them. */
+  deferEmbedding: boolean
 }
+
+/** An adr/import of more than this many files embeds deferred (an old CLI's 100-file batch). */
+export const ADR_IMPORT_INLINE_MAX_FILES = 10
+/** Unexpected (non-API) errors in one adr/import before the rest of its files is not attempted. */
+export const IMPORT_MAX_INTERNAL_FAILURES = 3
+
+/** Whether pass 2 has anything to do for a file (drafted_from of a new ADR is applied in pass 1). */
+const hasEdgeWork = (p: ParsedFile, status: PushResult['status']) =>
+  p.relations.length > 0 ||
+  p.supersedes !== null ||
+  p.supersededBy !== null ||
+  (p.draftedFrom.length > 0 && status !== 'created')
 
 interface Pass1 {
   parsed: ParsedFile
@@ -119,19 +166,33 @@ const INVALID_FILE_PATH = 'must be a repo-relative path of 1 to 256 characters w
 const ABSOLUTE_PATH_RE = /^(?:[/\\~]|[A-Za-z]:)/
 
 export class PushService {
+  /** The limiter of the push routes (one per server process, shared by every project). */
+  readonly admission: PushAdmission
+
   constructor(
     private readonly deps: ServerDeps,
     private readonly items: ItemService,
-  ) {}
+  ) {
+    const c = deps.config
+    this.admission = new PushAdmission(
+      c.SPOOR_PUSH_CONCURRENCY,
+      Math.max(c.SPOOR_PUSH_CONCURRENCY, c.SPOOR_DB_POOL_MAX - 2),
+    )
+  }
 
   get db() {
     return this.deps.db
   }
 
   /** `POST /p/:slug/api/push`: one file; failures are thrown as API errors. */
-  async push(caller: Caller, req: PushRequest): Promise<PushResult> {
+  async push(caller: Caller, req: PushRequest, opts: { deferEmbedding?: boolean } = {}): Promise<PushResult> {
     assertWritable(caller)
-    const batch: Batch = { reserveAbove: null, map: new Map() }
+    const batch: Batch = {
+      reserveAbove: null,
+      map: new Map(),
+      missing: new Set(),
+      deferEmbedding: opts.deferEmbedding === true,
+    }
     const p1 = await this.pass1(caller, req.space, req.source_path, req.content, batch, {
       baseRevision: req.base_revision ?? null,
       force: req.force === true,
@@ -140,15 +201,32 @@ export class PushService {
     return p1.result
   }
 
-  /** `POST /p/:slug/api/adr/import`: a batch of ADR files; a bad file does not fail the batch. */
-  async adrImport(caller: Caller, req: AdrImportRequest): Promise<{ results: (PushResult | PushError)[] }> {
+  /**
+   * `POST /p/:slug/api/adr/import`: a batch of ADR files; a bad file does not fail the batch, and neither
+   * does an unexpected error on one file (its result is `internal`, or `edges_failed` in pass 2).
+   */
+  async adrImport(
+    caller: Caller,
+    req: AdrImportRequest,
+    opts: { deferEmbedding?: boolean; deferEdges?: boolean } = {},
+  ): Promise<{ results: (PushResult | PushError)[] }> {
     assertWritable(caller)
-    const batch: Batch = { reserveAbove: req.reserve_above ?? null, map: new Map() }
+    const batch: Batch = {
+      reserveAbove: req.reserve_above ?? null,
+      map: new Map(),
+      missing: new Set(),
+      deferEmbedding: opts.deferEmbedding === true || req.files.length > ADR_IMPORT_INLINE_MAX_FILES,
+    }
     const files = [...req.files].sort((a, b) =>
       a.source_path < b.source_path ? -1 : a.source_path > b.source_path ? 1 : 0,
     )
+    // unexpected errors of this request, pass 1 and pass 2 together; at the limit the rest is not attempted
+    let internal = 0
+    const tripped = () => internal >= IMPORT_MAX_INTERNAL_FAILURES
     const done: (Pass1 | PushError)[] = []
     for (const f of files) {
+      // the files not attempted get `not processed` below (no entry in `done`)
+      if (tripped()) break
       try {
         done.push(
           await this.pass1(caller, 'decisions', f.source_path, f.content, batch, {
@@ -157,15 +235,35 @@ export class PushService {
           }),
         )
       } catch (err) {
-        done.push(toPushError(f.source_path, err))
+        if (!(err instanceof ApiError)) internal++
+        const n = this.fileNumberOf(f.source_path, f.content)
+        if (n !== null) batch.missing.add(n)
+        done.push(this.fileError(f.source_path, err))
       }
     }
     for (const d of done) {
       if (!('parsed' in d)) continue
+      if (opts.deferEdges) {
+        // pass 1 only: the CLI sends the file again without the header for its edges
+        if (hasEdgeWork(d.parsed, d.result.status)) d.result.warnings.push({ code: 'edges_deferred' })
+        continue
+      }
+      if (tripped()) {
+        if (hasEdgeWork(d.parsed, d.result.status)) {
+          d.result.warnings.push({
+            code: 'edges_failed',
+            source_path: d.parsed.sourcePath,
+            error: 'internal',
+            message: 'not processed',
+          })
+        }
+        continue
+      }
       try {
         await this.pass2(caller, d, batch)
       } catch (err) {
-        d.result.warnings.push({ code: 'edges_failed', ...toPushError(d.parsed.sourcePath, err) })
+        if (!(err instanceof ApiError)) internal++
+        d.result.warnings.push({ code: 'edges_failed', ...this.fileError(d.parsed.sourcePath, err) })
       }
     }
     // the input order of the request, so the CLI can zip results with its files
@@ -178,6 +276,30 @@ export class PushService {
         return 'parsed' in d ? d.result : d
       }),
     }
+  }
+
+  /** The ADR number a file claims (frontmatter, file name, H1), or from the file name when it does not parse. */
+  private fileNumberOf(sourcePath: string, content: string): number | null {
+    try {
+      return this.parse('decisions', sourcePath, content).fileNumber
+    } catch {
+      return numberFromFileName(normalizeFilePath(sourcePath) ?? sourcePath)
+    }
+  }
+
+  /**
+   * A file's error result: an API error as its code, anything else (a driver error, a bug) logged with the
+   * real error and reported as `internal` (nothing is wrong with the file: send it again later).
+   */
+  private fileError(sourcePath: string, err: unknown): PushError {
+    if (err instanceof ApiError) {
+      const out: PushError = { source_path: sourcePath, error: err.code }
+      if (err.publicMessage) out.message = err.publicMessage
+      if (err.details) out.details = err.details
+      return out
+    }
+    this.deps.logger.error({ err: loggableError(err), source_path: sourcePath }, 'adr import: file failed')
+    return { source_path: sourcePath, error: 'internal', message: 'Internal error.' }
   }
 
   // ---- parsing ------------------------------------------------------------------------------------------
@@ -325,42 +447,44 @@ export class PushService {
       drafted.push(mem)
       await this.assertNotDrafted(this.db, caller, mem, null)
     }
-    const prepared = await this.items.prepare({
-      projectId: caller.project.id,
-      space: parsed.space,
-      ...parsed.fields,
-    })
+    const prepared = await this.items.prepare(
+      { projectId: caller.project.id, space: parsed.space, ...parsed.fields },
+      { defer: batch.deferEmbedding },
+    )
     let pending = false
-    const { row, renumbered } = await this.items.createTx(false, async (tx) => {
-      const ins = await this.items.insertNew(tx, caller, {
-        space: parsed.space,
-        fields: parsed.fields,
-        pinned: parsed.pinned,
-        slug: { value: parsed.slugBase, explicit: false },
-        adr: { number: parsed.fileNumber, onTaken: 'renumber', reserveAbove: batch.reserveAbove },
-        sourcePath: parsed.sourcePath,
-        lastVerified: parsed.lastVerified,
-      })
-      const created = ins.row
-      for (const mem of drafted) {
-        await this.assertNotDrafted(tx, caller, mem, created.id)
-        await addEdge(tx, created, 'drafted_from', mem, actorOf(caller))
-      }
-      pending = await this.items.index(tx, created, prepared)
-      await this.items.audit(
-        tx,
-        caller,
-        'item.push',
-        created,
-        `pushed ${handleOf(created, view)} (new) from ${parsed.sourcePath}`,
-        {
-          revision: 1,
-          created: true,
-          ...(ins.renumbered ? { renumbered: ins.renumbered } : {}),
-        },
-      )
-      return { row: created, renumbered: ins.renumbered }
-    })
+    // the callback only assigns locals, so a deadlocked attempt re-runs from scratch
+    const { row, renumbered } = await retryTransient(() =>
+      this.items.createTx(false, async (tx) => {
+        const ins = await this.items.insertNew(tx, caller, {
+          space: parsed.space,
+          fields: parsed.fields,
+          pinned: parsed.pinned,
+          slug: { value: parsed.slugBase, explicit: false },
+          adr: { number: parsed.fileNumber, onTaken: 'renumber', reserveAbove: batch.reserveAbove },
+          sourcePath: parsed.sourcePath,
+          lastVerified: parsed.lastVerified,
+        })
+        const created = ins.row
+        for (const mem of drafted) {
+          await this.assertNotDrafted(tx, caller, mem, created.id)
+          await addEdge(tx, created, 'drafted_from', mem, actorOf(caller))
+        }
+        pending = await this.items.index(tx, created, prepared)
+        await this.items.audit(
+          tx,
+          caller,
+          'item.push',
+          created,
+          `pushed ${handleOf(created, view)} (new) from ${parsed.sourcePath}`,
+          {
+            revision: 1,
+            created: true,
+            ...(ins.renumbered ? { renumbered: ins.renumbered } : {}),
+          },
+        )
+        return { row: created, renumbered: ins.renumbered }
+      }),
+    )
     this.items.pendingWarning(caller.project.id, pending, warnings)
     if (parsed.fileNumber !== null && row.adrNumber !== null) batch.map.set(parsed.fileNumber, row.adrNumber)
     return {
@@ -407,7 +531,25 @@ export class PushService {
     const view = viewOf(caller.project)
     const actor = actorOf(caller)
     const warningsBefore = warnings.length
-    if (parsed.fileNumber !== null && match.adrNumber !== null && parsed.fileNumber !== match.adrNumber) {
+    // lost renumber answer: the file still carries the number it was renumbered from and no spoor_id (the
+    // client never saw the `renumbered` of the creating request): tell it again, so it renames the file
+    const lostRenumber =
+      !bySpoorId &&
+      parsed.spoorId === null &&
+      parsed.fileNumber !== null &&
+      match.adrNumber !== null &&
+      parsed.fileNumber !== match.adrNumber &&
+      Number(match.frontmatter.renumbered_from) === parsed.fileNumber
+    const renumbered =
+      lostRenumber && parsed.fileNumber !== null && match.adrNumber !== null
+        ? { from: parsed.fileNumber, to: match.adrNumber }
+        : null
+    if (
+      !lostRenumber &&
+      parsed.fileNumber !== null &&
+      match.adrNumber !== null &&
+      parsed.fileNumber !== match.adrNumber
+    ) {
       warnings.push({ code: 'number_mismatch', file: parsed.fileNumber, item: match.adrNumber })
     }
     if (parsed.fileNumber !== null && match.adrNumber !== null)
@@ -452,7 +594,7 @@ export class PushService {
 
     if (sameContent(contentOf(match), fields)) {
       // identical content: no revision; an aligned file also clears a recorded push conflict
-      const row = await withTx(this.db, async (tx) => {
+      const row = await withTxRetry(this.db, async (tx) => {
         if (match.pushConflictAt || movePath) {
           await tx
             .update(items)
@@ -461,7 +603,11 @@ export class PushService {
         }
         return (await loadItem(tx, match.id)) as LoadedItem
       })
-      return { parsed, row, result: this.result(caller, parsed.sourcePath, 'unchanged', row, null, warnings) }
+      return {
+        parsed,
+        row,
+        result: this.result(caller, parsed.sourcePath, 'unchanged', row, renumbered, warnings),
+      }
     }
 
     // fast-forward: the caller's base is current, or nobody edited the item in Spoor since the last push
@@ -473,7 +619,7 @@ export class PushService {
       .limit(1)
     const ff = opts.baseRevision === match.revision || latest?.via === 'cli'
     if (!ff && !opts.force) {
-      await withTx(this.db, async (tx) => {
+      await withTxRetry(this.db, async (tx) => {
         await tx.update(items).set({ pushConflictAt: sql`now()` }).where(eq(items.id, match.id))
         await this.items.audit(
           tx,
@@ -498,13 +644,18 @@ export class PushService {
       })
     }
 
-    const prepared = await this.items.prepare({ projectId: match.projectId, space: match.space, ...fields })
+    const prepared = await this.items.prepare(
+      { projectId: match.projectId, space: match.space, ...fields },
+      { defer: batch.deferEmbedding },
+    )
     let pending = false
     let row: LoadedItem
     try {
-      row = await withTx(this.db, async (tx) => {
+      // a deadlock re-runs the transaction (the callback only assigns locals); the conflict handling
+      // below stays outside the retry
+      row = await withTxRetry(this.db, async (tx) => {
         await lockProjectForWrite(tx, match.projectId)
-        const settings = await this.items.projectSettings(match.projectId)
+        const settings = await this.items.projectSettings(match.projectId, tx)
         const current = (await loadItem(tx, match.id, true)) as LoadedItem
         // `expected` is the revision the fast-forward decision above was made on: an edit that committed
         // since (e.g. during the embedding call) is a conflict, decided again below (review D1)
@@ -551,7 +702,11 @@ export class PushService {
       throw err
     }
     this.items.pendingWarning(match.projectId, pending, warnings)
-    return { parsed, row, result: this.result(caller, parsed.sourcePath, 'updated', row, null, warnings) }
+    return {
+      parsed,
+      row,
+      result: this.result(caller, parsed.sourcePath, 'updated', row, renumbered, warnings),
+    }
   }
 
   private result(
@@ -610,6 +765,8 @@ export class PushService {
           ambiguous: { code: 'ambiguous_ref', ref, candidates: [adrHandle(h.number), adrHandle(mapped)] },
         }
       }
+      // a file of this request that failed pass 1 is not on the server: never the stored item with its number
+      if (mapped === undefined && batch.missing.has(h.number)) return { item: null, ambiguous: null }
       if (mapped === undefined) {
         const [moved] = await this.db
           .select({ adr: items.adrNumber })
@@ -657,12 +814,16 @@ export class PushService {
       else if (!item || item.space !== parsed.space || item.id === p.row.id) {
         warnings.push({ code: 'unresolved_supersedes', ref: parsed.supersedes })
       } else {
-        if (item.status !== 'superseded') prepared.set(item.id, await this.items.prepare(item))
+        // an already superseded target is never re-embedded (a re-send of an applied supersede)
+        if (item.status !== 'superseded')
+          prepared.set(item.id, await this.items.prepare(item, { defer: batch.deferEmbedding }))
         ops.push(async (tx, self) => {
-          const settings = await this.items.projectSettings(self.projectId)
+          const settings = await this.items.projectSettings(self.projectId, tx)
+          // never a fallback prepare inside the transaction (a second connection and a model call while
+          // the transaction is held): a target whose status changed meanwhile gets pending chunks
           await this.items.applySupersede(tx, caller, self, item, {
             obsDays: settings.cleanup.observation_days,
-            prepared: prepared.get(item.id) ?? null,
+            prepared: prepared.get(item.id) ?? this.items.pendingPrepared(item),
           })
         })
       }
@@ -681,20 +842,10 @@ export class PushService {
       else ops.push(async (tx, self) => void (await addEdge(tx, self, 'drafted_from', item, actor)))
     }
     if (ops.length === 0) return
-    await withTx(this.db, async (tx) => {
+    await withTxRetry(this.db, async (tx) => {
       await lockProjectForWrite(tx, p.row.projectId)
       const self = (await loadItem(tx, p.row.id, true)) as LoadedItem
       for (const op of ops) await op(tx, self)
     })
   }
-}
-
-function toPushError(sourcePath: string, err: unknown): PushError {
-  if (err instanceof ApiError) {
-    const out: PushError = { source_path: sourcePath, error: err.code }
-    if (err.publicMessage) out.message = err.publicMessage
-    if (err.details) out.details = err.details
-    return out
-  }
-  throw err
 }

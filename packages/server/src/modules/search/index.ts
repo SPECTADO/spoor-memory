@@ -41,6 +41,7 @@ export {
   syncEmbeddingTargets,
 } from './jobs.js'
 export { LOCAL_TAG, LocalE5Provider } from './providers/local.js'
+export { OllamaProvider } from './providers/ollama.js'
 export { createEmbeddingRegistry, ProviderRegistry, providerForSettings } from './providers/registry.js'
 export { OpenAIProvider, VoyageProvider } from './providers/remote.js'
 export { buildTsQuery, RRF_K, rrfFuse } from './query.js'

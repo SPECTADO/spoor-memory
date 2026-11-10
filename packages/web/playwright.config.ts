@@ -41,6 +41,7 @@ export default defineConfig({
       SPOOR_EMBEDDING_DEFAULT: 'local',
       SPOOR_OPENAI_API_KEY: '',
       SPOOR_VOYAGE_API_KEY: '',
+      SPOOR_OLLAMA_URL: '',
       SPOOR_TRUST_PROXY: '',
     },
   },

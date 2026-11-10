@@ -1,7 +1,8 @@
 /**
  * Background work of the search module, exposed for the jobs module (scheduler, leases, job_runs) to run
  * (docs/design/search-and-digest.md section 3, cleanup-and-jobs.md section 4):
- * - `embedPending`: fill `chunks.embedding IS NULL` for tags a provider in this image serves, 64 per batch;
+ * - `embedPending`: fill `chunks.embedding IS NULL` for tags a provider in this image serves, 16 per batch
+ *   (local) or 64 (remote);
  * - `reembed`: per project with `embedding_target`: create the target's partial HNSW index, re-chunk/embed
  *   items 16 at a time, cut over under `FOR UPDATE`, delete old-model chunks, drop unused indexes. Projects
  *   whose ACTIVE tag has no provider (default-model upgrade, FTS-only per I36) go first;
@@ -36,7 +37,13 @@ import { tagLiteral, vectorLiteral, vectorType } from './sql.js'
 export type JobContext = Partial<BatchContext>
 
 const DEFAULT_DEADLINE_MS = 4 * 60_000
-const PENDING_BATCH = 64
+/**
+ * Chunks per embed-pending batch. Local (in-process ONNX, 2 threads): 16, well inside EMBED_TIMEOUT_MS
+ * (a timed-out batch is thrown away and retried a minute later) and short enough not to hold the
+ * process-wide embedding queue that query embeddings share. Remote providers batch more per call.
+ */
+const PENDING_BATCH_LOCAL = 16
+const PENDING_BATCH_REMOTE = 64
 const REEMBED_BATCH = 16
 const DELETE_BATCH = 1000
 const SWEEP_MAX = 200
@@ -78,7 +85,10 @@ function stopped<S extends JobStats>(err: unknown, ctx: JobContext, stats: S): S
 
 // ---- embed-pending ----------------------------------------------------------------------------------------
 
-/** Fill NULL embeddings, 64 per batch, until none are left, the deadline, or abort. */
+/**
+ * Fill NULL embeddings until none are left, the deadline, or abort: 16 per batch with the local model, 64
+ * with a remote provider. The main embedding path of imports (they store pending chunks).
+ */
 export async function embedPending(deps: ServerDeps, ctx: JobContext = {}): Promise<JobStats> {
   const started = Date.now()
   const stats = { embedded: 0, batches: 0, failed: 0, skipped_tags: [] as string[] }
@@ -98,7 +108,7 @@ export async function embedPending(deps: ServerDeps, ctx: JobContext = {}): Prom
         const batch = await deps.db.execute<{ id: string | number; text: string }>(sql`
           SELECT id, text FROM chunks
           WHERE embedding IS NULL AND model = ${model} AND dims = ${provider.dims} AND id > ${lastId}
-          ORDER BY id LIMIT ${PENDING_BATCH}`)
+          ORDER BY id LIMIT ${provider.name === 'local' ? PENDING_BATCH_LOCAL : PENDING_BATCH_REMOTE}`)
         if (batch.rows.length === 0) break
         lastId = Number(batch.rows[batch.rows.length - 1]?.id)
         let vectors: Float32Array[]

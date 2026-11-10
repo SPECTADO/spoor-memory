@@ -76,6 +76,7 @@ Local files the CLI creates, all in `<repo>/.spoor/` (gitignored by `spoor login
   `already_drafted` check.
 - `session/<session_id>.json` (start marker: `{started_at, head, source}`) and `session/<session_id>.nagged` (Stop marker). Files older than 14 days are deleted at SessionStart.
 - `offline-until` (circuit breaker, §3.1), `draft.lock` (one drafting run at a time, §5.2), `notice-day` (once-a-day notices).
+- `import-queue.json` (progress of `adr import` / `docs import`, §4.2) and `import.lock` (one import at a time per checkout). Written atomically like `state.json`.
 - `last-run.log`: the last 200 lines of notices from hook runs (hook stdout and stderr mostly do not reach the user).
 
 ## 3. Behaviour on failure
@@ -105,7 +106,11 @@ Exit codes of the human mode: 0 ok, 1 usage or config error, 2 conflict or parti
 `pushed_over_spoor_edit`), 3 server unreachable or token rejected.
 
 Notices (one line, no stack trace, no token):
-- `spoor: server unreachable (<code> <url>); skipped. It will retry on the next session.`
+- `spoor: server unreachable (<code> <url>); skipped. It will retry on the next session.` (hooks, `adr push`, `docs push`: the
+  failed push is queued in `state.pending`, §3.3)
+- Imports (§4.2, §4.4) queue nothing in `state.pending`; they keep their own progress in `import-queue.json`. A stopped import says
+  `spoor: server unreachable (<code> <url>); import stopped. 12 of 40 files imported, 28 remaining. Run the same command again to resume.`
+  (`server busy (…)` for a `503 busy` or `starting` that did not clear, `token rejected` for a 401, the API error for a 403 or 404)
 - `spoor: token rejected by <url> (401). Run: spoor login`
 - `spoor: not configured for this repo (missing SPOOR_PROJECT). Run: spoor login` (names only the missing values)
 
@@ -125,6 +130,16 @@ A failed push (network class only, never a 409 or a validation error) appends `{
 hook push, the CLI replays pending entries until its deadline; entries whose file no longer exists are dropped.
 A 409 `pushed_over_spoor_edit` is recorded in `state.conflicts` instead (§5.3). This is all the offline support:
 no background daemon.
+
+While an import holds `.spoor/import.lock` (§4.2) the hooks do not push: PostToolUse adds the file to `state.pending`
+and prints nothing, and SessionStart still prints the digest but skips the replay and the sweep (a replay or sweep that is
+already running stops pushing when an import takes the lock and queues the rest). PostToolUse, the replay and the sweep also
+leave the files of an unfinished import (entries in `import-queue.json` that are not `done`, sections younger than 7 days)
+to the import: PostToolUse queues such a file and the replay keeps it queued, so a half-done import is not finished by hook
+pushes of one file at a time without `reserve_above`. SessionStart status lines and `spoor status` report an unfinished
+import: `Spoor: an import of this repo is unfinished (28 of 40 files remaining). Ask the user to run spoor adr import.` A
+file refused for its content (too large, path too long, a per-file 4xx such as invalid frontmatter or `already_drafted`) is
+not counted while it is unchanged, because running the import again cannot finish it.
 
 ## 4. Commands
 
@@ -178,35 +193,86 @@ prompts; it exits 1.
 ### 4.2 `spoor adr import`
 
 ```
-spoor adr import [--dir docs/adr] [--dry-run]
+spoor adr import [--dir docs/adr] [--dry-run] [--all]
 ```
-One-time push of every existing ADR file (BRIEF: "Repo mirror").
+Pushes every existing ADR file (BRIEF: "Repo mirror"). It is resumable: progress is kept in `.spoor/import-queue.json`, and
+running the same command again continues where it stopped. Why it is built this way: ADR-0027.
 1. Files: `*.md` directly in `adr_dir`, sorted by path, skipping `README.md`, `index.md` and names starting with
    `template` (case-insensitive). Others are reported as `skipped`.
-2. Compute `reserve_above` = the highest ADR number among **all** those files, then send batches of ≤ 100 files and
-   ≤ 900 KB to `POST /p/<slug>/api/adr/import` with `{files:[{source_path, content}], reserve_above}` (content is the raw
-   file text). The server matches each file by `spoor_id`, then `source_path`, then number ([data-model.md](data-model.md)
-   §7), so a teammate who imports before pulling the first importer's write-back commit gets matches, not duplicates.
-3. Per result (the server is trusted with content, never with paths; review-log-phase5 S1-S3): a result is applied only to
+2. **Plan.** The CLI takes `.spoor/import.lock` (one import per checkout; a second one exits 1, a lock of a dead process or
+   older than 10 minutes without a heartbeat is taken over; the holder refreshes it every minute, also while a request or a
+   backoff wait runs, and checks it is still its own before it applies an answer or writes the queue). A file whose content hash equals the `sha256` of its base in
+   `state.bases` or of a `done` queue entry is skipped as already imported; `--all` sends every file. Entries the last run left
+   `pending`, `failed` or `edges` are sent again. Limits the server enforces are checked locally per file (content ≤ 400,000
+   characters, `source_path` ≤ 256, one file under the 1 MiB body cap); a file over them is reported (`error <path>: <code>`) and
+   not sent, because one such file would make the server answer 400 for its whole request.
+3. **Requests.** Compute `reserve_above` = the highest ADR number among **all** files (also the skipped ones) once, then send
+   batches of at most **10 files and 128 KiB** (bytes of content + path + 64 per file) to `POST /p/<slug>/api/adr/import` with
+   `{files:[{source_path, content}], reserve_above}`, sequentially, the same `reserve_above` in every request of both passes.
+   (CLI 0.5.1 and older sent 100 files / 900 KB, embedded inside the request.) The server matches each file by `spoor_id`, then
+   `source_path`, then number ([data-model.md](data-model.md) §7), so a teammate who imports before pulling the first
+   importer's write-back commit gets matches, not duplicates.
+   - **Pass 1** sends every file with `Spoor-Import-Edges: defer` and `Spoor-Defer-Embedding: 1`: the server stores the content
+     and writes no relations or supersede edges. References between ADRs that land in different requests can only resolve once
+     every file is on the server, hence the second pass ([data-model.md](data-model.md) §7).
+   - **Pass 2** sends once more, with `Spoor-Defer-Embedding: 1` only, the files whose result carried `edges_deferred`,
+     `edges_failed` or `unresolved_*`, the renumbered (renamed) files, and entries left `edges` by an earlier run. A file that
+     names (`ADR-0007`, `adr-7`, anywhere in the file) the number of a repo ADR file that is not on the server yet (`pending`
+     or `failed`) is **held back**: it stays `edges` and prints `note: the links of <path> wait until <file> is imported`,
+     because the server would resolve that number to whatever item holds it. If a target is still unresolved while the
+     import is incomplete (files `pending`, or `failed` for a reason a re-run can fix), the file stays `edges` for the next
+     run; otherwise it is `done`.
+   - A batch-level 400 or 413 drops the rest of the run to single-file requests.
+4. **Per result** (the server is trusted with content, never with paths; review-log-phase5 S1-S3): a result is applied only to
    a path this batch sent (each at most once; any other `source_path` is a protocol error and touches nothing), only when
    `spoor_id` is a uuid, `handle` a handle, `revision` a positive integer and `renumbered` two ADR numbers 1-99999. Every
    path the CLI reads, writes, renames or deletes must resolve inside the repo, and a rename target must stay in
    `adr_dir`; `insertSpoorId` itself refuses a non-uuid. The same checks apply to every push (`spoor adr|docs push`, the
    hooks, drafting).
    - `created` / `updated` / `unchanged`: record `bases[spoor_id] = {path, revision, sha256}`. A file matched by
-     `source_path` gets the existing item's `spoor_id` written back.
+     `source_path` gets the existing item's `spoor_id` written back. A file edited while its request ran is applied, but
+     its base keeps the hash of the content that was sent and the entry goes back to `pending` at the end of the list.
    - **Write back `spoor_id`**: if the file has no `spoor_id`, insert it as the first frontmatter key. A file with no
      frontmatter gets a new block containing only `spoor_id`. The YAML `Document` API is used so comments and key
      order survive; the body is byte-identical. Nothing else is rewritten.
    - `renumbered {from,to}`: rename the file's numeric prefix (`0007-x.md` → `0015-x.md`), set `adr:` when the file has
      that key, rewrite a body H1 that names the old number (`# 7. Title` → `# 15. Title`, `# ADR-0007: …` →
-     `# ADR-0015: …`) in the same write, and print `renumbered`.
-     Thanks to `reserve_above`, only files whose number Spoor already used move.
+     `# ADR-0015: …`) in the same write, and print `renumbered`. The renamed file goes to pass 2 under its new path (there is
+     no separate follow-up push). Thanks to `reserve_above`, only files whose number Spoor already used move. If the
+     answer of the creating request was lost, the server repeats `renumbered` when the file is sent again
+     ([api.md](api.md) §7.3).
    - `ambiguous_ref` warnings: print the file and the ref; the server did not apply it, a human fixes the file.
-   - per-file `error`: print it, continue, exit 2 at the end.
-4. Existing numbers are kept and numbering continues from the highest ([data-model.md](data-model.md) §7).
-5. Prints a summary (`12 created, 0 updated, 1 renumbered, 0 errors`). Re-running is a no-op apart from
-   `unchanged`. `--dry-run` lists files and the request count and writes nothing.
+   - `unresolved_relation` and `unresolved_drafted_from` are printed as notes; `unresolved_supersedes` as before.
+   - per-file `error`: print it, continue, exit 2 at the end. A per-file `internal` (nothing wrong with the file) is sent at
+     most 3 times in all within the run (2 re-sends); `not processed` (the server stopped after repeated errors) does not use
+     up those attempts for its first 9 answers, after which they count as usual. A file refused for its content (local
+     limits, a per-file 4xx) is reported every run while it is unchanged but does not make the import "unfinished".
+5. **Timeouts, backoff, pacing** (`backoff.ts`). The request timeout is 30 s plus 250 ms per KiB of the request, at most 120 s;
+   `SPOOR_IMPORT_TIMEOUT_MS` (integer 100..600000) replaces it. Retried: timeouts and connection resets, any 5xx, 429, and 503
+   `busy` or `starting`. Not retried (the import stops at once): refused connection, DNS and certificate errors, 401, 403, 404,
+   other 4xx. Wait before sending the same request again: exponential from 2 s (2, 4, 8, … capped at 60 s) with jitter between
+   half and full of that value; if the server sent `Retry-After` (integer seconds only), at least that, at most 60 s; after a
+   **timeout** (also a 502, 504 or 524 from a reverse proxy, whose upstream request is likely still running) at least 15 s,
+   because the server may still be working on the request (re-sending is safe: unchanged content answers
+   `unchanged`). After a timeout or 5xx the batch is halved. The import gives up at the 5th consecutive failure or after 300 s of
+   waiting in all. While the server signals pressure (a failure, 429, `busy`, a per-file `internal`) requests are paced 1, 2,
+   then 4 s apart; five clean answers in a row lower the pace one step. `503 busy` does not trip the 5-minute circuit breaker (§3.1);
+   `starting`, an HTML 503 and a 500 do.
+6. **Output.** stdout: one line per file (`created docs/adr/0007-x.md ADR-0007 r1`), `error`, `renumbered` and warning lines, and
+   the summary (`12 created, 0 updated, 1 unchanged, 1 renumbered, 0 errors`, plus how many files were skipped as already
+   imported). stderr: retry notices (`spoor: server busy (…); waiting 6 s before trying again (2 of 5)`), the lock message and
+   the stop notice. A stop says how many files are done and remaining and ends "Run the same command again to resume.". A run
+   that finished but left work prints the same tally on stdout (`2 of 3 files imported, 1 remaining. Run the same command
+   again to resume.`), and for refused files `1 file was refused; fix it, then run the command again.`. An import never says
+   it will retry on the next session. After a run that wrote `spoor_id` lines or renamed files it
+   reminds the user to commit them.
+7. **Exit codes.** 0 done; 1 usage or config, or the lock is held; 2 some files failed or their links are not applied (re-run);
+   3 the server was unreachable, busy or rejected the token (the import stopped, re-run to resume).
+8. Existing numbers are kept and numbering continues from the highest ([data-model.md](data-model.md) §7).
+9. Re-running is cheap: files already imported and unchanged are not sent. `--dry-run` lists what would be sent (and files that
+   would be refused locally), the request count, and writes nothing. If `import-queue.json` is lost, files that were not
+   imported yet are planned again from the bases; files that were waiting for pass 2 look imported, so their links are
+   not sent until `spoor adr import --all`.
 
 ### 4.3 `spoor adr push <file> [--force]`
 
@@ -227,7 +293,13 @@ Push one ADR file (used by the PostToolUse hook, also by humans). `<file>` must 
 
 Same as 4.2 and 4.3 with `space:"docs"`, for the files matched by `docs.include` minus `docs.exclude`
 (default `ARCHITECTURE.md`, `GLOSSARY.md`, `docs/*.md`, excluding `docs/adr/**`). Differences:
-- `docs import` sends one `POST /push` per file (docs need no renumbering), sequentially.
+- `docs import` sends one `POST /push` per file (docs need no renumbering), sequentially, with `Spoor-Defer-Embedding: 1` (the
+  server stores the doc at once and embeds it later; it is findable by keyword first, by meaning after the `embed-pending`
+  job). It uses the same plan, `.spoor/import.lock`, `import-queue.json`, `--all`, size-based timeout (30 s plus 250 ms per KiB, at
+  most 120 s; `SPOOR_IMPORT_TIMEOUT_MS`), retry with backoff and exit codes as §4.2. In CLI 0.5.1 and older the per-file timeout was the
+  6 s of a hook push. A 429 is back-pressure: the CLI waits (at least `Retry-After`) and sends the same file again, it is not counted as
+  a file error. 403 and 404 stop the import; a conflict or another per-file error fails only that file (exit 2). Error lines keep
+  the form `error <path>: <code>: <message>`.
 - Identity is `source_path`. By default **no `spoor_id` is written into the file** (`docs.write_back:false`, I27): adding YAML to
   `ARCHITECTURE.md` shows up as a table on GitHub, and the server matches by `(project, source_path)`. `state.json` keeps
   the `spoor_id` per path.
@@ -338,7 +410,8 @@ stdin:
    project default applies (1500 unless an admin changed it); the stdout cut in step 7 is the safety net.
 6. In the time left before the deadline (and only if the server answered): replay `state.pending` (§3.3), then the
    **local mirror sweep**: hash every file under `adr_dir` and in the docs list, compare with `state.bases[*].sha256`, and
-   push only changed or new files (no network when nothing changed). This catches edits made through Bash (`sed`,
+   push only changed or new files (no network when nothing changed; skipped, together with the replay, while an import
+   runs in this checkout, §3.3). This catches edits made through Bash (`sed`,
    heredocs, `mv`), an IDE, or git operations, which the PostToolUse hook never sees. Rename detection and orphans as in
    §4.4. Whatever does not fit in the deadline is queued in `pending`.
 7. stdout, **plain text**, which the harness adds to Claude's context (tested), cut at a line boundary to 9,500 characters
@@ -428,7 +501,8 @@ SessionStart mirror sweep (§5.1 step 6) and by `spoor adr push` / `spoor docs p
    - inside `adr_dir`, `*.md`, not README/index/template → `adr push` logic;
    - matches `docs.include` and not `docs.exclude` → `docs push` logic;
    - otherwise exit 0 immediately (nearly every Write/Edit ends here, in milliseconds).
-3. Push (agent-facing mode, 6 s timeout, never `--force`). Circuit breaker open → queue in `pending`, exit 0.
+3. Push (agent-facing mode, 6 s timeout, never `--force`). Circuit breaker open → queue in `pending`, exit 0. While an
+   import holds `.spoor/import.lock` (§4.2) the path is queued in `pending` and nothing is pushed or printed (§3.3).
 4. stdout stays **empty** on success and on offline (offline queues the path, §3.3). Only these cases print, as
    `additionalContext`, so the agent can react:
    - `pushed_over_spoor_edit` (also recorded in `state.conflicts`, repeated at every SessionStart and shown in the web
@@ -767,6 +841,12 @@ The template contains the server URL, slug, CLI version, default budget and memo
   sweep, offline (server stopped) → SessionStart prints the notice in under 8 s and later hooks skip the network, drafting with a
   stub command from two checkouts (one ADR, one `already_drafted`), a kill during drafting (no second ADR).
 - ADR-0015: `init` AGENTS.md block (create, replace in place, append, idempotent, either mode), CLAUDE.md import (existing, symlink to AGENTS.md, link outside the repo refused), `autoMemoryEnabled` (set when exclusive, tracked or missing file untouched, note when shared); SessionStart AGENTS.md lines (missing block, missing import, both, shared mode, header missing = exclusive, silent when the digest did not load).
+- Imports (`import.test.ts`, `backoff.test.ts`, against a fake server): plan and skip by base hash, `--all`, local limits,
+  batches of 10 files / 128 KiB, `reserve_above` in every request, both passes and their headers, `edges_deferred` /
+  `edges_failed` / `unresolved_*` second pass, renamed files, per-file `internal` retry and `not processed`, retry classes,
+  backoff with jitter and `Retry-After`, 15 s cool-down after a timeout, batch halving, pacing, 5-failure and 300 s limits, 429 in
+  `docs import`, resume from the queue (also after a lost queue), lock and stale lock, hooks queue instead of pushing during an
+  import, file edited during a request, stdout / stderr split, exit codes, `SPOOR_IMPORT_TIMEOUT_MS`.
 - Hook contract tests feed the JSON of §5 to `spoor hook …` and assert stdout and exit code exactly as written here.
 
 ## 11. Implementation notes (phase 3, 2026-10-19)

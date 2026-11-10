@@ -16,7 +16,7 @@ export type Space = (typeof SPACES)[number]
 // ---- embeddings (search-and-digest.md section 2) ------------------------------------------------------
 
 export interface EmbeddingProvider {
-  readonly name: 'local' | 'openai' | 'voyage'
+  readonly name: 'local' | 'openai' | 'voyage' | 'ollama'
   /** e.g. 'Xenova/multilingual-e5-small' */
   readonly model: string
   /** dtype for local ('q8'), '' for remote */

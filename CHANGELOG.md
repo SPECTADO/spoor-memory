@@ -4,13 +4,52 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+### Added
+
+- `SPOOR_PUSH_CONCURRENCY` (server, default 3, 1 to 64): pushes and imports in flight per project. `--all` for `spoor adr import`
+  and `spoor docs import`. `SPOOR_IMPORT_TIMEOUT_MS` (CLI): a fixed per-request timeout for imports.
+- **Optional Ollama embeddings** (ADR-0026). Setting `SPOOR_OLLAMA_URL` enables an `ollama` provider that embeds with a
+  model on your own Ollama server, `embeddinggemma` (768 dims) by default; `SPOOR_OLLAMA_EMBED_MODEL` and
+  `SPOOR_OLLAMA_EMBED_DIMS` change it. On our benchmark it finds reworded and Czech questions clearly better than the
+  built-in model (paraphrase MRR 0.78 against 0.48). The built-in model stays the default; a project switches under
+  Settings, Embedding and should then lower `dedupe.related_min_cos`, because the cosine scale differs
+  (docs/operations.md section 7).
+
 ### Changed
 
+- **Imports are resumable and gentle on the server** (ADR-0027). `spoor adr import` sends 10 files / 128 KiB per request in two
+  passes (content, then the links between ADRs); `spoor docs import` sends one file per request. Progress is kept in
+  `.spoor/import-queue.json` under `.spoor/import.lock`, so running the command again resumes, skips files already imported
+  and unchanged, and says how many files remain (`--all` sends everything). Timeouts, 5xx, 429 and `503 busy` are retried with
+  backoff and jitter, honouring `Retry-After`, and requests are paced while the server is under pressure. While an import
+  runs, the hooks queue their files instead of pushing.
+- **Imported items are embedded later.** Imports send `Spoor-Defer-Embedding: 1` (so does any `adr/import` of more than 10
+  files, from an older CLI): items are stored and findable by keyword at once, and the `embed-pending` job adds the embeddings.
+  That job now takes 16 chunks per batch with the local model (64 with remote providers).
+- Repo pushes and imports are limited per project (`SPOOR_PUSH_CONCURRENCY`); a request over the limit gets `503 busy` with
+  `Retry-After: 5`. 503 and not 429, because CLI 0.5.1 and older stop on 5xx.
 - The sidebar's version line turns into a warning with a "Reload to update" button when the web and server versions differ.
   The server's version is checked again every 5 minutes, so a tab left open through an upgrade notices it.
 
 ### Fixed
 
+- **`spoor adr import` / `spoor docs import` no longer overload the server into a 500.** Embedding up to 100 files inside one
+  request, requests that kept running after the CLI had timed out, deadlocks and pool waits between overlapping pushes, and a
+  batch that failed as a whole are fixed on the server side; the CLI side is in the Changed entries.
+- One bad file no longer fails an `adr/import` batch: an unexpected error is that file's `internal` result (or an `edges_failed`
+  warning), and deadlocks (`40P01`, `40001`) in push transactions are retried. A push no longer takes a second database
+  connection while it holds a transaction.
+- `docs import` used the 6 s timeout of a hook push per file; it now scales with the file size. A 429 there waits and retries
+  instead of counting as a file error.
+- The "It will retry on the next session" message is no longer printed for an import; it says how many files remain and to run
+  the command again.
+- A reference to the number of an ADR that did not reach the server (its file failed) no longer links whatever other ADR holds
+  that number: the server answers `unresolved_*` inside one request, and the CLI holds back the links of such a file until
+  the missing ADR is imported. A file refused for its content no longer keeps an import "unfinished" forever.
+- A proxy's 502, 504 or 524 waits like a timeout before a batch is sent again, and the import lock is refreshed every minute,
+  so a slow request no longer lets a hook or a second import take over.
+- A renumber answer lost to a timeout is repaired: sending the file again answers `renumbered` instead of `number_mismatch`, and
+  the CLI renames the file.
 - A server that cannot read its own version (`0.0.0`) is no longer shown in the sidebar as a real version.
 - The web UI no longer fails to load when it is built without the version constant; it shows `Web` without a number.
 

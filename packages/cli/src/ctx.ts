@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ConfigError, isLoopback, resolveConfig, type SpoorConfig } from './config.js'
 import { logRun, oncePerDay, readJsonObject } from './fsutil.js'
-import { type Client, createClient, NetworkError, OfflineError } from './http.js'
+import { type Client, createClient, NetworkError, OfflineError, parseRetryAfter } from './http.js'
 import { loadRepoConfig, type RepoConfig } from './repo-config.js'
 import type { Rt } from './runtime.js'
 
@@ -142,23 +142,38 @@ function warnPlainHttp(ctx: Ctx, server: string): void {
 
 export type ApiResult<T> =
   | { kind: 'ok'; status: number; body: T; headers?: Headers }
-  | { kind: 'error'; status: number; code: string; message: string; body: Record<string, unknown> }
+  | {
+      kind: 'error'
+      status: number
+      code: string
+      message: string
+      body: Record<string, unknown>
+      /** `Retry-After` of the answer (429), in ms. */
+      retryAfterMs?: number
+    }
   | { kind: 'unauthorized'; status: 401 }
-  | { kind: 'network'; code: string }
+  | {
+      kind: 'network'
+      code: string
+      /** For a 5xx answer: its status, `Retry-After` (ms) and the body's `error` code. */
+      status?: number
+      retryAfterMs?: number
+      apiCode?: string
+    }
   | { kind: 'offline'; until: number }
 
 export async function api<T>(
   client: Client,
   method: string,
   path: string,
-  opts: { body?: unknown; timeoutMs?: number } = {},
+  opts: { body?: unknown; timeoutMs?: number; headers?: Record<string, string> } = {},
 ): Promise<ApiResult<T>> {
   try {
     const r = await client.request<T>(method, path, opts)
     if (r.ok) return { kind: 'ok', status: r.status, body: r.body, headers: r.headers }
     if (r.status === 401) return { kind: 'unauthorized', status: 401 }
     const b = (r.body && typeof r.body === 'object' ? r.body : {}) as Record<string, unknown>
-    return {
+    const out: ApiResult<T> = {
       kind: 'error',
       status: r.status,
       code: typeof b.error === 'string' ? b.error : `http_${r.status}`,
@@ -166,9 +181,18 @@ export async function api<T>(
         typeof b.message === 'string' ? b.message : typeof r.body === 'string' ? r.body.slice(0, 200) : '',
       body: b,
     }
+    const retryAfterMs = parseRetryAfter(r.headers?.get('retry-after'))
+    if (retryAfterMs !== undefined) out.retryAfterMs = retryAfterMs
+    return out
   } catch (e) {
     if (e instanceof OfflineError) return { kind: 'offline', until: e.until }
-    if (e instanceof NetworkError) return { kind: 'network', code: e.code }
+    if (e instanceof NetworkError) {
+      const out: ApiResult<T> = { kind: 'network', code: e.code }
+      if (e.status !== undefined) out.status = e.status
+      if (e.retryAfterMs !== undefined) out.retryAfterMs = e.retryAfterMs
+      if (e.apiCode !== undefined) out.apiCode = e.apiCode
+      return out
+    }
     return { kind: 'network', code: e instanceof Error ? e.name : 'error' }
   }
 }

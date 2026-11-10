@@ -9,14 +9,39 @@ export class OfflineError extends Error {
   }
 }
 
+export interface NetworkErrorExtra {
+  /** HTTP status of a 5xx answer (absent for a transport failure). */
+  status?: number
+  /** `Retry-After` of a 5xx answer, in ms. */
+  retryAfterMs?: number
+  /** `error` of a 5xx answer's JSON body (`busy`, `starting`, ...). */
+  apiCode?: string
+}
+
 export class NetworkError extends Error {
+  status?: number
+  retryAfterMs?: number
+  apiCode?: string
   constructor(
     message: string,
     public code: string,
+    extra: NetworkErrorExtra = {},
   ) {
     super(message)
+    if (extra.status !== undefined) this.status = extra.status
+    if (extra.retryAfterMs !== undefined) this.retryAfterMs = extra.retryAfterMs
+    if (extra.apiCode !== undefined) this.apiCode = extra.apiCode
   }
 }
+
+/** `Retry-After` as integer seconds (`^\d{1,4}$`) in ms; an HTTP date or anything else counts as absent. */
+export function parseRetryAfter(v: string | null | undefined): number | undefined {
+  if (typeof v !== 'string' || !/^\d{1,4}$/.test(v)) return undefined
+  return Number(v) * 1000
+}
+
+/** Headers a caller's extra `headers` never replace. */
+const RESERVED_HEADERS = new Set(['accept', 'authorization', 'content-type', 'user-agent'])
 
 /** `ECONNREFUSED`, `ENOTFOUND`, `timeout`, ... from a fetch rejection. */
 export function errorCode(e: unknown): string {
@@ -83,18 +108,21 @@ export interface Response<T = unknown> {
   headers?: Headers
 }
 
+export interface RequestOpts {
+  body?: unknown
+  timeoutMs?: number
+  /** Extra request headers; they never override accept, authorization, content-type or user-agent. */
+  headers?: Record<string, string>
+}
+
 export interface Client {
-  request<T = unknown>(
-    method: string,
-    path: string,
-    opts?: { body?: unknown; timeoutMs?: number },
-  ): Promise<Response<T>>
+  request<T = unknown>(method: string, path: string, opts?: RequestOpts): Promise<Response<T>>
 }
 
 export function createClient(o: ClientOptions): Client {
   const doFetch = o.fetch ?? fetch
   return {
-    async request<T>(method: string, path: string, opts: { body?: unknown; timeoutMs?: number } = {}) {
+    async request<T>(method: string, path: string, opts: RequestOpts = {}) {
       const mode = o.breaker ?? 'check'
       if (mode === 'check') {
         const until = offlineUntil(o)
@@ -103,7 +131,12 @@ export function createClient(o: ClientOptions): Client {
       const trip = () => {
         if (mode !== 'off') tripBreaker(o)
       }
-      const headers: Record<string, string> = { accept: 'application/json' }
+      const headers: Record<string, string> = {}
+      for (const [k, v] of Object.entries(opts.headers ?? {})) {
+        const name = k.toLowerCase()
+        if (!RESERVED_HEADERS.has(name)) headers[name] = v
+      }
+      headers.accept = 'application/json'
       if (o.token) headers.authorization = `Bearer ${o.token}`
       if (o.userAgent) headers['user-agent'] = o.userAgent
       const init: RequestInit = {
@@ -124,8 +157,19 @@ export function createClient(o: ClientOptions): Client {
         throw new NetworkError(`network failure (${code}) for ${o.server}`, code)
       }
       if (res.status >= 500) {
-        trip()
-        throw new NetworkError(`server error ${res.status} from ${o.server}`, String(res.status))
+        const extra: NetworkErrorExtra = { status: res.status }
+        try {
+          const b = JSON.parse(await res.text()) as unknown
+          const code = b && typeof b === 'object' ? (b as { error?: unknown }).error : undefined
+          if (typeof code === 'string') extra.apiCode = code
+        } catch {
+          // no JSON body: no apiCode
+        }
+        const retryAfterMs = parseRetryAfter(res.headers.get('retry-after'))
+        if (retryAfterMs !== undefined) extra.retryAfterMs = retryAfterMs
+        // back-pressure is not an outage: a busy answer must not silence the hooks for 5 minutes
+        if (!(res.status === 503 && extra.apiCode === 'busy')) trip()
+        throw new NetworkError(`server error ${res.status} from ${o.server}`, String(res.status), extra)
       }
       let text: string
       try {

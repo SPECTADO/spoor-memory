@@ -953,6 +953,33 @@ describe('REST', () => {
 // ---- jobs -----------------------------------------------------------------------------------------------
 
 describe('jobs', () => {
+  it('embed-pending batches 16 chunks at a time with the local provider', async () => {
+    const fake = new FakeEmbeddingProvider() // name 'local'
+    const { mod } = setup([fake])
+    const p = await createProject(db(), { embeddingModel: fake.tag })
+    for (let i = 0; i < 40; i++) {
+      const item = await createItem(db(), { projectId: p.id, title: `Pending fact ${i}`, body: 'short' })
+      const source = {
+        projectId: p.id,
+        space: item.space,
+        title: item.title,
+        tags: item.tags,
+        body: item.body,
+      }
+      // nothing prepared: one NULL-embedding chunk per item
+      await withTx(db(), (tx) =>
+        mod.search.indexItemChunks(
+          tx,
+          { id: item.id, projectId: p.id, space: item.space, revision: item.revision },
+          { source, models: [], chunks: [], pending: true },
+        ),
+      )
+    }
+    expect(fake.calls).toEqual([])
+    expect((await mod.jobs.embedPending()).embedded).toBe(40)
+    expect(fake.calls.filter((c) => c.kind === 'passages').map((c) => c.count)).toEqual([16, 16, 8])
+  })
+
   // test/setup.ts resets the HNSW indexes before each test (the re-embed tests create one per target tag)
   it('reembed: index for the target, chunks, cut-over, old chunks removed', async () => {
     const { mod } = setup()

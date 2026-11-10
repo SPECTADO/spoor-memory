@@ -1,6 +1,7 @@
 /**
  * The provider registry, built once from env (docs/design/search-and-digest.md section 2): `local` always,
- * `openai` when SPOOR_OPENAI_API_KEY is set, `voyage` when SPOOR_VOYAGE_API_KEY (+ model and dims) is set.
+ * `openai` when SPOOR_OPENAI_API_KEY is set, `voyage` when SPOOR_VOYAGE_API_KEY (+ model and dims) is set,
+ * `ollama` when SPOOR_OLLAMA_URL is set.
  * SPOOR_EMBEDDING_DEFAULT names the provider new projects get. A project's `settings.embedding.provider`
  * names the provider it uses; search and dedupe read only chunks of `projects.embedding_model`.
  */
@@ -8,6 +9,7 @@ import type { Config } from '../../../config.js'
 import type { EmbeddingProvider, EmbeddingRegistry } from '../../../ports.js'
 import { resolveSettings } from '../../projects/index.js'
 import { LocalE5Provider } from './local.js'
+import { OllamaProvider } from './ollama.js'
 import { type FetchFn, OpenAIProvider, VoyageProvider } from './remote.js'
 
 export class ProviderRegistry implements EmbeddingRegistry {
@@ -46,6 +48,9 @@ export function createEmbeddingRegistry(
     | 'SPOOR_VOYAGE_API_KEY'
     | 'SPOOR_VOYAGE_EMBED_MODEL'
     | 'SPOOR_VOYAGE_EMBED_DIMS'
+    | 'SPOOR_OLLAMA_URL'
+    | 'SPOOR_OLLAMA_EMBED_MODEL'
+    | 'SPOOR_OLLAMA_EMBED_DIMS'
   >,
   opts: { fetch?: FetchFn } = {},
 ): ProviderRegistry {
@@ -68,6 +73,16 @@ export function createEmbeddingRegistry(
         apiKey: config.SPOOR_VOYAGE_API_KEY,
         model: config.SPOOR_VOYAGE_EMBED_MODEL,
         dims: config.SPOOR_VOYAGE_EMBED_DIMS,
+        fetch: opts.fetch,
+      }),
+    )
+  }
+  if (config.SPOOR_OLLAMA_URL) {
+    providers.push(
+      new OllamaProvider({
+        baseUrl: config.SPOOR_OLLAMA_URL,
+        model: config.SPOOR_OLLAMA_EMBED_MODEL,
+        dims: config.SPOOR_OLLAMA_EMBED_DIMS,
         fetch: opts.fetch,
       }),
     )

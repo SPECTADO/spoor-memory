@@ -72,6 +72,43 @@ export function isUniqueViolation(err: unknown, constraint?: string): boolean {
   return pg?.code === '23505' && (constraint === undefined || pg.constraint === constraint)
 }
 
+/** 40P01 deadlock_detected or 40001 serialization_failure: the transaction can simply run again. */
+export const isTransientPgError = (err: unknown): boolean =>
+  ['40P01', '40001'].includes(pgError(err)?.code ?? '')
+
+export interface RetryOptions {
+  /** Retries after the first attempt (default 3, so 4 attempts). */
+  retries?: number
+  /** Delay before retry n is `baseMs * 2^(n-1) * (1 + random)` (default 25: 25-50, 50-100, 100-200 ms). */
+  baseMs?: number
+  sleep?: (ms: number) => Promise<void>
+}
+
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/**
+ * Run `fn` again after a transient Postgres error (deadlock, serialization failure) with a short jittered
+ * exponential delay. Any other error, and the last transient one, is rethrown unchanged. `fn` must be safe
+ * to re-run from scratch (a whole transaction, not a part of one).
+ */
+export async function retryTransient<T>(fn: () => Promise<T>, opts: RetryOptions = {}): Promise<T> {
+  const retries = opts.retries ?? 3
+  const baseMs = opts.baseMs ?? 25
+  const sleep = opts.sleep ?? defaultSleep
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (attempt >= retries || !isTransientPgError(err)) throw err
+      await sleep(baseMs * 2 ** attempt * (1 + Math.random()))
+    }
+  }
+}
+
+/** `withTx` retried on a transient error (deadlock, serialization failure); `fn` re-runs from scratch. */
+export const withTxRetry = <T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> =>
+  retryTransient(() => withTx(db, fn))
+
 /** Escape `%`, `_` and `\` for a LIKE pattern (auth-and-security.md section 10). */
 export function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, (m) => `\\${m}`)

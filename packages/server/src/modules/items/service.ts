@@ -214,22 +214,51 @@ export class ItemService {
     return itemJson(db, row, viewOf(caller.project))
   }
 
-  async projectSettings(projectId: string) {
-    const [p] = await this.db
+  /** Inside a transaction pass its `tx`: a second pooled connection while one is held can starve the pool. */
+  async projectSettings(projectId: string, db: DbOrTx = this.db) {
+    const [p] = await db
       .select({ settings: projects.settings })
       .from(projects)
       .where(eq(projects.id, projectId))
     return resolveSettings(p?.settings)
   }
 
-  /** Chunk + embed before any transaction; a failing provider gives a pending (NULL-embedding) set. */
-  async prepare(src: {
+  /**
+   * A pending set without any I/O: `indexItemChunks` chunks the source inside the write transaction and
+   * stores NULL embeddings for every model of the locked set; the embed-pending job fills them later.
+   */
+  pendingPrepared(src: {
     projectId: string
     space: Space
     title: string
     tags: string[]
     body: string
-  }): Promise<PreparedChunks> {
+  }): PreparedChunks {
+    const source = {
+      projectId: src.projectId,
+      space: src.space,
+      title: src.title,
+      tags: src.tags,
+      body: src.body,
+    }
+    return { source, models: [], chunks: [], pending: true }
+  }
+
+  /**
+   * Chunk + embed before any transaction; a failing provider gives a pending (NULL-embedding) set.
+   * `defer` (imports with `Spoor-Defer-Embedding`) skips the model: a pending set at once.
+   */
+  async prepare(
+    src: {
+      projectId: string
+      space: Space
+      title: string
+      tags: string[]
+      body: string
+    },
+    opts: { defer?: boolean } = {},
+  ): Promise<PreparedChunks> {
+    if (opts.defer) return this.pendingPrepared(src)
     const source = {
       projectId: src.projectId,
       space: src.space,

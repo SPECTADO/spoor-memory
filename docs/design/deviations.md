@@ -273,3 +273,16 @@ the implementation contract. Status "open" means the owner has not confirmed it 
 | M6 | contract §1.3: a regular project sees the edges whose source is one of its items | a regular project also sees the edges stored in `_shared` (between two shared items). The whole-project map is unchanged (edges between two ghosts are dropped); with a shared focus item (`focus=S:m12`, and `spoor_get` `depth` on an `S:` handle) its shared neighbours appear at hop 1 | otherwise a shared item's neighbourhood on a project map, and `spoor_get` `depth` on it, missed its edges to other shared items, which its `links:` line and item page list | open |
 | M7 | contract §6: handles in `links:`, `see also:`, `related:`, `graph:` printed bare | an agent-written item (`provenance='agent'`) shows `~` after its handle in those lines, as in the digest and `spoor_search` | one untrusted-data marking everywhere an agent reads another item's title. A copied handle may carry the `~`, which refs do not accept (`spoor_relate to=m30~` is `not_found`); tolerating it in ref resolution is a separate change | open |
 | M8 | contract: tools/list budget 3,500 "may grow modestly" | the ceiling is 4,000 estimated tokens; the writer list measures 3,932 (ADR-0024) | `relations` on three tools with a shared describe text and `spoor_get` `depth` do not fit 3,500 | decided 2026-10-21 (owner, Spoor m37); ADR-0024 |
+
+## N. Import overload fix (ADR-0027, 2026-11-10)
+
+Where the shipped code differs from, or reads into, the plan written for the fix of the 500 on `spoor adr import` /
+`spoor docs import`. Status "open" means the owner has not confirmed it yet.
+
+| # | plan says | shipped | why | status |
+|---|---|---|---|---|
+| N1 | a request flag such as `defer_embedding: true` on `/api/push` and `/api/adr/import` | two request **headers**, `Spoor-Defer-Embedding: 1` and `Spoor-Import-Edges: defer`; no body field | the request schemas are `z.strictObject`, so every server version answers an unknown body field with 400; an old server ignores a header, so no negotiation or fallback request is needed | open |
+| N2 | busy requests answered with a 429 or a 503 | 503 `busy` with `Retry-After: 5` | CLI 0.5.1 and older stop on 5xx but carry on at once after a 4xx, which would hammer a loaded server | open |
+| N3 | deferred embedding when the client asks | also automatic for an `adr/import` of more than 10 files, without the header | the new CLI never sends more than 10 files, so a larger request is an old CLI's 100-file batch with inline embedding, which was the overload | open |
+| N4 | the follow-up `/api/push` after a renumber | gone: a renumbered file is sent again in pass 2, and a renumber answer lost to a timeout is repeated by the server as `renumbered` (instead of `number_mismatch`) for a file without `spoor_id` that matches by `source_path` an item whose `renumbered_from` equals the file's number | with 10-file requests the file that renumbers and the files that refer to it usually sit in different requests, so edges are written in a second pass; the repair makes a lost answer recoverable | open |
+| N5 | S6: stop the abandoned embed loop after its timeout | not done | it needs a change of the `EmbeddingProvider` port in files that carry other uncommitted work, and cannot be tested without the model; deferral removes most of the inline embedding | open |

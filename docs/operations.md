@@ -32,7 +32,7 @@ docker compose ps        # app should become "healthy" (start period up to 2 min
 - The bootstrap admin (`SPOOR_ADMIN_EMAIL`, `SPOOR_ADMIN_PASSWORD`) is created only while there are no users. Changing these
   variables afterwards does nothing; change the password in the web UI (Account).
 - Multiple app containers against one database are safe: migrations and jobs use database locks. There is no rate limiting in the
-  app; put it in your proxy (section 5).
+  app except the push limit (`SPOOR_PUSH_CONCURRENCY`); put the rest in your proxy (section 5).
 
 ## 3. Environment variables
 
@@ -62,12 +62,14 @@ secret value) and exits 1.
 | `SPOOR_ADMIN_EMAIL`, `SPOOR_ADMIN_PASSWORD`, `SPOOR_ADMIN_NAME` | required on an empty database; name `Admin` | bootstrap instance admin; password 12 to 256 characters |
 | `LOG_LEVEL` | `info` | `trace` `debug` `info` `warn` `error` `fatal`; JSON lines on stdout, secrets redacted, no request bodies |
 | `SPOOR_DB_POOL_MAX` | `10` | maximum Postgres connections (1 to 500) |
+| `SPOOR_PUSH_CONCURRENCY` | `3` | repo pushes and ADR/doc imports in flight per project (1 to 64); the next one gets `503 busy` and `Retry-After: 5`. All projects together are capped at the larger of this and `SPOOR_DB_POOL_MAX` minus 2. Counted per app process |
 | `SPOOR_JOBS` | `on` | `off` disables the in-process scheduler (cleanup, embeddings, re-embed stop) |
-| `SPOOR_EMBEDDING_DEFAULT` | `local` | provider new projects start with: `local`, `openai`, `voyage` (the latter two need their key) |
+| `SPOOR_EMBEDDING_DEFAULT` | `local` | provider new projects start with: `local`, `openai`, `voyage`, `ollama` (`openai` and `voyage` need their key, `ollama` its URL) |
 | `SPOOR_EMBED_THREADS` | `2` | ONNX threads of the local model; at most the CPUs given to the container |
 | `SPOOR_MODEL_DIR` | `/opt/spoor/models` | where the baked model lives; loaded offline |
 | `SPOOR_OPENAI_API_KEY`, `SPOOR_OPENAI_EMBED_MODEL`, `SPOOR_OPENAI_EMBED_DIMS` | unset, `text-embedding-3-small`, `1536` | enables the `openai` provider. Item text then leaves your instance |
 | `SPOOR_VOYAGE_API_KEY`, `SPOOR_VOYAGE_EMBED_MODEL`, `SPOOR_VOYAGE_EMBED_DIMS` | unset | enables `voyage`; model and dimensions are required with the key. The request shape is tested only against a fake; try it on a scratch project before relying on it (deviations.md G15) |
+| `SPOOR_OLLAMA_URL`, `SPOOR_OLLAMA_EMBED_MODEL`, `SPOOR_OLLAMA_EMBED_DIMS` | unset, `embeddinggemma`, `768` | the URL enables the `ollama` provider (ADR-0026): embeddings from your own [Ollama](https://ollama.com) server. See "Ollama embeddings" in section 7 |
 | `SPOOR_TRUST_PROXY` | unset | see section 5 |
 | `SPOOR_WEB_DIR`, `SPOOR_MIGRATIONS_DIR` | set by the image | only for runs outside the image |
 | `NODE_ENV` | `production` in the image | do not change |
@@ -179,6 +181,28 @@ Search only reads vectors of the project's active model, so a model change never
   thousand items take minutes. Do such upgrades in a quiet hour.
 - Switching to OpenAI or Voyage sends every item's text to that vendor.
 
+**Ollama embeddings (optional, ADR-0026).** `embeddinggemma` served by Ollama finds reworded and non-English questions clearly
+better than the built-in model (benchmark, vectors only, 256 items: paraphrase MRR 0.78 against 0.48, Czech questions 0.70
+against 0.36). It needs a second service, so it is opt-in:
+
+1. On the Ollama host: `ollama pull embeddinggemma` (about 620 MB). Ollama 0.11.10 or newer.
+2. Set `SPOOR_OLLAMA_URL` (from the compose stack, the host's Ollama is `http://host.docker.internal:11434`; on Linux add
+   `extra_hosts: ["host.docker.internal:host-gateway"]` to the app service or run Ollama as a compose service) and restart.
+   Ollama has no authentication: keep its port off the public network.
+3. A project admin picks `ollama` under Settings, Embedding; the re-embed job does the rest. `SPOOR_EMBEDDING_DEFAULT=ollama`
+   makes it the provider new projects start with.
+4. In each project that switched, lower the project setting `dedupe.related_min_cos` to about 0.55. The cosine scale differs:
+   embeddinggemma scores reworded duplicates 0.57 to 0.83 where the built-in model scores them 0.88 to 0.96, so at the default
+   `dedupe.threshold` (0.87, minimum 0.80) the "similar to" note on writes rarely appears. Identical text is still refused.
+
+Item text is sent to the Ollama host and nowhere else. Ollama unloads an idle model after 5 minutes, so the first search after
+a pause waits for the model to load; set `OLLAMA_KEEP_ALIVE=-1` on the Ollama server to keep it
+loaded. While Ollama is down, writes succeed with embeddings pending (retried every minute) and search is full-text only.
+Other models work by name (`SPOOR_OLLAMA_EMBED_MODEL`, `SPOOR_OLLAMA_EMBED_DIMS`); the prompts of `embeddinggemma` and
+`nomic-embed-text` are built in, any other model is sent plain text. `nomic-embed-text` v1.5 is English only. Changing the
+model or dimensions later is a model change like any other (re-embed). Speed on CPU-only hosts has not been measured; Docker
+on macOS gives containers no GPU, so run Ollama natively there.
+
 ## 8. Troubleshooting
 
 **Health.** `GET /healthz` returns `{"status":"ok","version":"…","checks":{"db","migrations","embedding"}}`. 503 `starting` means a
@@ -207,6 +231,8 @@ responses (`request_id`) and in the UI's error panels, so a user report maps to 
 | `pushed_over_spoor_edit` | a mirrored ADR or doc was edited in the web UI; align the file or push with `--force` (needs a terminal) |
 | search says `vector search unavailable (re-embedding)` | expected during a model change (section 7); it ends at cut-over |
 | memories stopped going stale, embeddings never fill in | scheduler off (`SPOOR_JOBS=off`) or a stuck lease; Admin, Jobs shows `locked_by` and the last runs; Run now starts one |
+| `spoor adr import` or `spoor docs import` says `server busy` or the server answers `503 busy` | more repo pushes or imports ran at once than `SPOOR_PUSH_CONCURRENCY` allows (default 3 per project, `max(it, SPOOR_DB_POOL_MAX - 2)` in all). The CLI waits `Retry-After` and tries again up to 5 times in a row (300 s of waiting at most), then stops with the number of files remaining; run the same command again to resume. Two people importing the same project, or an import plus a busy hook sweep, is the usual cause; raise the variable only with a larger `SPOOR_DB_POOL_MAX` and enough CPU for the embedding model. An import from a checkout that is still running keeps `.spoor/import.lock`: one import per checkout |
+| imported ADRs or docs are found by words but not by meaning yet | imports store items at once and embed later (`Spoor-Defer-Embedding`, also any `adr/import` of more than 10 files); the `embed-pending` job fills them, 16 chunks per batch with the local model, every minute. A few hundred files take several minutes. Check Admin, Jobs: it needs `SPOOR_JOBS=on` in at least one container; Run now starts it. Until then the results show `embedding_pending` |
 | import is rejected `payload_too_large` or `zip_limits` | upload over 50 MB or archive over its caps; export with `history=0` |
 | lost admin password | another instance admin creates a reset invite for you (Admin, Users). If none exists: stop the app and set `users.is_admin` on a user with `psql`, or restore a backup |
 

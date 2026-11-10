@@ -15,7 +15,7 @@ Postgres with pgvector) serves many isolated projects and one org-wide shared sp
 - **A shared space** every project token can read, written only by humans in the web UI.
 - **Cheap for agents**: a budgeted digest (about 1,500 tokens by default) at session start, hybrid search (full text plus
   vectors, reciprocal rank fusion), handles instead of ids, one short text block per tool result. Nine MCP tools.
-- **Local embeddings**: multilingual-e5-small runs inside the app container, no API key. OpenAI or Voyage are optional.
+- **Local embeddings**: multilingual-e5-small runs inside the app container, no API key. OpenAI, Voyage or your own Ollama server (embeddinggemma) are optional.
 - **Claude Code integration**: `spoor login` (device approval in the browser), a committed `.mcp.json`, three hooks (session
   start digest, push of edited ADR and doc files, one gentle "record your decisions" nudge), ADR drafting on your own machine.
 - **Self-cleaning**: unverified memories become stale, then archived; observations expire; humans review and hard-delete.
@@ -80,6 +80,65 @@ Quick checks: `spoor status --remote` (project, role, token expiry) and `spoor c
 
 The global CLI does not update itself: after a server upgrade, each session's digest says when the installed CLI differs
 and names the commands (`npm i -g spoor-memory@<server version>`, then `spoor init`).
+
+## Optional: better search with Ollama
+
+The built-in model needs nothing. For better recall on reworded and non-English questions, Spoor can embed with
+`embeddinggemma` on an [Ollama](https://ollama.com) server instead (paraphrase MRR 0.78 against 0.48 on our benchmark,
+[ADR-0026](docs/adr/README.md)). Item text is then sent to that Ollama server and nowhere else.
+
+1. **Add an Ollama service.** Create `docker-compose.override.yml` next to `docker-compose.yml` (compose merges it
+   automatically):
+
+   ```yaml
+   services:
+     ollama:
+       image: ollama/ollama:0.40.15
+       restart: unless-stopped
+       environment:
+         OLLAMA_KEEP_ALIVE: "-1" # keep the model loaded, so no search waits for a reload
+       volumes:
+         - ollama-models:/root/.ollama
+       # no ports: only the app reaches it, on the compose network (Ollama has no authentication)
+
+   volumes:
+     ollama-models:
+   ```
+
+2. **Point Spoor at it.** In `.env`:
+
+   ```sh
+   SPOOR_OLLAMA_URL=http://ollama:11434
+   ```
+
+   `SPOOR_OLLAMA_EMBED_MODEL` (`embeddinggemma`) and `SPOOR_OLLAMA_EMBED_DIMS` (`768`) already have the right defaults.
+
+3. **Start it and pull the model** (about 620 MB, once; it stays in the `ollama-models` volume):
+
+   ```sh
+   docker compose up -d
+   docker compose exec ollama ollama pull embeddinggemma
+   ```
+
+4. **Switch a project.** In the web UI open the project's Settings, Embedding, choose `ollama` and save. Items are
+   re-embedded in the background; search keeps using the old model until the switch. To start new projects on it, also set
+   `SPOOR_EMBEDDING_DEFAULT=ollama` in `.env`.
+
+5. **Lower the related-items floor.** In the same project's settings set `dedupe.related_min_cos` to about `0.55`:
+   embeddinggemma scores similar texts lower than the built-in model, so the defaults suggest too few links and the
+   "similar to" note on writes rarely appears.
+
+Notes:
+
+- **GPU.** The service above runs on CPU, which is slower than the built-in model for bulk re-embedding; its speed has not
+  been measured. With an NVIDIA GPU and the NVIDIA container toolkit, add
+  `deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }` to the
+  `ollama` service.
+- **macOS.** Docker gives containers no GPU there. Skip step 1, run the Ollama app natively (`ollama pull embeddinggemma`)
+  and set `SPOOR_OLLAMA_URL=http://host.docker.internal:11434`.
+- **If Ollama is down**, writes still succeed (their embeddings are retried every minute) and search falls back to full text.
+
+Details and other models: [docs/operations.md](docs/operations.md), section 7.
 
 ## Documentation
 

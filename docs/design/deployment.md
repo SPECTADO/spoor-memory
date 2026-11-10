@@ -138,6 +138,9 @@ services:
       SPOOR_VOYAGE_API_KEY: ${SPOOR_VOYAGE_API_KEY:-}
       SPOOR_VOYAGE_EMBED_MODEL: ${SPOOR_VOYAGE_EMBED_MODEL:-}
       SPOOR_VOYAGE_EMBED_DIMS: ${SPOOR_VOYAGE_EMBED_DIMS:-}
+      SPOOR_OLLAMA_URL: ${SPOOR_OLLAMA_URL:-}
+      SPOOR_OLLAMA_EMBED_MODEL: ${SPOOR_OLLAMA_EMBED_MODEL:-}
+      SPOOR_OLLAMA_EMBED_DIMS: ${SPOOR_OLLAMA_EMBED_DIMS:-}
       SPOOR_TRUST_PROXY: ${SPOOR_TRUST_PROXY:-}
     ports:
       - "${SPOOR_HTTP_BIND:-0.0.0.0}:${SPOOR_HTTP_PORT:-3000}:3000"
@@ -253,10 +256,11 @@ with placeholders and comments; `.env` is gitignored.
 | `SPOOR_ADMIN_NAME` | `Admin` | Display name of the bootstrap admin |
 | `LOG_LEVEL` | `info` | pino level: `trace` `debug` `info` `warn` `error` `fatal`. JSON to stdout, secrets redacted, no request bodies |
 | `SPOOR_DB_POOL_MAX` | `10` | Maximum Postgres connections |
+| `SPOOR_PUSH_CONCURRENCY` | `3` | Repo pushes and ADR imports (`push`, `adr/push`, `docs/push`, `adr/import`) in flight per project, 1 to 64. More are answered `503 busy` with `Retry-After: 5`. The instance-wide cap is `max(this, SPOOR_DB_POOL_MAX - 2)`, which leaves two connections for everything else. Per process |
 | `SPOOR_JOBS` | `on` | `off` disables the in-process scheduler (tests, one-off maintenance) |
 | `SPOOR_WEB_DIR` | image: `/app/web` (Dockerfile `ENV`); otherwise `packages/web/dist` (resolved from the server package) | Directory of the built SPA |
 | `SPOOR_MIGRATIONS_DIR` | image: `/app/drizzle` (Dockerfile `ENV`); otherwise the server package's `drizzle/` folder | Drizzle migrations folder |
-| `SPOOR_EMBEDDING_DEFAULT` | `local` | Provider new projects start with: `local`, `openai` or `voyage` (the latter two need their key) |
+| `SPOOR_EMBEDDING_DEFAULT` | `local` | Provider new projects start with: `local`, `openai`, `voyage` or `ollama` (`openai` and `voyage` need their key, `ollama` its URL) |
 | `SPOOR_MODEL_DIR` | `/opt/spoor/models` | Directory with the baked local model; loaded offline |
 | `SPOOR_EMBED_THREADS` | `2` | ONNX intra-op threads of the local model (use at most the CPUs given to the container) |
 | `SPOOR_OPENAI_API_KEY` | unset | Enables the `openai` provider. Item text then leaves the instance |
@@ -265,6 +269,9 @@ with placeholders and comments; `.env` is gitignored.
 | `SPOOR_VOYAGE_API_KEY` | unset | Enables the `voyage` provider |
 | `SPOOR_VOYAGE_EMBED_MODEL` | none, required when the key is set | Voyage model name (check vendor docs at implementation) |
 | `SPOOR_VOYAGE_EMBED_DIMS` | none, required when the key is set | Sent as `output_dimension` |
+| `SPOOR_OLLAMA_URL` | unset | Base URL of an Ollama server (`http://ollama:11434`); enables the `ollama` provider (ADR-0026). Item text is sent to that host |
+| `SPOOR_OLLAMA_EMBED_MODEL` | `embeddinggemma` | Ollama model name, pulled on that server beforehand. Letters, digits and `: / @ . _ -` |
+| `SPOOR_OLLAMA_EMBED_DIMS` | `768` | The model's vector width; a response of another width is refused |
 | `SPOOR_TRUST_PROXY` | unset (off) | Reverse proxies whose `X-Forwarded-For` is believed, for the requester IP the device approval page shows (the only use). Comma-separated keywords `loopback` (127.0.0.0/8, ::1) and `private` (10/8, 172.16/12, 192.168/16, fc00::/7), addresses and CIDR ranges, e.g. `private` for the compose `caddy` profile. When the TCP peer is trusted, the address is the right-most `X-Forwarded-For` hop that is not a trusted proxy (hops a client prepends do not count). Off, `off` or `false`: the TCP peer, forwarded headers ignored. Only list proxies that set or append `X-Forwarded-For` themselves; an invalid entry stops startup |
 | `NODE_ENV` | `production` in the image | Set by the image; do not change |
 

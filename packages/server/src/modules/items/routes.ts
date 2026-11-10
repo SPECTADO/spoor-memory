@@ -14,6 +14,7 @@ import { readJson, readQuery, uuidOr404 } from '../../lib/validate.js'
 import type { AppEnv } from '../../types.js'
 import { assertCan, bearerPrincipal, requireBearer, requireUser } from '../auth/index.js'
 import { loadProjectAccess, type ProjectAccess } from '../projects/index.js'
+import { admitted, pushFlags } from './admission.js'
 import type { PushService } from './push.js'
 import {
   adrImportRequest,
@@ -201,13 +202,22 @@ export function itemBearerRoutes(push: PushService) {
       project: { id: ctx.project.id, slug: ctx.project.slug, kind: ctx.project.kind },
     }
   }
+  // token and role checks first (401 / 403 win), then admission (503 busy), then the body
   return new Hono<AppEnv>()
-    .post('/push', async (c) => {
+    .post('/push', (c) => {
       const call = caller(c, true)
-      return c.json(await push.push(call, await readJson(c, pushRequest)))
+      return admitted(c, push.admission, call.project.id, async () =>
+        c.json(
+          await push.push(call, await readJson(c, pushRequest), {
+            deferEmbedding: pushFlags(c).deferEmbedding,
+          }),
+        ),
+      )
     })
-    .post('/adr/import', async (c) => {
+    .post('/adr/import', (c) => {
       const call = caller(c, true)
-      return c.json(await push.adrImport(call, await readJson(c, adrImportRequest)))
+      return admitted(c, push.admission, call.project.id, async () =>
+        c.json(await push.adrImport(call, await readJson(c, adrImportRequest), pushFlags(c))),
+      )
     })
 }

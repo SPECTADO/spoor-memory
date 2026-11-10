@@ -25,7 +25,8 @@ src/
   lib/                small shared helpers, no business logic
     errors.ts         ApiError, the api.md error body, loggableError
     db.ts             Db / Tx / DbOrTx types, withTx, allowPurge (SET LOCAL spoor.allow_purge), lockProjectForWrite
-                      (the content-write lock order: project row before item rows), pg error helpers, escapeLike
+                      (the content-write lock order: project row before item rows), pg error helpers, escapeLike,
+                      retryTransient / withTxRetry (a few jittered retries of deadlock 40P01 and serialization 40001)
     auth-context.ts   AuthContext (user, project, role, via, tokenId, clientName), actorLabel, effectiveRole, capRole
     audit.ts          writeAudit(): the one way to append to audit_log
     validate.ts       readJson / readQuery (strict zod → 400 invalid_input), uuidOr404
@@ -45,12 +46,14 @@ src/
                       tool wrapper) and per bearer REST call (bearerRequestLog middleware); the admin list
                       (`GET …/requests`) and the dashboard's last read / write; purged after 14 days
     items/            item service (create/update with revision check, pin, verify, archive, restore, delete,
-                      supersede, edges, wikilinks, revisions), repo mirror (push.ts: push, adr/import), the
+                      supersede, edges, wikilinks, revisions), repo mirror (push.ts: push, adr/import, with per-file error
+                      isolation, deferred embedding and the two import passes; admission.ts: the per-project and
+                      per-process limit of concurrent pushes, `SPOOR_PUSH_CONCURRENCY`, answering `503 busy`), the
                       project-scoped id resolver (resolve.ts), frontmatter validation, revision snapshot and ADR
                       file conventions (markdown.ts), the field cleaners every write path uses (writes.ts), the one
                       ItemSummary serializer (rows.ts summaryJson), the review queue's bulk verify / archive
                       (`reviewBulk`, `POST …/review/bulk`)
-    search/           chunker, embedding providers (providers/: local e5 q8, OpenAI, Voyage, registry),
+    search/           chunker, embedding providers (providers/: local e5 q8, OpenAI, Voyage, Ollama, registry),
                       SearchPort implementation, hybrid FTS+vector search (RRF), dedupe, digest (context.ts,
                       digest.ts), job functions (jobs.ts: embed-pending, reembed, target sync, consistency sweep,
                       all on the ports' BatchContext); routes: search, context (cookie + bearer). The anchor
@@ -138,7 +141,7 @@ Authorisation on every route follows one pattern:
 
 | port | implemented by (bound in `src/runtime.ts`) | used by |
 |---|---|---|
-| `EmbeddingProvider`, `EmbeddingRegistry` | search module, `createEmbeddingRegistry(config)` (local ONNX always; OpenAI / Voyage when keyed) | search, projects (provider settings), transfer, `/api/v1/instance`, startup readiness |
+| `EmbeddingProvider`, `EmbeddingRegistry` | search module, `createEmbeddingRegistry(config)` (local ONNX always; OpenAI / Voyage when keyed, Ollama when its URL is set) | search, projects (provider settings), transfer, `/api/v1/instance`, startup readiness |
 | `SearchPort` (`prepareChunks`, `dedupeCandidates`, `indexItemChunks`) | search module, `SearchService` | item service and push, transfer (chunk rebuild after import), MCP tools later |
 | `JobsPort` (`enqueue`) | jobs module, `Scheduler` | items (`embed-pending`), projects (`reembed`), transfer, startup (`reembed` after a target sync) |
 | `SearchJobs` + `BatchContext` | search module's `jobs` (registered as is) | the scheduler's `embed-pending`, `reembed` and `cleanup` (consistency sweep); the jobs module's `JobContext` extends `BatchContext` |

@@ -98,13 +98,16 @@ describe('app', () => {
       SPOOR_VOYAGE_API_KEY: 'vk-test',
       SPOOR_VOYAGE_EMBED_MODEL: 'voyage-3.5',
       SPOOR_VOYAGE_EMBED_DIMS: '1024',
+      SPOOR_OLLAMA_URL: 'http://ollama:11434',
     })
     const i = await body(await app.request('/api/v1/instance'))
     expect(i.providers.map((p) => [p.name, p.remote])).toEqual([
       ['local', false],
       ['openai', true],
       ['voyage', true],
+      ['ollama', true],
     ])
+    expect(i.providers[3]).toMatchObject({ tag: 'ollama:embeddinggemma/768', dims: 768 })
     expect(i.providers[1]).toMatchObject({ tag: 'openai:text-embedding-3-small/1536', dims: 1536 })
     expect(i.providers[2]).toMatchObject({ tag: 'voyage:voyage-3.5/1024', dims: 1024 })
   })

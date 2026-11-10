@@ -34,8 +34,8 @@ export const commands: Command[] = [
   },
   {
     path: ['adr', 'import'],
-    summary: 'One-time push of existing ADR files to Spoor',
-    usage: 'spoor adr import [--dir docs/adr] [--dry-run] [--json]',
+    summary: 'Push existing ADR files to Spoor (resumable; --all sends every file again)',
+    usage: 'spoor adr import [--dir docs/adr] [--dry-run] [--json] [--all]',
   },
   { path: ['adr', 'push'], summary: 'Push one ADR file to Spoor', usage: 'spoor adr push <file> [--force]' },
   {
@@ -45,8 +45,8 @@ export const commands: Command[] = [
   },
   {
     path: ['docs', 'import'],
-    summary: 'One-time push of repo docs to Spoor',
-    usage: 'spoor docs import [--dry-run] [--json]',
+    summary: 'Push repo docs to Spoor (resumable; --all sends every file again)',
+    usage: 'spoor docs import [--dry-run] [--json] [--all]',
   },
   { path: ['docs', 'push'], summary: 'Push one doc file to Spoor', usage: 'spoor docs push <file>' },
   {

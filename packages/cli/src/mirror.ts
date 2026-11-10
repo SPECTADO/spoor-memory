@@ -6,9 +6,11 @@
 import { existsSync, readdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isGlob, matchAnchor, normalizePath, staticPrefix } from '@spoor/shared'
+import { IMPORT_BATCH_BYTES, IMPORT_BATCH_FILES, importFileBytes } from './backoff.js'
 import { type ApiResult, api, type Ctx, projectPath } from './ctx.js'
 import { sha256, writeAtomic } from './fsutil.js'
 import type { Client } from './http.js'
+import { importRunning, unfinishedImportPaths } from './import-queue.js'
 import type { Deadline } from './runtime.js'
 import { insideRoot, isSpoorId, pushResultProblem, validRenumber } from './safety.js'
 import {
@@ -174,6 +176,8 @@ export type PushOutcome =
       renamedFrom?: string
       /** From the first response when a renumber caused a follow-up push. */
       renumbered?: { from: number; to: number }
+      /** The file changed on disk while the request ran: the server has the content read before it. */
+      edited?: boolean
     }
   | {
       kind: 'conflict'
@@ -183,8 +187,15 @@ export type PushOutcome =
       currentRevision?: number
     }
   | { kind: 'already_drafted'; handle: string; adr: string }
-  | { kind: 'error'; code: string; message: string; status?: number }
-  | { kind: 'queued'; code: string }
+  | { kind: 'error'; code: string; message: string; status?: number; retryAfterMs?: number }
+  | {
+      kind: 'queued'
+      code: string
+      /** For a 5xx answer: its status, `Retry-After` (ms) and the body's `error` code. */
+      status?: number
+      retryAfterMs?: number
+      apiCode?: string
+    }
   | { kind: 'unauthorized' }
   | { kind: 'missing' }
 
@@ -223,6 +234,8 @@ export interface PushOpts {
   noQueue?: boolean
   /** Internal: this is the follow-up push after a renumber. */
   followUp?: boolean
+  /** Extra request headers (the import's `Spoor-Defer-Embedding`). */
+  headers?: Record<string, string>
 }
 
 /** Push one mirrored file and apply the result to the file and `state.json`. */
@@ -264,8 +277,9 @@ export async function pushFile(
   const r = await api<PushResult>(client, 'POST', projectPath(ctx, '/api/push'), {
     body,
     timeoutMs: opts.timeoutMs ?? PUSH_TIMEOUT_MS,
+    ...(opts.headers ? { headers: opts.headers } : {}),
   })
-  return handlePushResponse(ctx, client, kind, rel, r, base?.[1], hash, opts)
+  return handlePushResponse(ctx, client, kind, rel, r, base?.[1], content, opts)
 }
 
 async function handlePushResponse(
@@ -275,10 +289,11 @@ async function handlePushResponse(
   rel: string,
   r: ApiResult<PushResult>,
   base: Base | undefined,
-  hash: string,
+  content: string,
   opts: PushOpts,
 ): Promise<PushOutcome> {
   const now = ctx.rt.now()
+  const hash = sha256(content)
   switch (r.kind) {
     case 'ok': {
       const problem = pushResultProblem(r.body)
@@ -289,7 +304,7 @@ async function handlePushResponse(
         })
         return { kind: 'error', code: 'invalid_response', message: `unexpected push result (${problem})` }
       }
-      const applied = await applyPushResult(ctx, kind, rel, r.body)
+      const applied = await applyPushResult(ctx, kind, rel, r.body, { sent: content })
       const renumbered = kind === 'adr' ? validRenumber(r.body.renumbered) : undefined
       if (applied.repush && !opts.followUp) {
         // renumbered: push the renamed file once more so Spoor's source_path (and `adr:`) follow the file
@@ -309,12 +324,18 @@ async function handlePushResponse(
       const out: PushOutcome = { kind: 'pushed', result: r.body, path: applied.path, notes: applied.notes }
       if (renumbered) out.renumbered = renumbered
       if (applied.path !== rel) out.renamedFrom = rel
+      if (applied.edited) out.edited = true
       return out
     }
     case 'network':
     case 'offline': {
       if (!opts.noQueue) await updateState(ctx.root, (s) => addPending(s, kind, rel, now))
-      return { kind: 'queued', code: r.kind === 'offline' ? 'offline' : r.code }
+      if (r.kind === 'offline') return { kind: 'queued', code: 'offline' }
+      const out: PushOutcome = { kind: 'queued', code: r.code }
+      if (r.status !== undefined) out.status = r.status
+      if (r.retryAfterMs !== undefined) out.retryAfterMs = r.retryAfterMs
+      if (r.apiCode !== undefined) out.apiCode = r.apiCode
+      return out
     }
     case 'unauthorized':
       return { kind: 'unauthorized' }
@@ -352,9 +373,31 @@ async function handlePushResponse(
       await updateState(ctx.root, (s) => {
         s.pending = s.pending.filter((p) => p.path !== rel)
       })
-      return { kind: 'error', code: r.code, message: r.message, status: r.status }
+      const out: PushOutcome = { kind: 'error', code: r.code, message: r.message, status: r.status }
+      if (r.retryAfterMs !== undefined) out.retryAfterMs = r.retryAfterMs
+      return out
     }
   }
+}
+
+export interface ApplyOpts {
+  /** Leave out the unresolved_* notes (the import's second pass prints the final ones). */
+  muteUnresolved?: boolean
+  /**
+   * The file content the request carried. When the file differs from it now (edited during the request), the base
+   * records the hash of what was sent, so the edit is not hidden from the next push.
+   */
+  sent?: string
+}
+
+export interface Applied {
+  path: string
+  notes: string[]
+  repush: boolean
+  /** The file no longer exists: nothing was written. */
+  gone?: boolean
+  /** The file changed on disk while the request ran (see ApplyOpts.sent). */
+  edited?: boolean
 }
 
 /**
@@ -368,7 +411,8 @@ export async function applyPushResult(
   kind: MirrorKind,
   rel: string,
   result: PushResult,
-): Promise<{ path: string; notes: string[]; repush: boolean }> {
+  opts: ApplyOpts = {},
+): Promise<Applied> {
   if (!insideRoot(ctx.root, rel)) throw new Error(`refusing to write ${rel}: not inside the repo`)
   const problem = pushResultProblem(result)
   if (problem) throw new Error(`refusing to apply a push result: ${problem}`)
@@ -376,7 +420,8 @@ export async function applyPushResult(
   let path = rel
   let repush = false
   let content = readFileText(ctx, rel)
-  if (content === undefined) return { path, notes, repush }
+  if (content === undefined) return { path, notes, repush, gone: true }
+  const edited = opts.sent !== undefined && content !== opts.sent
 
   const renumbered = kind === 'adr' ? validRenumber(result.renumbered) : undefined
   if (renumbered) {
@@ -418,7 +463,7 @@ export async function applyPushResult(
     }
   }
 
-  const hash = sha256(content)
+  const hash = edited ? sha256(opts.sent as string) : sha256(content)
   await updateState(ctx.root, (s) => {
     for (const [id, b] of Object.entries(s.bases)) {
       if (id !== result.spoor_id && (b.path === rel || b.path === path)) delete s.bases[id]
@@ -427,18 +472,29 @@ export async function applyPushResult(
     s.conflicts = s.conflicts.filter((c) => c.path !== rel && c.path !== path)
     s.pending = s.pending.filter((p) => p.path !== rel && p.path !== path)
   })
-  for (const w of result.warnings ?? []) {
+  for (const w of Array.isArray(result.warnings) ? result.warnings : []) {
+    if (!w || typeof w !== 'object') continue
     if (w.code === 'ambiguous_ref')
       notes.push(`warning: ${path}: ambiguous reference ${String(w.ref)} (not applied; fix the file)`)
+    else if (opts.muteUnresolved && UNRESOLVED.has(w.code)) continue
     else if (w.code === 'unresolved_supersedes')
       notes.push(`warning: ${path}: unresolved supersedes ${String(w.ref)}`)
+    else if (w.code === 'unresolved_relation')
+      notes.push(`warning: ${path}: unresolved relation ${String(w.ref)}`)
+    else if (w.code === 'unresolved_drafted_from')
+      notes.push(`warning: ${path}: unresolved drafted_from ${String(w.ref)}`)
     else if (w.code === 'number_mismatch')
       notes.push(`warning: ${path}: file number ${String(w.file)} differs from Spoor's ${String(w.item)}`)
     else if (w.code === 'foreign_spoor_id')
       notes.push(`warning: ${path}: spoor_id belongs to another project; ignored`)
   }
-  return { path, notes, repush }
+  const out: Applied = { path, notes, repush }
+  if (edited) out.edited = true
+  return out
 }
+
+/** Warning codes whose target may not be on the server yet. */
+export const UNRESOLVED = new Set(['unresolved_relation', 'unresolved_supersedes', 'unresolved_drafted_from'])
 
 // ---- retry queue, sweep, orphans --------------------------------------------------------------------------
 
@@ -449,15 +505,20 @@ export interface SweepReport {
   stopped: boolean
 }
 
-/** Replay `state.pending` until the deadline (section 3.3). Stops at the first network failure. */
+/**
+ * Replay `state.pending` until the deadline (section 3.3). Stops at the first network failure, and when an import
+ * takes the lock meanwhile. Entries of an unfinished import stay queued: the import resumes them with `reserve_above`.
+ */
 export async function replayPending(ctx: Ctx, client: Client, deadline: Deadline): Promise<SweepReport> {
   const rep: SweepReport = { pushed: 0, queued: 0, conflicts: 0, stopped: false }
   const pending = readState(ctx.root).pending
+  const importing = unfinishedImportPaths(ctx.root, ctx.rt.now())
   for (const p of pending) {
-    if (deadline.expired(500)) {
+    if (deadline.expired(500) || importRunning(ctx.root, ctx.rt.now())) {
       rep.stopped = true
       break
     }
+    if (importing.has(p.path)) continue
     if (!existsSync(join(ctx.root, p.path))) {
       await updateState(ctx.root, (s) => {
         s.pending = s.pending.filter((x) => x.path !== p.path)
@@ -482,8 +543,11 @@ export async function replayPending(ctx: Ctx, client: Client, deadline: Deadline
 export async function sweepMirror(ctx: Ctx, client: Client, deadline: Deadline): Promise<SweepReport> {
   const rep: SweepReport = { pushed: 0, queued: 0, conflicts: 0, stopped: false }
   const state = readState(ctx.root)
+  // files of an unfinished import are resumed by the import (with reserve_above), not pushed one by one
+  const importing = unfinishedImportPaths(ctx.root, ctx.rt.now())
   const changed: { kind: MirrorKind; path: string }[] = []
   for (const f of mirroredFiles(ctx)) {
+    if (importing.has(f.path)) continue
     const content = readFileText(ctx, f.path)
     if (content === undefined) continue
     const hash = sha256(content)
@@ -495,6 +559,8 @@ export async function sweepMirror(ctx: Ctx, client: Client, deadline: Deadline):
   }
   let offline = false
   for (const f of changed) {
+    // an import that took the lock meanwhile: queue the rest instead of pushing next to it
+    if (!offline && importRunning(ctx.root, ctx.rt.now())) offline = true
     if (offline || deadline.expired(500)) {
       await updateState(ctx.root, (s) => addPending(s, f.kind, f.path, ctx.rt.now()))
       rep.queued++
@@ -522,16 +588,24 @@ export function orphans(ctx: Ctx, state: State = readState(ctx.root)): { id: str
 
 // ---- import -----------------------------------------------------------------------------------------------
 
-export const IMPORT_MAX_FILES = 100
-export const IMPORT_MAX_BYTES = 900 * 1024
+export interface ImportFile {
+  source_path: string
+  content: string
+}
 
-export function importBatches(files: { source_path: string; content: string }[]) {
-  const batches: { source_path: string; content: string }[][] = []
-  let cur: { source_path: string; content: string }[] = []
+export function importBatches(
+  files: ImportFile[],
+  limits: { maxFiles: number; maxBytes: number } = {
+    maxFiles: IMPORT_BATCH_FILES,
+    maxBytes: IMPORT_BATCH_BYTES,
+  },
+): ImportFile[][] {
+  const batches: ImportFile[][] = []
+  let cur: ImportFile[] = []
   let bytes = 0
   for (const f of files) {
-    const size = Buffer.byteLength(f.content) + Buffer.byteLength(f.source_path) + 64
-    if (cur.length > 0 && (cur.length >= IMPORT_MAX_FILES || bytes + size > IMPORT_MAX_BYTES)) {
+    const size = importFileBytes(f)
+    if (cur.length > 0 && (cur.length >= limits.maxFiles || bytes + size > limits.maxBytes)) {
       batches.push(cur)
       cur = []
       bytes = 0

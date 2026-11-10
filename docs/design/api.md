@@ -72,7 +72,7 @@ useful. No tokens, SQL, stack traces or other users' emails. Validation failures
 | 409 | `revision_conflict`, `revision_required` (a 400), `slug_taken`, `ambiguous_id`, `pushed_over_spoor_edit`, `already_drafted`, `source_path_taken`, `last_admin`, `promote_required`, `edge_not_editable`, `project_not_empty`, `id_collision`, `already_exists`, `mirrored_item` (MCP only) |
 | 413 | `payload_too_large`, `zip_limits`, `too_large` (an item body over 200,000 characters after normalisation, `details.limit`; REST and MCP) |
 | 422 | `invalid_archive` |
-| 503 | `busy` (password hash queue; an import or export already running), `too_many_pending` (device codes), `starting` (before the server is ready) |
+| 503 | `busy` (password hash queue; an import or export already running; the push limit: too many of `push`, `adr/push`, `docs/push` and `adr/import` are in flight, with `Retry-After: 5`, §7.2), `too_many_pending` (device codes), `starting` (before the server is ready) |
 | 500 | `internal` |
 
 MCP codes (`wrong_space`, `mirrored_item`, `not_found`, …) keep their meaning on REST; `wrong_space` is 400,
@@ -451,11 +451,32 @@ Never bumps `last_used_at`. The hook asks for `budget=1500` unless the CLI confi
 | method | path | role | request | response |
 |---|---|---|---|---|
 | GET | `/p/:slug/api/whoami` | UT, ST (any) | | 200 `{project:{slug,name,next_adr_number}, token:{id,name,kind,prefix,role,expires_at}, user:{label}, server:{version}}`. `role` is the effective role; `expires_at` is ISO 8601 or null (no expiry), shown by `spoor login` and `spoor status`. Used by `spoor login` to validate a pasted token and by `adr draft` for the next ADR number |
-| POST | `/p/:slug/api/push` | UT ≥ E, ST[editor] | `{space:"decisions"|"docs", source_path, content, base_revision?, force?}` | see §7.3 |
-| POST | `/p/:slug/api/adr/import` | UT ≥ E, ST[editor] | `{files:[{source_path, content}], reserve_above?: int}` (≤ 100 files, whole body ≤ 1 MB; the CLI batches and sends the same `reserve_above` = highest local ADR number with every batch) | 200 `{results:[PushResult|{source_path, error, message}]}`; a bad file does not fail the batch. Matching (`spoor_id`, then `source_path`, then number), numbering, renumbering and in-batch ref resolution as in [data-model.md](data-model.md) §7 |
+| POST | `/p/:slug/api/push` | UT ≥ E, ST[editor] | `{space:"decisions"|"docs", source_path, content, base_revision?, force?}`. Optional header `Spoor-Defer-Embedding: 1` | see §7.3. 503 `busy` when the push limit is reached (below) |
+| POST | `/p/:slug/api/adr/import` | UT ≥ E, ST[editor] | `{files:[{source_path, content}], reserve_above?: int}` (≤ 100 files, whole body ≤ 1 MB; the CLI batches and sends the same `reserve_above` = highest local ADR number with every batch) | 200 `{results:[PushResult|{source_path, error, message}]}`; a bad file does not fail the batch. Matching (`spoor_id`, then `source_path`, then number), numbering, renumbering and in-batch ref resolution as in [data-model.md](data-model.md) §7. Limits: 1 to 100 files, `content` ≤ 400,000 characters, `source_path` 1 to 256 characters, body ≤ 1 MiB; one violating file is a 400 for the whole request (the CLI checks locally). Optional headers `Spoor-Defer-Embedding: 1` and `Spoor-Import-Edges: defer` (below). An unexpected error on one file is that file's result `{source_path, error:"internal", message:"Internal error."}` (nothing is wrong with the file: send it again); after 3 such errors in one request the remaining files are not attempted and answer `internal` / `not processed`. In pass 2 of the same request, a ref to the number of a file whose pass 1 failed answers `unresolved_*` (never the stored item with that number). Requests of more than 10 files are embedded later as if `Spoor-Defer-Embedding: 1` was sent. 503 `busy` as for the other push routes |
 | GET | `/p/:slug/api/decisions/undrafted` | UT, ST (any) | `?since=<ISO>&mine=true` | 200 `{items:[{handle, spoor_id, title, body, tags, anchors, confidence, created_at}]}`. Decision memories (`type='decision'`, active) with no `drafted_from` edge from a non-superseded ADR, created at or after `since` (default and floor: now minus 14 days), oldest first, at most 200; `mine=true` (default) limits them to the token's owner (service token: items whose `item.create` audit row carries that token's id) |
 | GET | `/p/:slug/api/activity` | UT, ST (any) | `?since=<ISO>` | **new** (I23). 200 `{writes: 3}`: audit rows with this token's id, `via IN ('mcp','cli')` and a content or edge write action (`item.create`, `item.update`, `item.supersede`, `edge.add`, `item.verify`, `item.push`) at or after `since` (default: now minus 6 hours), except `via='cli'` rows whose client name ends in ` (auto)`: the CLI marks the pushes it makes on its own (drafting, queue replay, mirror sweep) with the User-Agent `spoor-cli/<v> (auto)`, so they never count as the agent's own recording (review-log-phase5 A3). The Stop hook uses it for "made no Spoor writes". Bearer-only, counts only |
-| POST | `/p/:slug/api/adr/push`, `/p/:slug/api/docs/push` | UT ≥ E, ST[editor] | `{source_path, content, base_revision?, force?}` | **new** (deviations.md P3-6): `POST push` with `space` = `decisions` / `docs` taken from the path; same response and errors (§7.3) |
+| POST | `/p/:slug/api/adr/push`, `/p/:slug/api/docs/push` | UT ≥ E, ST[editor] | `{source_path, content, base_revision?, force?}` | **new** (deviations.md P3-6): `POST push` with `space` = `decisions` / `docs` taken from the path; same response and errors (§7.3). Header `Spoor-Defer-Embedding: 1` as for `push` |
+
+**Request headers of the push routes.** The request schemas are strict (an unknown body field is 400
+`invalid_input` on every server version), so the two flags are headers: an older server ignores them and no fallback
+request is needed. Names are case-insensitive; a flag is on only for the exact value.
+
+- `Spoor-Defer-Embedding: 1` on `push`, `adr/push`, `docs/push`, `adr/import`: the server does not call the embedding model
+  in this request (also not for the re-index of an item that a `supersedes` reference marks superseded). Chunks are
+  stored with `embedding NULL`, the `embed-pending` job is nudged, and a result that wrote chunks (`created`, `updated`)
+  carries the warning `embedding_pending`. The items are searchable by keyword at once and by meaning once the job has run
+  ([search-and-digest.md](search-and-digest.md) §3). `adr/import` with more than 10 files behaves as if the header was set.
+- `Spoor-Import-Edges: defer` on `adr/import` only: run pass 1 (content) for every file and skip pass 2 (relations,
+  `supersedes`, "Superseded by" sections, `drafted_from`). A successful result of a file that has edge work carries the
+  warning `edges_deferred` (for a `created` file `drafted_from` is not counted: its edges are written in pass 1, because the
+  `already_drafted` check needs them). The client sends such files again without the header.
+
+**Push limit.** `push`, `adr/push`, `docs/push` and `adr/import` share one limiter per server process: at most
+`SPOOR_PUSH_CONCURRENCY` (default 3) requests in flight per project, and at most `max(SPOOR_PUSH_CONCURRENCY,
+SPOOR_DB_POOL_MAX - 2)` over all projects. The check runs after authentication and the role check (401 and 403 win) and
+before body validation, so a refused request answers `busy` even when its body is invalid. An excess request is
+answered at once with `503`, `Retry-After: 5` and `{"error":"busy", …}`. It is 503 and not 429 because CLI ≤ 0.5.1 stops on
+5xx but carries on at once after a 4xx. A request stays in flight until its handler returns, also when the client has gone away.
 
 Writes through these endpoints always carry `via='cli'` and `client_name` from the `User-Agent`
 (`spoor-cli/0.1.0`, sanitised like the MCP client name). Shared targets are impossible: every lookup is scoped to
@@ -478,7 +499,19 @@ Response 200:
 - `renumbered`: `{from:7, to:15}` when the number was taken by another item; the CLI renames the file and sets `adr:`.
 - `warnings`: `{code:"number_mismatch", file:7, item:8}`, `{code:"unresolved_supersedes", ref:"ADR-0003"}`,
   `{code:"ambiguous_ref", ref, candidates}`, `{code:"foreign_spoor_id"}`, `{code:"status_kept_superseded"}`,
-  `{code:"source_path_updated", from}`, `{code:"embedding_pending"}`.
+  `{code:"source_path_updated", from}`, `{code:"embedding_pending"}` (the embedding is deferred: the request header, an
+  `adr/import` of more than 10 files, or a failed embed; the `embed-pending` job fills it).
+- `adr/import` only: `{code:"edges_deferred"}` (pass 2 was skipped on request; send the file again without
+  `Spoor-Import-Edges`) and `{code:"edges_failed", error, message}` (pass 2 failed for this file; `error` is the API code, or
+  `internal` for an unexpected error, with `message` `Internal error.` or `not processed` when the 3-error limit was reached; the
+  file needs one more request). Clients ignore warning codes they do not know.
+- Sending content again that equals the stored item is `unchanged` with the same `spoor_id`, `handle` and `revision`
+  and creates no revision, but the edge work of an `adr/import` file still runs (edge inserts are idempotent, a supersede of
+  an already superseded item is a no-op). That is how deferred edges are applied.
+- **Lost renumber answer.** A file without `spoor_id` that matches by `source_path` an ADR whose `renumbered_from` equals the
+  file's number (file name, `adr:` or H1) and whose `adr_number` differs gets `renumbered: {from, to}` again, with status
+  `unchanged` or `updated`, instead of `number_mismatch`. A client that lost the answer of the creating request (timeout,
+  killed process) then renames the file when it sends it again.
 - Matching, fast-forward rules, what a push applies, `supersedes` and `drafted_from` frontmatter: [data-model.md](data-model.md) §7.
 - `409 pushed_over_spoor_edit` with `details:{current_revision, edited_by, via}`; nothing written except `push_conflict_at`
   (shown in the review queue). `force:true` writes anyway and records `change='push'` with `data.forced=true` in the audit row.

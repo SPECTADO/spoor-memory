@@ -2,7 +2,7 @@
  * The composition root: the one place where the real cross-module implementations are bound to the ports of
  * src/ports.ts, plus the startup steps 3 to 8 and the graceful shutdown of deployment.md section 4.
  *
- *   embeddings  = the search module's provider registry (local e5 always, OpenAI / Voyage when keyed)
+ *   embeddings  = the search module's provider registry (local e5 always, OpenAI / Voyage when keyed, Ollama when its URL is set)
  *   jobs        = the jobs module's scheduler (JobsPort: `enqueue` is a nudge)
  *   search      = the search module's SearchService (SearchPort: prepare / index chunks, dedupe)
  *
