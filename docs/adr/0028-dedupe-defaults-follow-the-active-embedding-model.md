@@ -10,7 +10,7 @@ anchors: [packages/shared/src/settings.ts, packages/server/src/modules/projects/
 # Dedupe defaults follow the project's active embedding model (0.75 and 0.50 for embeddinggemma); wider setting ranges
 
 - **Deciders:** Ladislav Soukup (owner; "Yes, add defaults" on 2026-11-10, after his benchmark of the `ollama` provider), Claude (the numbers and the mechanism)
-- **Refines:** [ADR-0025](0025-near-duplicates-are-saved-with-a-note-only-the-same-text-is-refused.md), [ADR-0023](0023-related-item-floor-lives-at-settings-dedupe-related-min-cos-0-50-0-90-default-0.md), ADR-0026 (the opt-in `ollama` provider)
+- **Refines:** [ADR-0025](0025-near-duplicates-are-saved-with-a-note-only-the-same-text-is-refused.md), [ADR-0023](0023-related-item-floor-lives-at-settings-dedupe-related-min-cos-0-50-0-90-default-0.md), [ADR-0026](0026-opt-in-ollama-embedding-provider-embeddinggemma-by-default-local-e5-small-stays.md) (the opt-in `ollama` provider)
 
 ## Context
 
