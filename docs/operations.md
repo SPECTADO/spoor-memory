@@ -242,7 +242,9 @@ responses (`request_id`) and in the UI's error panels, so a user report maps to 
 ## 9. Resources
 
 - App container: compose sets `mem_limit: 2g`; the local model and runtime use about 1.5 GB. Give it 2 CPUs (`SPOOR_EMBED_THREADS=2`).
-  Embedding is bursty: a write embeds its chunks, a re-embed runs batches.
+  Embedding is bursty: a write embeds its chunks, a re-embed runs batches. The local model runs in a worker thread, so the
+  server keeps answering while it embeds (ADR-0029). The worker costs about 50 to 150 MB more (measured on macOS, not in the
+  container), so watch the container's memory after upgrading.
 - Database: small. Items, history and 384-dimension vectors of a few thousand items fit in hundreds of megabytes; `shm_size: 256mb`
   is set for HNSW index builds during a re-embed. Disk grows with history and the audit log, which are never pruned automatically.
 - Network: the app needs no outbound access with the local provider. Image build and first pull need Docker Hub and GHCR; the model

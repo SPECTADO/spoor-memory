@@ -73,7 +73,16 @@ export interface EmbeddingProvider {
   `env.allowRemoteModels = false` and `env.cacheDir = null`; the weights are baked into the image. It
   calls `{ pooling: 'mean', normalize: true }` with prefixes `query: ` / `passage: ` added inside the
   provider only. The provider is a singleton with a promise queue (one inference at a time) and batches
-  of 8. `countTokens` uses the pipeline's tokenizer. Tag: `local:Xenova/multilingual-e5-small@q8/384`.
+  of 8. **The model runs in a worker thread** (`providers/local-worker.ts`, driven by `InferenceWorker` in
+  `providers/inference-worker.ts`, ADR-0029): onnxruntime-node's `run` is synchronous, so on the main thread
+  every batch stalled the event loop for its whole length (about 600 ms for 8 full chunks on an M3 Max; 4
+  turns of the loop while 32 chunks embedded, against 420 with the worker). The tokenizer stays on the main
+  thread, because `countTokens` is synchronous (the chunker needs it): the provider tokenizes each batch with
+  `{ padding: true, truncation: true }`, transfers the int64 tensors to the worker, and the worker runs
+  `AutoModel`, `mean_pooling` and `normalize(2, -1)`, the same steps as the pipeline call, and transfers a
+  `Float32Array` back. The vectors are bit-identical to the pipeline's for the same batch. A worker that dies
+  rejects what was in flight and the next `ready()` starts a new one.
+  Tag: `local:Xenova/multilingual-e5-small@q8/384`.
 - **openai** (enabled when `SPOOR_OPENAI_API_KEY` is set): `POST /v1/embeddings`. The model comes from
   `SPOOR_OPENAI_EMBED_MODEL` (default `text-embedding-3-small`) and the dims from
   `SPOOR_OPENAI_EMBED_DIMS` (default 1536, sent as `dimensions` for the `text-embedding-3*` models, the only

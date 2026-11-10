@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isTransientPgError, retryTransient } from './db.js'
+import { isDbUnavailable, isTransientPgError, retryTransient } from './db.js'
 import { ApiError } from './errors.js'
 
 const pgErr = (code: string) => Object.assign(new Error(`pg ${code}`), { code })
@@ -81,5 +81,39 @@ describe('retryTransient', () => {
     expect(c.delays).toHaveLength(1)
     expect(c.delays[0]).toBeGreaterThanOrEqual(10)
     expect(c.delays[0]).toBeLessThan(20)
+  })
+})
+
+describe('isDbUnavailable', () => {
+  it('is true when no connection could be had, also under a drizzle wrapper', () => {
+    // the two errors of the 2026-11-10 production log: pushUpdate's transaction and loadSession's query
+    const connectTimeout = new Error('Connection terminated due to connection timeout', {
+      cause: new Error('Connection terminated unexpectedly'),
+    })
+    expect(isDbUnavailable(connectTimeout)).toBe(true)
+    expect(
+      isDbUnavailable(
+        Object.assign(new Error('Failed query: select 1'), {
+          cause: new Error('Connection terminated due to connection timeout'),
+        }),
+      ),
+    ).toBe(true)
+    expect(isDbUnavailable(new Error('timeout exceeded when trying to connect'))).toBe(true)
+    expect(isDbUnavailable(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))).toBe(
+      true,
+    )
+    expect(
+      isDbUnavailable(Object.assign(new Error('the database system is starting up'), { code: '57P03' })),
+    ).toBe(true)
+    expect(isDbUnavailable(Object.assign(new Error('too many clients'), { code: '53300' }))).toBe(true)
+  })
+
+  it('is false for a connection lost mid-statement and for ordinary errors', () => {
+    expect(isDbUnavailable(new Error('Connection terminated unexpectedly'))).toBe(false)
+    expect(isDbUnavailable(Object.assign(new Error('deadlock detected'), { code: '40P01' }))).toBe(false)
+    expect(isDbUnavailable(Object.assign(new Error('duplicate key'), { code: '23505' }))).toBe(false)
+    expect(isDbUnavailable(new ApiError('not_found'))).toBe(false)
+    expect(isDbUnavailable(new Error('boom'))).toBe(false)
+    expect(isDbUnavailable(undefined)).toBe(false)
   })
 })

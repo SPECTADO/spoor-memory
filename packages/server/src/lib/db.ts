@@ -76,6 +76,27 @@ export function isUniqueViolation(err: unknown, constraint?: string): boolean {
 export const isTransientPgError = (err: unknown): boolean =>
   ['40P01', '40001'].includes(pgError(err)?.code ?? '')
 
+const NO_CONNECTION_MESSAGES = [
+  'Connection terminated due to connection timeout', // pg: a new connection did not finish its handshake in time
+  'timeout exceeded when trying to connect', // pg-pool: no free client within connectionTimeoutMillis
+]
+// connection refused / host down, 57P03 cannot_connect_now, 53300 too_many_connections
+const NO_CONNECTION_CODES = ['ECONNREFUSED', 'EHOSTUNREACH', 'ENOTFOUND', '57P03', '53300']
+
+/**
+ * The statement never ran because no database connection could be had (pool exhausted, Postgres down or
+ * restarting, a stalled handshake). Nothing was written, so the caller may simply try again. A connection
+ * that drops in the middle of a statement is NOT this: its outcome is unknown.
+ */
+export function isDbUnavailable(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e && depth < 4; e = (e as { cause?: unknown }).cause, depth++) {
+    const { message, code } = e as { message?: unknown; code?: unknown }
+    if (typeof code === 'string' && NO_CONNECTION_CODES.includes(code)) return true
+    if (typeof message === 'string' && NO_CONNECTION_MESSAGES.some((m) => message.includes(m))) return true
+  }
+  return false
+}
+
 export interface RetryOptions {
   /** Retries after the first attempt (default 3, so 4 attempts). */
   retries?: number

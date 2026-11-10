@@ -72,7 +72,7 @@ useful. No tokens, SQL, stack traces or other users' emails. Validation failures
 | 409 | `revision_conflict`, `revision_required` (a 400), `slug_taken`, `ambiguous_id`, `pushed_over_spoor_edit`, `already_drafted`, `source_path_taken`, `last_admin`, `promote_required`, `edge_not_editable`, `project_not_empty`, `id_collision`, `already_exists`, `mirrored_item` (MCP only) |
 | 413 | `payload_too_large`, `zip_limits`, `too_large` (an item body over 200,000 characters after normalisation, `details.limit`; REST and MCP) |
 | 422 | `invalid_archive` |
-| 503 | `busy` (password hash queue; an import or export already running; the push limit: too many of `push`, `adr/push`, `docs/push` and `adr/import` are in flight, with `Retry-After: 5`, §7.2), `too_many_pending` (device codes), `starting` (before the server is ready) |
+| 503 | `busy` (no database connection could be had: the request did nothing and carries `Retry-After: 5`; password hash queue; an import or export already running; the push limit: too many of `push`, `adr/push`, `docs/push` and `adr/import` are in flight, with `Retry-After: 5`, §7.2), `too_many_pending` (device codes), `starting` (before the server is ready) |
 | 500 | `internal` |
 
 MCP codes (`wrong_space`, `mirrored_item`, `not_found`, …) keep their meaning on REST; `wrong_space` is 400,

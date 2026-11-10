@@ -4,6 +4,15 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The server no longer stalls while the built-in model embeds** (ADR-0029). Inference ran on the main thread, and
+  onnxruntime's `run` is synchronous, so every batch of 8 chunks froze all requests for its length. During an import this made
+  ordinary requests take seconds and new Postgres connections time out, which surfaced as 500 `internal` on pushes and web
+  pages and as a failing `/healthz`. The model now runs in a worker thread; vectors are unchanged.
+- A request that fails because no database connection could be had is answered `503 busy` with `Retry-After: 5` instead of
+  `500 internal`; the CLI retries it.
+
 ### Changed
 
 - **Dedupe defaults follow the project's embedding model** (ADR-0028). A project whose active model is `embeddinggemma`

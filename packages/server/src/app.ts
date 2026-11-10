@@ -2,10 +2,11 @@ import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { serveStatic } from '@hono/node-server/serve-static'
-import { Hono } from 'hono'
+import { type Context, Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import type { Logger } from 'pino'
 import type { Config } from './config.js'
+import { isDbUnavailable } from './lib/db.js'
 import type { ServerDeps } from './lib/deps.js'
 import { ApiError, apiErrorResponse, errorResponse, loggableError } from './lib/errors.js'
 import { createAuditModule } from './modules/audit/index.js'
@@ -35,6 +36,31 @@ export interface AppDeps {
   pingDb?: () => Promise<boolean>
   /** The modules, built once with `createAppModules` (src/runtime.ts shares its scheduler and SearchService). */
   modules: AppModules
+}
+
+/** Seconds a client should wait after a request failed because no database connection could be had. */
+export const DB_UNAVAILABLE_RETRY_AFTER_S = 5
+
+/**
+ * The app's error handler. A request that failed because no database connection could be had did nothing,
+ * so it is answered 503 `busy` with `Retry-After` (which the CLI retries) instead of 500 `internal`.
+ */
+export function handleAppError(err: unknown, c: Context<AppEnv>): Response {
+  if (err instanceof ApiError) return apiErrorResponse(c, err)
+  if (err instanceof HTTPException) return err.getResponse()
+  if (isDbUnavailable(err)) {
+    c.get('log')?.warn({ err: loggableError(err) }, 'database unavailable')
+    c.header('Retry-After', String(DB_UNAVAILABLE_RETRY_AFTER_S))
+    return apiErrorResponse(
+      c,
+      new ApiError('busy', {
+        message: 'The database is not reachable right now; try again shortly.',
+        hint: `Retry after ${DB_UNAVAILABLE_RETRY_AFTER_S} seconds.`,
+      }),
+    )
+  }
+  c.get('log')?.error({ err: loggableError(err) }, 'unhandled error')
+  return errorResponse(c, 'internal', { message: 'Internal error.' })
 }
 
 /**
@@ -232,12 +258,7 @@ export function createApp({ config, logger, state, ports, pingDb, modules: m }: 
     c.req.path.startsWith('/api/') ? errorResponse(c, 'not_found') : c.text('not found', 404),
   )
 
-  app.onError((err, c) => {
-    if (err instanceof ApiError) return apiErrorResponse(c, err)
-    if (err instanceof HTTPException) return err.getResponse()
-    c.get('log')?.error({ err: loggableError(err) }, 'unhandled error')
-    return errorResponse(c, 'internal', { message: 'Internal error.' })
-  })
+  app.onError(handleAppError)
 
   return app
 }
