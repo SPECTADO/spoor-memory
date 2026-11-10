@@ -4,6 +4,8 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-10
+
 ### Added
 
 - **Instance status page** (`/admin/status`, instance admins): the deployment's version, uptime, Node and platform; the
