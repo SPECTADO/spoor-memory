@@ -4,6 +4,8 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-10
+
 ### Added
 
 - `SPOOR_PUSH_CONCURRENCY` (server, default 3, 1 to 64): pushes and imports in flight per project. `--all` for `spoor adr import`
