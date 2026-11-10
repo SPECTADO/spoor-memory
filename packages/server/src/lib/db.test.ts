@@ -1,4 +1,5 @@
-import { createServer } from 'node:net'
+import { EventEmitter } from 'node:events'
+import { type AddressInfo, createServer, type Socket } from 'node:net'
 import pg from 'pg'
 import { describe, expect, it } from 'vitest'
 import { isDbUnavailable, isTransientPgError, retryTransient } from './db.js'
@@ -120,46 +121,67 @@ describe('isDbUnavailable', () => {
   })
 
   // The classifier matches message text, because pg gives these errors no code. Provoke the real ones.
-  it('recognises the errors a real pg.Pool raises when it cannot get a connection', async () => {
+  it('recognises a real pg handshake that stalls (connect timeout)', async () => {
     // a server that accepts the TCP connection and never answers the Postgres handshake
-    const sockets = new Set<import('node:net').Socket>()
+    const sockets = new Set<Socket>()
     const blackhole = createServer((s) => {
       sockets.add(s)
       s.on('error', () => undefined)
     })
     await new Promise<void>((r) => blackhole.listen(0, '127.0.0.1', r))
-    const { port } = blackhole.address() as import('node:net').AddressInfo
+    const { port } = blackhole.address() as AddressInfo
     const pool = new pg.Pool({ host: '127.0.0.1', port, max: 1, connectionTimeoutMillis: 100 })
     pool.on('error', () => undefined)
     try {
-      // the first caller's handshake stalls; the second waits for the only slot of the pool
-      const [stalled, queued] = await Promise.allSettled([pool.query('select 1'), pool.query('select 1')])
-      expect(stalled.status).toBe('rejected')
-      expect(queued.status).toBe('rejected')
-      const messages = [stalled, queued].map((r) => ((r as PromiseRejectedResult).reason as Error).message)
-      expect(messages).toContain('Connection terminated due to connection timeout')
-      expect(messages).toContain('timeout exceeded when trying to connect')
-      expect(isDbUnavailable((stalled as PromiseRejectedResult).reason)).toBe(true)
-      expect(isDbUnavailable((queued as PromiseRejectedResult).reason)).toBe(true)
+      const err = await pool.query('select 1').catch((e: unknown) => e)
+      expect((err as Error).message).toBe('Connection terminated due to connection timeout')
+      expect(isDbUnavailable(err)).toBe(true)
     } finally {
       for (const s of sockets) s.destroy()
       await pool.end().catch(() => undefined)
       await new Promise((r) => blackhole.close(r))
     }
+  })
 
-    // nothing listens here: connection refused carries a code
+  it('recognises a real pg-pool wait that runs out (every client in use)', async () => {
+    // a client that connects at once, so the pool's only slot is held without a database
+    class InstantClient extends EventEmitter {
+      connect(cb: (err?: Error) => void) {
+        process.nextTick(cb)
+      }
+      end(cb?: () => void) {
+        cb?.()
+      }
+    }
+    const pool = new pg.Pool({
+      max: 1,
+      connectionTimeoutMillis: 50,
+      Client: InstantClient as unknown as typeof pg.Client,
+    })
+    const held = await pool.connect()
+    try {
+      const err = await pool.connect().catch((e: unknown) => e)
+      expect((err as Error).message).toBe('timeout exceeded when trying to connect')
+      expect(isDbUnavailable(err)).toBe(true)
+    } finally {
+      held.release()
+      await pool.end()
+    }
+  })
+
+  it('recognises a real refused connection by its code', async () => {
     const closed = createServer()
     await new Promise<void>((r) => closed.listen(0, '127.0.0.1', r))
-    const free = (closed.address() as import('node:net').AddressInfo).port
-    await new Promise((r) => closed.close(r))
-    const refused = new pg.Pool({ host: '127.0.0.1', port: free, connectionTimeoutMillis: 1000 })
-    refused.on('error', () => undefined)
+    const { port } = closed.address() as AddressInfo
+    await new Promise((r) => closed.close(r)) // nothing listens on the port any more
+    const pool = new pg.Pool({ host: '127.0.0.1', port, connectionTimeoutMillis: 2000 })
+    pool.on('error', () => undefined)
     try {
-      const err = await refused.query('select 1').catch((e: unknown) => e)
+      const err = await pool.query('select 1').catch((e: unknown) => e)
       expect((err as { code?: string }).code).toBe('ECONNREFUSED')
       expect(isDbUnavailable(err)).toBe(true)
     } finally {
-      await refused.end().catch(() => undefined)
+      await pool.end().catch(() => undefined)
     }
   })
 })
