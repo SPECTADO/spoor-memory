@@ -191,9 +191,12 @@ against 0.36). It needs a second service, so it is opt-in:
    Ollama has no authentication: keep its port off the public network.
 3. A project admin picks `ollama` under Settings, Embedding; the re-embed job does the rest. `SPOOR_EMBEDDING_DEFAULT=ollama`
    makes it the provider new projects start with.
-4. In each project that switched, lower the project setting `dedupe.related_min_cos` to about 0.55. The cosine scale differs:
-   embeddinggemma scores reworded duplicates 0.57 to 0.83 where the built-in model scores them 0.88 to 0.96, so at the default
-   `dedupe.threshold` (0.87, minimum 0.80) the "similar to" note on writes rarely appears. Identical text is still refused.
+4. Nothing to tune by default: the cosine scale differs (embeddinggemma scores reworded duplicates 0.65 to 0.94 where the
+   built-in model scores them 0.88 to 0.96), so a project whose active model is embeddinggemma takes its own defaults,
+   `dedupe.threshold` 0.75 and `dedupe.related_min_cos` 0.50, from the moment the re-embed cuts over (ADR-0028). Only keys
+   nobody set follow the model: a project that had saved either value keeps it, on the old model's scale, so check the two
+   numbers under Settings, Duplicates after switching. Other Ollama models keep the built-in model's defaults (0.87 and
+   0.70) and need tuning by hand. Identical text is refused whatever the threshold.
 
 Item text is sent to the Ollama host and nowhere else. Ollama unloads an idle model after 5 minutes, so the first search after
 a pause waits for the model to load; set `OLLAMA_KEEP_ALIVE=-1` on the Ollama server to keep it

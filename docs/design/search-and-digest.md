@@ -279,7 +279,7 @@ next: still true → spoor_verify ids=["m42"] · changed → spoor_remember id="
    A hit on a stale item adds `(stale; spoor_verify restores it)`. `allow_duplicate=true` skips the
    check (deviation D6).
 5. **Similar: saved and reported.** Otherwise the similar item is the first row with
-   `cos >= settings.dedupe.threshold` (default 0.87) and `values` null, else the first such row with values. The create
+   `cos >= settings.dedupe.threshold` (default 0.87, or the active model's own default, see Other models below) and `values` null, else the first such row with values. The create
    is saved. MCP adds one line after the service notes and leaves that item out of the `related:` line; the request log
    records `similar` and `similar_values_differ`:
 ```
@@ -298,10 +298,28 @@ remaining different facts score at most 0.868, apart from one whose claim is sta
 Hence the default 0.87. `query:` prefixes on both sides did not separate the classes better. The sample is small;
 recheck on a larger labelled set.
 
-**Other models (2026-11-10, ADR-0026).** The threshold and `dedupe.related_min_cos` are calibrated for e5 only. The same
-pairs with `embeddinggemma` (retrieval prompts): reworded duplicates 0.57 to 0.83, different facts 0.41 to 0.88. The classes
-separate better than with e5 (AUC 0.83 against 0.75) but far lower on the scale, below the setting's minimum of 0.80, so a
-project on `ollama` rarely gets the similar-item note and should lower `related_min_cos`. There are no per-model defaults yet.
+**Other models (2026-11-10, ADR-0028).** Cosines of different models sit on different scales, so the defaults of
+`dedupe.threshold` and `dedupe.related_min_cos` are per model. `resolveProjectSettings(stored, modelTag)` in
+`packages/shared/src/settings.ts` fills a `dedupe` key nobody stored from `dedupeDefaults(tag)` of the project's **active**
+model (`projects.embedding_model`, the model the duplicate check and the related query read), keyed by
+`<provider>:<model family>`; every read of `dedupe` goes through it (`ItemService.projectSettings`, `GET /projects/:slug`).
+During a re-embed the old model's defaults apply until the cut-over. A stored key always wins and is not rescaled when the
+model changes. The table holds one entry; every other model takes the e5 defaults:
+
+| active model | `threshold` | `related_min_cos` |
+|---|---|---|
+| `ollama:embeddinggemma` | 0.75 | 0.50 |
+| any other | 0.87 | 0.70 |
+
+Calibration of embeddinggemma, through `OllamaProvider` (`title: none | text: ` on both sides) and the real chunker, 256-item
+spoor-bench corpus, 40 reworded duplicates and 40 different facts on the same topics (the 20 spoor-bench pairs plus 60 written
+for this run), title-only probes against title + body items: every duplicate had its item as nearest neighbour, at 0.65 to
+0.94 (median 0.85). After the values guard the different facts score at most 0.65, apart from two whose claim is stated in the
+matched item's body (0.72 and 0.91). At 0.75 the note names the right item for 35 of 40 duplicates and fires for 1 of 40
+different facts (the 0.91 one); 0.80 gives 32 of 40, 0.87 gives 12. For the related floor: unrelated gold items pair below
+0.53 (99th percentile 0.45), `depends_on` pairs score 0.34 to 0.66, same-topic facts 0.42 to 0.91; at 0.50, 0.3% of unrelated
+pairs, 4 of 8 linked pairs and 30 of 40 same-topic facts pass. The ranges of both settings (0.60 to 0.99, 0.40 to 0.90) span
+both scales. e5 was not re-measured on the 80 pairs. One synthetic corpus, one run: recheck with real project data.
 
 ## 5a. Related items (link suggestions, ADR-0022)
 

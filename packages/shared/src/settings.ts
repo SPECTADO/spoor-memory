@@ -17,9 +17,10 @@ const fields = {
     decision_window_days: z.number().int().min(1).max(365),
   },
   dedupe: {
-    threshold: z.number().min(0.8).max(0.99),
+    /** The ranges span every supported model's cosine scale; the defaults are per model (`dedupeDefaults`). */
+    threshold: z.number().min(0.6).max(0.99),
     /** Minimum cosine of a related-item suggestion; read through `relatedMinCos` (kept below `threshold`). */
-    related_min_cos: z.number().min(0.5).max(0.9),
+    related_min_cos: z.number().min(0.4).max(0.9),
   },
   embedding: {
     /** A provider name enabled by env (`local` always); the server checks it against its registry. */
@@ -41,6 +42,37 @@ export const SETTINGS_DEFAULTS = {
 
 const f = fields
 const d = SETTINGS_DEFAULTS
+
+type DedupeDefaults = { readonly threshold: number; readonly related_min_cos: number }
+
+/**
+ * Dedupe defaults of models whose cosines sit on another scale than e5-small's, keyed by
+ * `<provider>:<model family>` (ADR-0028). embeddinggemma scores a reworded duplicate 0.65 to 0.94 (median
+ * 0.85) and a different fact on the same topic at most 0.65 once the values guard has run, where e5-small
+ * puts both near 0.9; unrelated items sit below 0.53. Every other model takes `SETTINGS_DEFAULTS.dedupe`.
+ */
+const DEDUPE_DEFAULTS_BY_MODEL: Readonly<Record<string, DedupeDefaults>> = {
+  'ollama:embeddinggemma': { threshold: 0.75, related_min_cos: 0.5 },
+}
+
+/**
+ * `<provider>:<model family>` of a model tag: `ollama:hf.co/org/EmbeddingGemma:300m/768` gives
+ * `ollama:embeddinggemma`, `local:Xenova/multilingual-e5-small@q8/384` gives `local:multilingual-e5-small`.
+ * `null` for a string that is not a model tag.
+ */
+export function embeddingModelKey(tag: string): string | null {
+  const m = /^([^:/]+):(.+)\/\d+$/.exec(tag)
+  if (!m) return null
+  const model = m[2] as string
+  const family = (model.slice(model.lastIndexOf('/') + 1).split(/[:@]/)[0] as string).toLowerCase()
+  return family === '' ? null : `${m[1]}:${family}`
+}
+
+/** The dedupe defaults for a project whose active embedding model has this tag. */
+export function dedupeDefaults(modelTag?: string | null): DedupeDefaults {
+  const key = modelTag ? embeddingModelKey(modelTag) : null
+  return (key !== null ? DEDUPE_DEFAULTS_BY_MODEL[key] : undefined) ?? d.dedupe
+}
 
 /** The resolved settings: missing keys take defaults, unknown keys are rejected. */
 export const projectSettings = z.strictObject({
@@ -67,6 +99,21 @@ export const projectSettings = z.strictObject({
   memory: z.strictObject({ exclusive: f.memory.exclusive.default(d.memory.exclusive) }).prefault({}),
 })
 export type ProjectSettings = z.infer<typeof projectSettings>
+
+/**
+ * Stored settings resolved for a project whose active embedding model is `modelTag`: a `dedupe` key the
+ * admin never set takes that model's default, every other missing key the schema default. A stored value the
+ * schema no longer accepts falls back to the defaults as a whole.
+ */
+export function resolveProjectSettings(stored: unknown, modelTag?: string | null): ProjectSettings {
+  const model = dedupeDefaults(modelTag)
+  const withModel = (s: Record<string, unknown>) => ({
+    ...s,
+    dedupe: isRecord(s.dedupe) ? { ...model, ...s.dedupe } : (s.dedupe ?? { ...model }),
+  })
+  const parsed = projectSettings.safeParse(isRecord(stored) ? withModel(stored) : (stored ?? withModel({})))
+  return parsed.success ? parsed.data : projectSettings.parse(withModel({}))
+}
 
 /** A partial settings object (`PATCH /api/v1/projects/:slug`, `POST /api/v1/projects`): deep-merged. */
 export const projectSettingsPatch = z.strictObject({

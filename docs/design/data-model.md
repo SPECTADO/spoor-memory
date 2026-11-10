@@ -205,7 +205,7 @@ CREATE INDEX device_codes_pending_idx ON device_codes (created_at) WHERE status 
 }
 ```
 Ranges: `stale_days` 1–3650, `archive_days` 1–3650, `observation_days` 1–365,
-`default_budget` 200–8000, `decision_window_days` 1–365, `threshold` 0.80–0.99, `related_min_cos` 0.50–0.90,
+`default_budget` 200–8000, `decision_window_days` 1–365, `threshold` 0.60–0.99, `related_min_cos` 0.40–0.90 (the two `dedupe` defaults shown are those of the built-in model; a key nobody stored takes the default of the project's active embedding model, 0.75 and 0.50 for embeddinggemma, search-and-digest.md §5, ADR-0028),
 `embedding.provider` ∈ providers enabled by env (`local` always). `memory.exclusive` is a boolean, default true (ADR-0015): when on, the
 MCP instructions, the `AGENTS.md` block and the SessionStart hook tell agents to use no other memory store. Changing the provider sets
 `embedding_target` (see search-and-digest.md §3); choosing the active model's provider again clears it.

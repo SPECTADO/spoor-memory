@@ -10,6 +10,7 @@ import {
   type ProjectSettings,
   type ProjectSettingsPatch,
   projectSettings,
+  resolveProjectSettings,
   SHARED_PROJECT_SLUG,
   settingsPatchPaths,
 } from '@spoor/shared'
@@ -24,10 +25,12 @@ import type { EmbeddingProvider } from '../../ports.js'
 import { assertCan, type UserContext, webPrincipal } from '../auth/index.js'
 import { accessFor, type ProjectAccess, type ProjectRow, projectNotFound } from './access.js'
 
-/** Stored settings with defaults filled in; a stored value the schema no longer accepts falls back to defaults. */
-export function resolveSettings(stored: unknown): ProjectSettings {
-  const parsed = projectSettings.safeParse(stored ?? {})
-  return parsed.success ? parsed.data : projectSettings.parse({})
+/**
+ * Stored settings with defaults filled in; a stored value the schema no longer accepts falls back to defaults.
+ * Pass the project's active model tag wherever `dedupe` is read or shown: its defaults are per model (ADR-0028).
+ */
+export function resolveSettings(stored: unknown, modelTag?: string | null): ProjectSettings {
+  return resolveProjectSettings(stored, modelTag)
 }
 
 /** Validate a merged settings object, reporting issues under `settings.` (400 `invalid_input`). */
@@ -189,7 +192,7 @@ export class ProjectService {
       name: p.name,
       description: p.description,
       kind: p.kind,
-      settings: resolveSettings(p.settings),
+      settings: resolveSettings(p.settings, p.embeddingModel),
       role: access.role,
       can_edit_library: access.can('library.write'),
       embedding: { model: p.embeddingModel, target: p.embeddingTarget, remaining },

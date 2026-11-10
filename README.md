@@ -124,9 +124,10 @@ The built-in model needs nothing. For better recall on reworded and non-English 
    re-embedded in the background; search keeps using the old model until the switch. To start new projects on it, also set
    `SPOOR_EMBEDDING_DEFAULT=ollama` in `.env`.
 
-5. **Lower the related-items floor.** In the same project's settings set `dedupe.related_min_cos` to about `0.55`:
-   embeddinggemma scores similar texts lower than the built-in model, so the defaults suggest too few links and the
-   "similar to" note on writes rarely appears.
+5. **Check the duplicate settings only if you had changed them.** embeddinggemma scores similar texts lower than the
+   built-in model, so a project on it defaults to a duplicate threshold of 0.75 and a related-items floor of 0.50 instead
+   of 0.87 and 0.70. Values you saved earlier under Settings, Duplicates are kept as they are and belong to the old
+   model's scale: set them again after the switch.
 
 Notes:
 
