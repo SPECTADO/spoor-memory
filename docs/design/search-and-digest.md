@@ -73,7 +73,8 @@ export interface EmbeddingProvider {
   `env.allowRemoteModels = false` and `env.cacheDir = null`; the weights are baked into the image. It
   calls `{ pooling: 'mean', normalize: true }` with prefixes `query: ` / `passage: ` added inside the
   provider only. The provider is a singleton with a promise queue (one inference at a time) and batches
-  of 8. **The model runs in a worker thread** (`providers/local-worker.ts`, driven by `InferenceWorker` in
+  of 8; the texts of one call are grouped by token count before batching, because a batch is padded to its
+  longest text (7 to 20 % faster on 16-chunk calls; a call of at most 8 texts is left as it is). **The model runs in a worker thread** (`providers/local-worker.ts`, driven by `InferenceWorker` in
   `providers/inference-worker.ts`, ADR-0029): onnxruntime-node's `run` is synchronous, so on the main thread
   every batch stalled the event loop for its whole length (about 600 ms for 8 full chunks on an M3 Max; 4
   turns of the loop while 32 chunks embedded, against 420 with the worker). The tokenizer stays on the main

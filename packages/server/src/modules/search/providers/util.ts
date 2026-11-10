@@ -15,6 +15,28 @@ export function batches<T>(items: readonly T[], size: number): T[][] {
   return out
 }
 
+/**
+ * Batches of `size` with texts of similar length together (shortest first), each entry carrying its index in
+ * `texts`. A batch is padded to its longest member, so a long text among short ones makes every one of them
+ * cost as much as it does; grouped by token count, a mixed run of the local model is about 10 to 20 % faster.
+ * `length` is the provider's token count: UTF-16 length is a poor stand-in (it left most of the padding in
+ * place for short memories). One batch or less is returned as it came, without measuring anything.
+ */
+export function batchesByLength(
+  texts: readonly string[],
+  size: number,
+  length: (text: string) => number,
+): { index: number; text: string }[][] {
+  const entries = texts.map((text, index) => ({ index, text }))
+  if (entries.length <= size) return entries.length > 0 ? [entries] : []
+  const measured = entries.map((e) => ({ e, n: length(e.text) }))
+  measured.sort((a, b) => a.n - b.n || a.e.index - b.e.index)
+  return batches(
+    measured.map((m) => m.e),
+    size,
+  )
+}
+
 /** Runs tasks one at a time, in order (one inference at a time keeps the HTTP server responsive). */
 export class SerialQueue {
   #tail: Promise<unknown> = Promise.resolve()

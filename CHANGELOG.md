@@ -19,6 +19,10 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
   (Ollama) now defaults to `dedupe.threshold` 0.75 and `dedupe.related_min_cos` 0.50; every other model keeps 0.87 and 0.70.
   With the old shared defaults the "similar to" note rarely appeared on embeddinggemma: on our 40 calibration pairs it
   fired for 12 reworded duplicates at 0.87 and fires for 35 at 0.75, with 1 of 40 different facts flagged. Values a project saved are kept as they are.
+- **Bulk embedding with the built-in model is faster.** A batch of 8 chunks is padded to its longest chunk; the chunks of
+  one call are now grouped by token count first. On this repository's ADRs and design docs, 16 chunks per call as the
+  `embed-pending` job sends them: 7 % faster for long chunks alone, 9 % for short memories alone, 20 % for a mix of both
+  (M3 Max, 2 threads). A call of 8 chunks or fewer, which is most single writes, is unchanged.
 - The allowed ranges are wider so they fit both cosine scales: `dedupe.threshold` 0.60 to 0.99 (was 0.80 to 0.99),
   `dedupe.related_min_cos` 0.40 to 0.90 (was 0.50 to 0.90).
 
