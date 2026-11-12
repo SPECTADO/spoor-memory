@@ -19,6 +19,8 @@ interface NumberField {
   step?: string
   /** Allowed range, mirrored from the shared schema for the message (the schema still decides). */
   range: [number, number]
+  /** An empty input saves `null` (the setting is off). */
+  nullable?: boolean
 }
 
 const GROUPS: {
@@ -87,6 +89,14 @@ const GROUPS: {
         hint: 'Suggestions below this cosine are hidden; always kept below the duplicate threshold. 0.40 to 0.90; the default depends on the embedding model.',
         step: '0.01',
         range: [0.4, 0.9],
+      },
+      {
+        key: 'refuse_threshold',
+        label: 'Refuse near-copies from (cosine)',
+        hint: 'Agents cannot save a reworded copy this similar, with the same values. Empty = off. 0.80 to 1.0, not below the duplicate threshold; on (0.90) by default only for embeddinggemma.',
+        step: '0.01',
+        range: [0.8, 1],
+        nullable: true,
       },
     ],
   },
@@ -200,19 +210,27 @@ function GeneralForm({ project }: { project: ProjectJson }) {
 function NumbersForm({ project, spec }: { project: ProjectJson; spec: (typeof GROUPS)[number] }) {
   const patch = usePatchProject(project.slug)
   const toast = useToast()
-  const current = project.settings[spec.group] as Record<string, number>
+  const current = project.settings[spec.group] as Record<string, number | null | undefined>
+  const shown = (k: string) => {
+    const v = current[k]
+    return v === null || v === undefined ? '' : String(v)
+  }
   const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(spec.fields.map((f) => [f.key, String(current[f.key])])),
+    Object.fromEntries(spec.fields.map((f) => [f.key, shown(f.key)])),
   )
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const changed = spec.fields.filter((f) => values[f.key] !== String(current[f.key]))
+  const changed = spec.fields.filter((f) => values[f.key] !== shown(f.key))
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    const group: Record<string, number> = {}
+    const group: Record<string, number | null> = {}
     const errs: Record<string, string> = {}
     for (const f of changed) {
       const raw = values[f.key] ?? ''
+      if (f.nullable && raw.trim() === '') {
+        group[f.key] = null
+        continue
+      }
       const n = raw.trim() === '' ? Number.NaN : Number(raw)
       if (Number.isNaN(n)) errs[`${spec.group}.${f.key}`] = 'Enter a number.'
       else group[f.key] = n

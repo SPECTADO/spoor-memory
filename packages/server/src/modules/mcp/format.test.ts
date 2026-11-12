@@ -123,6 +123,49 @@ describe('duplicateText', () => {
     )
     expect(text).toContain('different doc')
   })
+
+  it('a near-copy says so, with the cosine, and gives the three ways on', () => {
+    const text = duplicateText(
+      {
+        handle: 'm42',
+        revision: 3,
+        cos: 0.931,
+        title: 'Sessions live in Postgres, not in JWTs',
+        lifecycle: 'active',
+        space: 'memories',
+        type: 'fact',
+        match: 'near_copy',
+      },
+      'spoor_remember',
+    )
+    expect(text).toBe(
+      [
+        'DUPLICATE m42 r3 cos=0.93 [fact] Sessions live in Postgres, not in JWTs',
+        'Not saved; it is a near-copy of m42 (cos=0.93).',
+        'next: adds detail → spoor_remember id="m42" revision=3 … · replaces it → spoor_supersede old="m42" revision=3 new={…} · different claim → repeat with allow_duplicate=true',
+      ].join('\n'),
+    )
+  })
+
+  it('a near-copy doc is updated, never superseded', () => {
+    const text = duplicateText(
+      {
+        handle: 'd3',
+        revision: 2,
+        cos: 0.95,
+        title: 'Runbook',
+        lifecycle: 'active',
+        space: 'docs',
+        type: null,
+        match: 'near_copy',
+      },
+      'spoor_doc_write',
+    )
+    expect(text).toContain('Not saved; it is a near-copy of d3 (cos=0.95).')
+    expect(text).toContain('same doc → spoor_doc_write id="d3" revision=2 …')
+    expect(text).toContain('different doc → repeat with allow_duplicate=true')
+    expect(text).not.toContain('spoor_supersede')
+  })
 })
 
 describe('similarLine', () => {

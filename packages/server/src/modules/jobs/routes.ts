@@ -1,6 +1,6 @@
 /**
  * Jobs-module routes. Cookie surface (mounted at /api/v1): the project dashboard (api.md section 4.1), the
- * review queue lists (api.md section 8; the bulk action is the items module's), job status (api.md section
+ * review queue lists and "Not a duplicate" (api.md section 8; the bulk action is the items module's), job status (api.md section
  * 10), the admin "run now" trigger and the cookie twin of `decisions/undrafted` (api.md section 8). Bearer surface (mounted at /p/:slug/api):
  * `GET decisions/undrafted` (api.md section 7.2).
  */
@@ -46,6 +46,10 @@ export function jobsRoutes(
         if (!isSection(section)) throw new ApiError('not_found', { message: 'No such review section.' })
         return c.json(await s.review.list(a, section, readQuery(c, reviewListQuery)))
       })
+      // "Not a duplicate" on a possible duplicate (api.md section 8): editors
+      .post('/projects/:slug/review/duplicates/:pairId/dismiss', async (c) =>
+        c.json(await s.review.dismissDuplicate(await access(c), c.req.param('pairId'))),
+      )
       // the review queue's "Undrafted decisions" list (api.md section 8): any member, read-only
       .get('/projects/:slug/decisions/undrafted', async (c) => {
         const a = await access(c)

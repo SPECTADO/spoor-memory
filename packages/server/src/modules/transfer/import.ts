@@ -285,6 +285,42 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** Edge kinds that never cross into the shared space (they change the target's status / meaning). */
 const SYSTEM_KINDS = new Set<string>(['supersedes', 'drafted_from'])
 
+type EdgeRow = Pick<typeof edges.$inferInsert, 'srcId' | 'kind' | 'dstRef' | 'dstId' | 'createdAt'>
+
+/**
+ * One superseder per item (migration 0007, data-model.md section 3), the same repair as the migration: per
+ * target the earliest `supersedes` edge stays (`createdAt`, then input order); a later one becomes a `refines`
+ * edge, or goes when that `refines` edge is already there. Archives written before 0.7, and a folder where two
+ * files supersede one, would otherwise fail on the unique index. Returns the rows and how many changed.
+ */
+export function oneSuperseder<T extends EdgeRow>(rows: T[]): { rows: T[]; changed: number } {
+  const time = (r: T) => (r.createdAt instanceof Date ? r.createdAt.getTime() : 0)
+  const keep = new Map<string, T>()
+  for (const r of rows) {
+    if (r.kind !== 'supersedes' || !r.dstId) continue
+    const k = keep.get(r.dstId)
+    if (!k || time(r) < time(k)) keep.set(r.dstId, r)
+  }
+  const refines = new Set(rows.filter((r) => r.kind === 'refines').map((r) => `${r.srcId}|${r.dstRef}`))
+  let changed = 0
+  const out: T[] = []
+  for (const r of rows) {
+    if (r.kind !== 'supersedes' || !r.dstId || keep.get(r.dstId) === r) {
+      out.push(r)
+      continue
+    }
+    changed++
+    const key = `${r.srcId}|${r.dstRef}`
+    if (refines.has(key)) continue
+    refines.add(key)
+    out.push({ ...r, kind: 'refines' })
+  }
+  return { rows: out, changed }
+}
+
+const supersederNote = (n: number) =>
+  `${n} supersedes edge(s) pointed at an item that another item already supersedes; kept as refines.`
+
 /**
  * The edges an import never writes between a library page and another item (ADR-0014): `conflicts_with`
  * across the boundary in either direction, `drafted_from` into a library page, and any `supersedes` of or by a
@@ -556,7 +592,9 @@ async function importLossless(
     ]
   })
   notes.push(...dropped)
-  await batched(edgeRows, (chunk) => tx.insert(edges).values(chunk))
+  const one = oneSuperseder(edgeRows)
+  if (one.changed) notes.push(supersederNote(one.changed))
+  await batched(one.rows, (chunk) => tx.insert(edges).values(chunk))
 
   // audit: original timestamps, marked
   await batched(
@@ -623,7 +661,8 @@ async function importLossless(
 
 /**
  * New shared items may be the target of links that were dangling in projects (`[[shared:x]]`, typed edges to
- * `shared:<space>/<slug>`): resolve every such edge again (data-model.md section 3, shared scope).
+ * `shared:<space>/<slug>`): resolve every such edge again (data-model.md section 3, shared scope), except
+ * `supersedes` and `drafted_from`, which stay dangling.
  */
 async function resolveInboundSharedEdges(tx: Tx): Promise<void> {
   const index = new RefIndex(await sharedRows(tx))
@@ -633,6 +672,9 @@ async function resolveInboundSharedEdges(tx: Tx): Promise<void> {
     .innerJoin(items, eq(items.id, edges.srcId))
     .where(sql`${edges.dstId} IS NULL AND ${edges.dstRef} LIKE 'shared:%'`)
   for (const r of rows) {
+    // `supersedes` / `drafted_from` into `_shared` stay dangling, as on the lossless path (review S2): a
+    // project never marks a shared item superseded, and the one-superseder index is never hit
+    if (SYSTEM_KINDS.has(r.kind)) continue
     const rest = r.dstRef.slice('shared:'.length)
     const dst = r.kind === 'wikilink' ? index.resolveWikilink(rest, r.srcSpace) : index.bySpaceSlug(rest)
     if (!dst) continue
@@ -961,7 +1003,9 @@ async function importFiles(
     })),
     (chunk) => tx.insert(itemRevisions).values(chunk),
   )
-  await batched(edgeRows, (chunk) => tx.insert(edges).values(chunk))
+  const one = oneSuperseder(edgeRows)
+  if (one.changed) notes.push(supersederNote(one.changed))
+  await batched(one.rows, (chunk) => tx.insert(edges).values(chunk))
   await tx
     .update(projects)
     .set({ nextItemNumber: number, nextAdrNumber: adrCounter })

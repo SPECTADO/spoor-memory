@@ -32,6 +32,20 @@ describe('spoor whoami', () => {
     expect(JSON.parse((await run(['whoami', '--json'], { cwd: repo })).out)).toEqual(whoami())
   })
 
+  it('adds the update line when the server reports a newer release; --json stays the response', async () => {
+    const repo = makeRepo({ local: localEnv(srv.url) })
+    srv.on('GET /p/acme/api/whoami', { body: whoami(), headers: { 'Spoor-Latest-Version': '0.2.0' } })
+    const r = await run(['whoami'], { cwd: repo })
+    expect(r.out).toBe(
+      'ann@example.com · acme · editor · token "claude-code (device 2026-10-19)" spr_Ab12Cd34 · server 0.1.0\nSpoor 0.2.0 is available; this server runs 0.1.0. Ask your instance admin to update.\n',
+    )
+    expect(JSON.parse((await run(['whoami', '--json'], { cwd: repo })).out)).toEqual(whoami())
+    const status = await run(['status', '--remote'], { cwd: repo })
+    expect(status.out).toContain(
+      'update   Spoor 0.2.0 is available; this server runs 0.1.0. Ask your instance admin to update.',
+    )
+  })
+
   it('human mode exit codes: 3 rejected or unreachable, 1 not configured', async () => {
     const repo = makeRepo({ local: localEnv(srv.url) })
     srv.on('GET /p/acme/api/whoami', { status: 401, body: { error: 'invalid_token' } })

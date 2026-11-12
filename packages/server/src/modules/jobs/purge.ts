@@ -1,9 +1,10 @@
 /**
  * The `purge-ephemeral` job (cleanup-and-jobs.md section 4): deletes rows past fixed cutoffs from tables
- * that are not append-only, the agent request log among them (14 days, ADR-0018). Nothing else in Spoor
+ * that are not append-only, the agent request log among them (14 days, ADR-0018), and the host resource
+ * samples of the usage page (14 days, ADR-0033). Nothing else in Spoor
  * deletes automatically; content (items, revisions, audit) is never touched here.
  */
-import { REQUEST_LOG_KEEP_DAYS } from '@spoor/shared'
+import { REQUEST_LOG_KEEP_DAYS, RESOURCE_SAMPLE_KEEP_DAYS } from '@spoor/shared'
 import { sql } from 'drizzle-orm'
 import { type JobContext, type JobStats, throwIfAborted } from './types.js'
 
@@ -27,6 +28,8 @@ const STATEMENTS = {
     WHERE status <> 'running' AND started_at < now() - make_interval(days => ${JOB_RUNS_KEEP_DAYS}::int)`,
   request_log: sql`DELETE FROM request_log
     WHERE at < now() - make_interval(days => ${REQUEST_LOG_KEEP_DAYS}::int)`,
+  resource_samples: sql`DELETE FROM resource_samples
+    WHERE at < now() - make_interval(days => ${RESOURCE_SAMPLE_KEEP_DAYS}::int)`,
 } as const
 
 export async function runPurgeEphemeral(ctx: JobContext): Promise<JobStats> {
@@ -36,6 +39,7 @@ export async function runPurgeEphemeral(ctx: JobContext): Promise<JobStats> {
     invites: 0,
     job_runs: 0,
     request_log: 0,
+    resource_samples: 0,
   }
   for (const key of Object.keys(STATEMENTS) as (keyof typeof STATEMENTS)[]) {
     throwIfAborted(ctx.signal)

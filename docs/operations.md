@@ -63,7 +63,7 @@ secret value) and exits 1.
 | `LOG_LEVEL` | `info` | `trace` `debug` `info` `warn` `error` `fatal`; JSON lines on stdout, secrets redacted, no request bodies |
 | `SPOOR_DB_POOL_MAX` | `10` | maximum Postgres connections (1 to 500) |
 | `SPOOR_PUSH_CONCURRENCY` | `3` | repo pushes and ADR/doc imports in flight per project (1 to 64); the next one gets `503 busy` and `Retry-After: 5`. All projects together are capped at the larger of this and `SPOOR_DB_POOL_MAX` minus 2. Counted per app process |
-| `SPOOR_JOBS` | `on` | `off` disables the in-process scheduler (cleanup, embeddings, re-embed stop) |
+| `SPOOR_JOBS` | `on` | `off` disables the in-process scheduler (cleanup, embeddings, re-embed and the resource samples of `/admin/usage` stop) |
 | `SPOOR_EMBEDDING_DEFAULT` | `local` | provider new projects start with: `local`, `openai`, `voyage`, `ollama` (`openai` and `voyage` need their key, `ollama` its URL) |
 | `SPOOR_EMBED_THREADS` | `2` | ONNX threads of the local model; at most the CPUs given to the container |
 | `SPOOR_MODEL_DIR` | `/opt/spoor/models` | where the baked model lives; loaded offline |
@@ -71,6 +71,8 @@ secret value) and exits 1.
 | `SPOOR_VOYAGE_API_KEY`, `SPOOR_VOYAGE_EMBED_MODEL`, `SPOOR_VOYAGE_EMBED_DIMS` | unset | enables `voyage`; model and dimensions are required with the key. The request shape is tested only against a fake; try it on a scratch project before relying on it (deviations.md G15) |
 | `SPOOR_OLLAMA_URL`, `SPOOR_OLLAMA_EMBED_MODEL`, `SPOOR_OLLAMA_EMBED_DIMS` | unset, `embeddinggemma`, `768` | the URL enables the `ollama` provider (ADR-0026): embeddings from your own [Ollama](https://ollama.com) server. See "Ollama embeddings" in section 7 |
 | `SPOOR_TRUST_PROXY` | unset | see section 5 |
+| `SPOOR_UPDATE_CHECK` | `on` | `off` stops the update check, the only outbound call the server makes on its own. See "Update check" in section 7 |
+| `SPOOR_UPDATE_URL` | `https://raw.githubusercontent.com/SPECTADO/spoor-memory/main/deploy/latest-release.json` | where the update check reads the latest release (http or https). Point it at a mirror of that file if the server cannot reach GitHub |
 | `SPOOR_WEB_DIR`, `SPOOR_MIGRATIONS_DIR` | set by the image | only for runs outside the image |
 | `NODE_ENV` | `production` in the image | do not change |
 
@@ -168,6 +170,12 @@ as a library handle. Exports stay `spoor-export/1`, but a server still on 0.1.0 
 (`invalid_archive`), so upgrade the target before moving such a project. Rollback is a restore of the backup (see above): the
 migrations are forward-only.
 
+**Upgrading to a release with migration 0007 (one superseder per item).** No action is needed apart from the backup. Before 0007
+builds a unique index on supersedes links, it repairs items that more than one item supersedes: the earliest successor stays,
+and each later one becomes a `refines` link (or is dropped when that `refines` link already exists). Statuses do not change. When
+it changed anything, the app log shows one line `migration notice: edges_one_superseder: N extra supersedes edge(s) turned into
+refines, M deleted`. The later successors stay active; supersede them by hand if one of them should be the current version.
+
 **Re-embed on model change.** Vectors are tagged with the model that made them (`local:Xenova/multilingual-e5-small@q8/384`).
 Search only reads vectors of the project's active model, so a model change never mixes spaces.
 
@@ -193,10 +201,11 @@ against 0.36). It needs a second service, so it is opt-in:
    makes it the provider new projects start with.
 4. Nothing to tune by default: the cosine scale differs (embeddinggemma scores reworded duplicates 0.65 to 0.94 where the
    built-in model scores them 0.88 to 0.96), so a project whose active model is embeddinggemma takes its own defaults,
-   `dedupe.threshold` 0.75 and `dedupe.related_min_cos` 0.50, from the moment the re-embed cuts over (ADR-0028). Only keys
-   nobody set follow the model: a project that had saved either value keeps it, on the old model's scale, so check the two
-   numbers under Settings, Duplicates after switching. Other Ollama models keep the built-in model's defaults (0.87 and
-   0.70) and need tuning by hand. Identical text is refused whatever the threshold.
+   `dedupe.threshold` 0.75, `dedupe.related_min_cos` 0.50 and `dedupe.refuse_threshold` 0.90 (agents' near-copies at or
+   above it are not saved), from the moment the re-embed cuts over (ADR-0028). Only keys nobody set follow the model: a
+   project that had saved a value keeps it, on the old model's scale, so check the numbers under Settings, Duplicates after
+   switching. Other Ollama models keep the built-in model's defaults (0.87, 0.70, refusal off) and need tuning by hand.
+   Identical text is refused whatever the threshold. Saved near-duplicates are listed under Review, Possible duplicates.
 
 Item text is sent to the Ollama host and nowhere else. Ollama unloads an idle model after 5 minutes, so the first search after
 a pause waits for the model to load; set `OLLAMA_KEEP_ALIVE=-1` on the Ollama server to keep it
@@ -205,6 +214,25 @@ Other models work by name (`SPOOR_OLLAMA_EMBED_MODEL`, `SPOOR_OLLAMA_EMBED_DIMS`
 `nomic-embed-text` are built in, any other model is sent plain text. `nomic-embed-text` v1.5 is English only. Changing the
 model or dimensions later is a model change like any other (re-embed). Speed on CPU-only hosts has not been measured; Docker
 on macOS gives containers no GPU, so run Ollama natively there.
+
+### Update check
+
+The server tells instance admins when a newer Spoor release exists. This is the only outbound call it makes on its own
+(embedding providers you configure aside).
+
+- What it does: a plain `GET` of `SPOOR_UPDATE_URL` (by default `deploy/latest-release.json` on the repository's `main` branch),
+  shortly after start and then at most every 6 hours while the server is used. After a failure it waits 1 hour. Timeout 3 s;
+  it reads at most 8 KiB of the reply and treats anything longer as a failure.
+- What it sends: nothing about you. No version, host name, instance id, user or project data; the User-Agent is `spoor`.
+- What it shows: "Update available: X.Y.Z" in the sidebar footer and on `/admin/status`, for instance admins only, linking to the
+  release notes on GitHub. The CLI's session digest prints one line a day ("Spoor X.Y.Z is available; this server runs A.B.C. Ask
+  your instance admin to update."); it learns this from the server, never from GitHub itself.
+- When it fails (no network, a proxy, a bad file) nothing is shown and nothing breaks. No request waits on it.
+- Switch it off: `SPOOR_UPDATE_CHECK=off` in `.env`, then `docker compose up -d`. Air-gapped hosts can instead serve a copy of the
+  file and set `SPOOR_UPDATE_URL`.
+
+The file holds `{"schema":1, "version", "npm", "image", "released_at", "url"}`. The server accepts only a stable `x.y.z` whose npm
+and image versions equal `version`, and a `url` on `https://github.com/SPECTADO/`. Pre-releases are never announced.
 
 ## 8. Troubleshooting
 
@@ -251,6 +279,12 @@ responses (`request_id`) and in the UI's error panels, so a user report maps to 
 - Network: the app needs no outbound access with the local provider. Image build and first pull need Docker Hub and GHCR; the model
   weights are fetched at image build time, not at runtime.
 - Scaling out is not a goal: one container per client is the intended shape.
+- Watch them on `/admin/usage` (instance admins). The `resource-sample` job records process CPU, load average, RSS, heap,
+  event-loop delay, database size and connections, app pool use, open MCP sessions and pending embeddings every 5 minutes into
+  `resource_samples`; `purge-ephemeral` deletes rows older than 14 days (about 4,000 small rows at most). The page draws them
+  for 24 hours or 14 days, next to agent traffic from the request log. The job runs only with `SPOOR_JOBS=on`; with several
+  containers the one that holds the job's lease takes the sample, and the page names its host. A failed sample shows on
+  `/admin/jobs`; successful ones do not add rows to the job history.
 
 ## 10. Releasing
 
@@ -265,7 +299,13 @@ A release is one `v*` tag. `.github/workflows/release.yml` (ADR 0013) then:
    such as `v0.2.0-rc.1`, `latest` otherwise). A version already on npm is skipped, so a re-run after a failed image job is safe;
 4. after npm, pushes the multi-arch image (`linux/amd64`, `linux/arm64`) to `ghcr.io/spectado/spoor-memory` with tags `x.y.z` and
    `x.y` (a pre-release gets only `x.y.z-…`), plus `latest` when this is the highest `vX.Y.Z` tag (a pre-release or a patch on an older line never moves it), and `develop`
-   and `sha-<short>` when the tagged commit is still the head of `main`.
+   and `sha-<short>` when the tagged commit is still the head of `main`;
+5. for a stable release that is the highest `vX.Y.Z` tag, job `latest` reads what is really published (`npm view spoor-memory
+   dist-tags.latest` and `docker buildx imagetools inspect ghcr.io/spectado/spoor-memory:<version>`). When both carry the tag's
+   version, `node deploy/latest-release.mjs` rewrites `deploy/latest-release.json` and the job commits it to `main` as
+   `chore: latest-release.json says <version> [skip ci]`. Every server's update check reads that file (section 7). The job has
+   `contents: write` (no other job does) and `continue-on-error`, so it never fails the release; if it did not run, re-run it, or
+   run the script by hand and commit the file. If `main` is ever protected, give the job a token that may push to it.
 
 Between releases, `ci.yml` pushes the image of every green push to `main` as `develop` and `sha-<short>` (ADR-0019). It skips that
 push while the server's version is not on npm yet, so a bump commit gets `develop` from its release.
@@ -291,7 +331,7 @@ git tag "v$v" && git push origin main "v$v"
 | name | needed by | what |
 |---|---|---|
 | `NPM_TOKEN` | `release.yml` job `npm` | an npm granular access token with read and write on the `spoor-memory` package (for the first publish: on all packages of the account, then narrow it), no IP allow-list (GitHub runners). Exposed only to the publish step as `NODE_AUTH_TOKEN` |
-| `GITHUB_TOKEN` | jobs `image` (GHCR push) | automatic; the workflow asks for `packages: write` itself. Nothing to create |
+| `GITHUB_TOKEN` | jobs `image` (GHCR push), `latest` (push to `main`) | automatic; the workflow asks for `packages: write` and, in `latest` only, `contents: write` itself. Nothing to create |
 
 No other secret is used: provenance signs through the workflow's OIDC token (`id-token: write`); npm accepts provenance only
 from a **public** source repository (a private repository fails with `E422 Unsupported GitHub Actions source repository visibility`;

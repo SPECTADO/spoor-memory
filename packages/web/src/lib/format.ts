@@ -53,3 +53,26 @@ export function duration(seconds: number): string {
 }
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
+
+/** `1536000` → "1.5 MB" (1024-based). */
+export function bytes(n: number | null | undefined): string {
+  if (n === null || n === undefined) return '—'
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < BYTE_UNITS.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)} ${BYTE_UNITS[i]}`
+}
+
+/** `2026-11-03` → "Nov 3" (the day is UTC). */
+export function dayLabel(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString('en', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  })
+}

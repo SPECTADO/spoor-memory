@@ -167,7 +167,13 @@ export interface SearchPort {
 
 // ---- jobs (cleanup-and-jobs.md section 4) ---------------------------------------------------------------
 
-export const JOB_NAMES = ['cleanup', 'embed-pending', 'reembed', 'purge-ephemeral'] as const
+export const JOB_NAMES = [
+  'cleanup',
+  'embed-pending',
+  'reembed',
+  'purge-ephemeral',
+  'resource-sample',
+] as const
 export type JobName = (typeof JOB_NAMES)[number]
 
 export interface JobsPort {
@@ -227,13 +233,39 @@ export interface SearchJobs {
   chunkSweep(ctx: BatchContext): Promise<{ rechunked: number }>
 }
 
+// ---- update check (operations.md "Update check") -------------------------------------------------------
+
+/** The newest published Spoor release, as the update check last read it. */
+export interface UpdateInfo {
+  /** `x.y.z`, never a pre-release. */
+  latest: string
+  /** `latest` is newer than this server's version. */
+  available: boolean
+  /** Its release notes, always on https://github.com/SPECTADO/. */
+  url: string
+}
+
+export interface UpdatePort {
+  /** `false` when `SPOOR_UPDATE_CHECK=off`: `current()` is always null and nothing is fetched. */
+  readonly enabled: boolean
+  /**
+   * The cached result, never waiting on the network: a stale or empty cache starts one background refresh.
+   * null while off, before the first answer, and after a failed fetch.
+   */
+  current(): UpdateInfo | null
+}
+
 export interface Ports {
   embeddings: EmbeddingRegistry
   search: SearchPort
   jobs: JobsPort
+  updates: UpdatePort
 }
 
 // ---- placeholder ----------------------------------------------------------------------------------------
+
+/** The update check switched off: the placeholder for tests and for `SPOOR_UPDATE_CHECK=off`. */
+export const NO_UPDATES: UpdatePort = { enabled: false, current: () => null }
 
 /** No chunks, no dedupe: the SearchPort before the search module is bound (src/runtime.ts) and in tests. */
 export class NoopSearchPort implements SearchPort {

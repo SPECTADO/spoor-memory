@@ -1,11 +1,12 @@
 /**
- * `/projects/:slug/review?section=` (web-ui.md §7, cleanup-and-jobs.md §6): the five sections of the queue
+ * `/projects/:slug/review?section=` (web-ui.md §7, cleanup-and-jobs.md §6): the six sections of the queue
  * with per-row actions and a bulk Verify / Archive, plus the read-only "Undrafted decisions" tab (decision
  * memories no ADR was drafted from yet). Viewers see the queue without action controls. Every action removes its
  * row optimistically (`useReviewAction`) and rolls back with an error toast on failure.
  */
 import type {
   ConflictReviewRow,
+  DuplicateReviewRow,
   ExpiringReviewRow,
   ItemSummary,
   PushConflictReviewRow,
@@ -13,7 +14,8 @@ import type {
   StaleReviewRow,
   UndraftedDecision,
 } from '@spoor/shared'
-import { type ReactNode, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { type ReactNode, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import * as E from '../../api/endpoints'
 import {
@@ -26,6 +28,7 @@ import {
   useReviewSection,
   useUndraftedDecisions,
 } from '../../api/hooks'
+import { qk } from '../../api/keys'
 import { useCan } from '../../components/RequireRole'
 import { dateTime, fromNow, plural, relativeSeconds } from '../../lib/format'
 import { itemPath, useProjectSlug } from '../../lib/paths'
@@ -54,6 +57,7 @@ const SECTIONS: { key: ReviewSection; label: string }[] = [
   { key: 'archived', label: 'Recently archived' },
   { key: 'expiring', label: 'Expiring observations' },
   { key: 'conflicts', label: 'Conflicts' },
+  { key: 'duplicates', label: 'Possible duplicates' },
   { key: 'push_conflicts', label: 'Push conflicts' },
 ]
 
@@ -196,6 +200,13 @@ function UndraftedView({ slug, query }: { slug: string; query: ReturnType<typeof
 
 function SectionView({ slug, section }: { slug: string; section: ReviewSection }) {
   const query = useReviewSection(slug, section)
+  // The counts and the list are two requests; a change between them (the cleanup job) leaves the tab count behind
+  // the rows. Whenever the list data updates, refresh the counts. Counts refetching does not touch the list: no loop.
+  const qc = useQueryClient()
+  const listUpdatedAt = query.dataUpdatedAt
+  useEffect(() => {
+    if (listUpdatedAt > 0) void qc.invalidateQueries({ queryKey: qk.reviewCounts(slug) })
+  }, [qc, slug, listUpdatedAt])
   const project = useProject(slug)
   const editor = useCan('editor').allowed
   const admin = useCan('admin').allowed
@@ -229,6 +240,7 @@ function SectionView({ slug, section }: { slug: string; section: ReviewSection }
       {section === 'archived' && <ArchivedSection {...common} rows={rows as ItemSummary[]} />}
       {section === 'expiring' && <ExpiringSection {...common} rows={rows as ExpiringReviewRow[]} />}
       {section === 'conflicts' && <ConflictsSection {...common} rows={rows as ConflictReviewRow[]} />}
+      {section === 'duplicates' && <DuplicatesSection {...common} rows={rows as DuplicateReviewRow[]} />}
       {section === 'push_conflicts' && <PushSection slug={slug} rows={rows as PushConflictReviewRow[]} />}
       {loadMore}
     </>
@@ -776,6 +788,93 @@ function ConflictSide({ slug, label, item }: { slug: string; label: string; item
       <p className="mt-1 text-xs text-muted">
         {item.type ?? item.space}
         {item.confidence ? `, confidence ${item.confidence}` : ''}, verified {fromNow(item.last_verified_at)}
+      </p>
+    </div>
+  )
+}
+
+// ---- possible duplicates -------------------------------------------------------------------------------
+
+function DuplicatesSection({ slug, rows, canEdit }: SectionProps<DuplicateReviewRow>) {
+  const run = useRunner(slug, 'duplicates')
+  return (
+    <>
+      <p className="mb-3 text-sm text-muted">
+        Each pair was saved although the new item reads like the existing one. Keep one and supersede the
+        other, or mark the pair as not a duplicate.
+      </p>
+      <ul className="space-y-3">
+        {rows.map((r) => {
+          const key = reviewRowKey(r)
+          // supersede is for memories; docs are merged by hand
+          const memories = r.new.space === 'memories' && r.existing.space === 'memories'
+          return (
+            <li key={key} className="rounded-md border border-border p-3">
+              <p className="mb-2 text-xs text-muted">
+                Similarity {r.cos.toFixed(2)}, found {fromNow(r.created_at)}
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <DuplicateSide slug={slug} label="New" item={r.new} />
+                <DuplicateSide slug={slug} label="Existing" item={r.existing} />
+              </div>
+              {canEdit && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {memories && (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          run(
+                            [key],
+                            () => E.supersedeItem(slug, r.existing.handle, { new_id: r.new.handle }),
+                            `Kept ${r.new.handle}; ${r.existing.handle} is superseded.`,
+                          )
+                        }
+                      >
+                        Keep new
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          run(
+                            [key],
+                            () => E.supersedeItem(slug, r.new.handle, { new_id: r.existing.handle }),
+                            `Kept ${r.existing.handle}; ${r.new.handle} is superseded.`,
+                          )
+                        }
+                      >
+                        Keep existing
+                      </Button>
+                    </>
+                  )}
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      run([key], () => E.dismissDuplicate(slug, r.pair_id), 'Marked as not a duplicate.')
+                    }
+                  >
+                    Not a duplicate
+                  </Button>
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </>
+  )
+}
+
+function DuplicateSide({ slug, label, item }: { slug: string; label: string; item: ItemSummary }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-semibold text-muted uppercase">{label}</p>
+      <p className="mt-0.5 break-words">
+        <HandleLink slug={slug} row={item} /> <span className="font-medium">{item.title}</span>
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        {item.type ?? item.space}, created{' '}
+        <span title={dateTime(item.created_at)}>{fromNow(item.created_at)}</span>
       </p>
     </div>
   )

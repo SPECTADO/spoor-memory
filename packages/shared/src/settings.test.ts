@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   dedupeDefaults,
+  dedupeOrderIssue,
   embeddingModelKey,
   mergeSettings,
   projectSettings,
   projectSettingsPatch,
+  refuseThreshold,
   relatedMinCos,
   resolveProjectSettings,
   settingsPatchPaths,
@@ -16,7 +18,7 @@ describe('project settings', () => {
     expect(full).toEqual({
       cleanup: { stale_days: 30, archive_days: 90, observation_days: 7 },
       digest: { default_budget: 1500, decision_window_days: 30 },
-      dedupe: { threshold: 0.87, related_min_cos: 0.7 },
+      dedupe: { threshold: 0.87, related_min_cos: 0.7, refuse_threshold: null },
       embedding: { provider: 'local' },
       memory: { exclusive: true },
     })
@@ -79,8 +81,12 @@ describe('project settings', () => {
   })
 
   it('dedupe defaults are per embedding model; unknown models take the e5 defaults', () => {
-    expect(dedupeDefaults('ollama:embeddinggemma/768')).toEqual({ threshold: 0.75, related_min_cos: 0.5 })
-    const e5 = { threshold: 0.87, related_min_cos: 0.7 }
+    expect(dedupeDefaults('ollama:embeddinggemma/768')).toEqual({
+      threshold: 0.75,
+      related_min_cos: 0.5,
+      refuse_threshold: 0.9,
+    })
+    const e5 = { threshold: 0.87, related_min_cos: 0.7, refuse_threshold: null }
     expect(dedupeDefaults('local:Xenova/multilingual-e5-small@q8/384')).toEqual(e5)
     expect(dedupeDefaults('ollama:nomic-embed-text/768')).toEqual(e5)
     expect(dedupeDefaults('openai:embeddinggemma/768')).toEqual(e5) // the scale was measured through Ollama only
@@ -90,16 +96,21 @@ describe('project settings', () => {
 
   it('resolves stored settings for a model: unset dedupe keys follow the model, set ones stay', () => {
     const gemma = 'ollama:embeddinggemma/768'
-    expect(resolveProjectSettings({}, gemma).dedupe).toEqual({ threshold: 0.75, related_min_cos: 0.5 })
-    expect(resolveProjectSettings(null, gemma).dedupe).toEqual({ threshold: 0.75, related_min_cos: 0.5 })
+    const g = { threshold: 0.75, related_min_cos: 0.5, refuse_threshold: 0.9 }
+    expect(resolveProjectSettings({}, gemma).dedupe).toEqual(g)
+    expect(resolveProjectSettings(null, gemma).dedupe).toEqual(g)
     expect(resolveProjectSettings({ dedupe: { threshold: 0.9 } }, gemma).dedupe).toEqual({
+      ...g,
       threshold: 0.9,
-      related_min_cos: 0.5,
     })
     expect(resolveProjectSettings({ dedupe: { related_min_cos: 0.6 } }, gemma).dedupe).toEqual({
-      threshold: 0.75,
+      ...g,
       related_min_cos: 0.6,
     })
+    // a stored null (refusal off) wins over the model's 0.90
+    expect(
+      resolveProjectSettings({ dedupe: { refuse_threshold: null } }, gemma).dedupe.refuse_threshold,
+    ).toBe(null)
     // without a tag, and for every other section, it is the plain schema
     expect(resolveProjectSettings({ cleanup: { stale_days: 5 } })).toEqual(
       projectSettings.parse({ cleanup: { stale_days: 5 } }),
@@ -110,5 +121,47 @@ describe('project settings', () => {
     expect(resolveProjectSettings({ nope: 1 }, gemma).dedupe.threshold).toBe(0.75)
     expect(resolveProjectSettings([], gemma).dedupe.threshold).toBe(0.75)
     expect(relatedMinCos(resolveProjectSettings({}, gemma))).toBe(0.5)
+  })
+})
+
+describe('dedupe.refuse_threshold', () => {
+  it('is 0.80-1.0 or null, default off (null) for e5 and 0.90 for embeddinggemma', () => {
+    expect(projectSettings.parse({}).dedupe.refuse_threshold).toBeNull()
+    expect(
+      resolveProjectSettings({}, 'local:Xenova/multilingual-e5-small@q8/384').dedupe.refuse_threshold,
+    ).toBe(null)
+    expect(resolveProjectSettings({}, 'ollama:embeddinggemma/768').dedupe.refuse_threshold).toBe(0.9)
+    expect(projectSettingsPatch.safeParse({ dedupe: { refuse_threshold: 0.79 } }).success).toBe(false)
+    expect(projectSettingsPatch.safeParse({ dedupe: { refuse_threshold: 1.01 } }).success).toBe(false)
+    expect(projectSettingsPatch.safeParse({ dedupe: { refuse_threshold: 0.8 } }).success).toBe(true)
+    expect(projectSettingsPatch.safeParse({ dedupe: { refuse_threshold: 1 } }).success).toBe(true)
+    expect(projectSettingsPatch.parse({ dedupe: { refuse_threshold: null } })).toEqual({
+      dedupe: { refuse_threshold: null },
+    })
+    // null is stored (it turns the model default off), unlike undefined
+    expect(
+      mergeSettings({ dedupe: { refuse_threshold: 0.95 } }, { dedupe: { refuse_threshold: null } }),
+    ).toEqual({
+      dedupe: { refuse_threshold: null },
+    })
+  })
+
+  it('is read never below the threshold, and off stays off', () => {
+    expect(refuseThreshold(projectSettings.parse({}))).toBeNull()
+    expect(refuseThreshold(projectSettings.parse({ dedupe: { refuse_threshold: 0.9 } }))).toBe(0.9)
+    expect(
+      refuseThreshold(resolveProjectSettings({ dedupe: { threshold: 0.95 } }, 'ollama:embeddinggemma/768')),
+    ).toBe(0.95)
+  })
+
+  it('must be at least the threshold when an admin stored both', () => {
+    expect(dedupeOrderIssue({ dedupe: { threshold: 0.9, refuse_threshold: 0.85 } })).toEqual({
+      path: 'dedupe.refuse_threshold',
+      message: 'must be at least dedupe.threshold',
+    })
+    expect(dedupeOrderIssue({ dedupe: { threshold: 0.9, refuse_threshold: 0.9 } })).toBeNull()
+    expect(dedupeOrderIssue({ dedupe: { threshold: 0.9, refuse_threshold: null } })).toBeNull()
+    expect(dedupeOrderIssue({ dedupe: { refuse_threshold: 0.8 } })).toBeNull()
+    expect(dedupeOrderIssue(null)).toBeNull()
   })
 })

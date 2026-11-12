@@ -230,7 +230,8 @@ secrets (§5).
    `embedding_target` (re-embed starts, [search-and-digest.md](search-and-digest.md) §3). After a default-model upgrade the old model's weights are not in the
    image, so affected projects run full-text-only search until their re-embed cuts over (search says `vector search unavailable (re-embedding)`); plan
    upgrades of the default model for a quiet hour. A project of a few thousand items re-embeds in minutes.
-8. Start the scheduler (first tick after 30 s) and flip the server to ready: `/healthz` becomes 200.
+8. Start the scheduler (first tick after 30 s) and flip the server to ready: `/healthz` becomes 200. Then the first update check
+   starts in the background (unless `SPOOR_UPDATE_CHECK=off`); nothing waits on it.
 
 Steps 3 to 8 are `startup()` in `packages/server/src/runtime.ts`; `/healthz` reports `db`, `migrations` and `embedding`
 (`loading` → `ok`, or `failed` when the default provider's `ready()` threw) and stays 503 until all three are `ok`.
@@ -272,6 +273,8 @@ with placeholders and comments; `.env` is gitignored.
 | `SPOOR_OLLAMA_URL` | unset | Base URL of an Ollama server (`http://ollama:11434`); enables the `ollama` provider (ADR-0026). Item text is sent to that host |
 | `SPOOR_OLLAMA_EMBED_MODEL` | `embeddinggemma` | Ollama model name, pulled on that server beforehand. Letters, digits and `: / @ . _ -` |
 | `SPOOR_OLLAMA_EMBED_DIMS` | `768` | The model's vector width; a response of another width is refused |
+| `SPOOR_UPDATE_CHECK` | `on` | The update check: the only outbound call the server makes on its own (a plain GET of `SPOOR_UPDATE_URL`, no identifying data, 3 s timeout, cached 6 h, 1 h after a failure). `off` = no call and no notice. [operations.md](../operations.md) "Update check" |
+| `SPOOR_UPDATE_URL` | `https://raw.githubusercontent.com/SPECTADO/spoor-memory/main/deploy/latest-release.json` | The release file the check reads (http or https); a mirror for hosts that cannot reach GitHub |
 | `SPOOR_TRUST_PROXY` | unset (off) | Reverse proxies whose `X-Forwarded-For` is believed, for the requester IP the device approval page shows (the only use). Comma-separated keywords `loopback` (127.0.0.0/8, ::1) and `private` (10/8, 172.16/12, 192.168/16, fc00::/7), addresses and CIDR ranges, e.g. `private` for the compose `caddy` profile. When the TCP peer is trusted, the address is the right-most `X-Forwarded-For` hop that is not a trusted proxy (hops a client prepends do not count). Off, `off` or `false`: the TCP peer, forwarded headers ignored. Only list proxies that set or append `X-Forwarded-For` themselves; an invalid entry stops startup |
 | `NODE_ENV` | `production` in the image | Set by the image; do not change |
 
@@ -334,6 +337,14 @@ ADR 0013. Jobs in order; nothing is published unless every earlier job passed.
    the highest `vX.Y.Z` tag on `origin` (`git ls-remote --tags`, `sort -V`), and `develop` plus `type=sha` only when `main` has
    not moved past the tag (`git ls-remote origin refs/heads/main`, ADR-0019); `build-push-action` multi-arch
    with `push: true`.
+5. `latest` (`contents: write`, this job only; `continue-on-error: true`), after `npm` and `image`, only for a stable tag that is
+   the highest `vX.Y.Z`: checks out `main`, reads `npm view spoor-memory dist-tags.latest` and whether
+   `docker buildx imagetools inspect ghcr.io/<repo>:<version>` succeeds, and runs `node deploy/latest-release.mjs`. The script
+   writes `deploy/latest-release.json` (`{schema:1, version, npm, image, released_at, url}`) only when npm and the image both carry
+   the tag's version, keeps `released_at` on a re-run, and is unit-tested against the server's reader schema
+   (`packages/server/src/modules/status/latest-release-file.test.ts`). A changed file is committed to `main` with
+   `[skip ci]` (a `GITHUB_TOKEN` push starts no workflow anyway). The tag does not move. If `main` becomes protected, this job
+   needs a token allowed to push there.
 
 npm goes before the image so an image whose install doc pins `spoor-memory@X` is never pullable while `X` is missing on npm.
 `main` publishes `develop` and `sha-<short>` from `ci.yml` (§6.1, ADR-0019). No GitHub release is created.

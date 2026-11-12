@@ -26,6 +26,7 @@ import type { DbOrTx, Tx } from '../../lib/db.js'
 import { pgError } from '../../lib/db.js'
 import { ApiError } from '../../lib/errors.js'
 import type { Space } from '../../ports.js'
+import { itemHandle } from './resolve.js'
 import type { LoadedItem } from './rows.js'
 import { libraryGuardError } from './writes.js'
 
@@ -119,6 +120,80 @@ export async function resolveWikilinks(
  * Map the edge scope trigger to an API error: P0002 (out of `_shared`, across projects) is
  * `read_only_space`, SPL01 (the library edge rule) is `wrong_space`; rethrow anything else.
  */
+/** The partial unique index of 0007: at most one `supersedes` edge points at an item. */
+export const ONE_SUPERSEDER_INDEX = 'edges_one_superseder_uq'
+
+export interface Superseder {
+  id: string
+  handle: string
+  revision: number
+}
+
+/**
+ * The item whose `supersedes` edge points at `dst`, other than `exceptSrcId` (an idempotent retry by the
+ * same successor is not a conflict). Both ends are in one project, so the handle is the plain one.
+ * Call it with the old item's row locked, so a concurrent supersede is seen once it commits.
+ *
+ * An incoming `supersedes` edge counts only while its target is `superseded`. A target that went back to
+ * another status (allowed by `stickyStatus` once no live item supersedes it) keeps a stale edge; it is
+ * turned into `refines` here (deleted when that `refines` edge already exists), so the one-superseder
+ * slot is free again and the target can be superseded anew.
+ */
+export async function supersederOf(
+  db: DbOrTx,
+  dst: { id: string; status: string },
+  exceptSrcId: string,
+): Promise<Superseder | null> {
+  if (dst.status !== 'superseded') {
+    await releaseStaleSupersedes(db, dst.id, exceptSrcId)
+    return null
+  }
+  const [row] = await db
+    .select({
+      id: items.id,
+      space: items.space,
+      number: items.number,
+      adrNumber: items.adrNumber,
+      revision: items.revision,
+    })
+    .from(edges)
+    .innerJoin(items, eq(items.id, edges.srcId))
+    .where(and(eq(edges.dstId, dst.id), eq(edges.kind, 'supersedes'), ne(edges.srcId, exceptSrcId)))
+    .limit(1)
+  if (!row) return null
+  return { id: row.id, handle: itemHandle(row, false), revision: row.revision }
+}
+
+/** Stale incoming `supersedes` edges of a non-superseded item become `refines` (or go, if one exists). */
+async function releaseStaleSupersedes(db: DbOrTx, dstId: string, exceptSrcId: string): Promise<void> {
+  await db.execute(sql`
+    DELETE FROM edges e
+     WHERE e.dst_id = ${dstId} AND e.kind = 'supersedes' AND e.src_id <> ${exceptSrcId}
+       AND EXISTS (SELECT 1 FROM edges r
+                    WHERE r.src_id = e.src_id AND r.kind = 'refines' AND r.dst_ref = e.dst_ref)`)
+  await db.execute(sql`
+    UPDATE edges SET kind = 'refines'
+     WHERE dst_id = ${dstId} AND kind = 'supersedes' AND src_id <> ${exceptSrcId}`)
+}
+
+/**
+ * 409 `revision_conflict` for a supersede of an item that another item already supersedes (api.md 0.4):
+ * the message tells the writer to work on the successor; `details.superseded_by` names it.
+ */
+export function alreadySuperseded(oldHandle: string, oldRevision: number, by: Superseder): ApiError {
+  return new ApiError('revision_conflict', {
+    message: `${oldHandle} was already superseded by ${by.handle} r${by.revision}: read it and update or supersede ${by.handle} instead.`,
+    details: { current_revision: oldRevision, superseded_by: { handle: by.handle, revision: by.revision } },
+  })
+}
+
+/** The successor's handle when `err` is the `alreadySuperseded` conflict, else null. */
+export function supersededByOf(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.code !== 'revision_conflict') return null
+  const by = err.details?.superseded_by as { handle?: unknown } | undefined
+  return typeof by?.handle === 'string' ? by.handle : null
+}
+
 export function mapEdgeError(err: unknown): never {
   if (pgError(err)?.code === 'P0002') {
     throw new ApiError('read_only_space', {
@@ -383,10 +458,19 @@ export async function addEdge(
         createdByLabel: actor.label,
         clientName: actor.clientName,
       })
-      .onConflictDoNothing()
+      // only the (src, kind, dst_ref) key: a second superseder must raise, not vanish
+      .onConflictDoNothing({ target: [edges.srcId, edges.kind, edges.dstRef] })
       .returning({ id: edges.id })
     if (inserted[0]) return { created: true, id: inserted[0].id }
   } catch (err) {
+    if (pgError(err)?.code === '23505' && pgError(err)?.constraint === ONE_SUPERSEDER_INDEX) {
+      // the backstop: callers check `supersederOf` under the old item's row lock first
+      throw new ApiError('revision_conflict', {
+        message: 'This item was already superseded by another item.',
+        hint: 'Read it and update or supersede its successor instead.',
+        details: { current_revision: dst.revision },
+      })
+    }
     mapEdgeError(err)
   }
   const [existing] = await tx

@@ -3,6 +3,8 @@
 # push the multi-arch image to GHCR (version tags; `latest` when this is the highest release, `develop` and `sha-<short>` when
 # the tag is still main's head, ADR-0019; ci.yml moves `develop` with every push to main). npm goes first: the install doc
 # of server version X pins spoor-memory@X, so an image must never be pullable before its CLI exists. Secret: NPM_TOKEN (docs/operations.md).
+# Last, `latest` commits deploy/latest-release.json to main once npm and GHCR both carry a stable, newest release: the
+# file every server's update check reads (docs/operations.md "Update check"). It never fails the release.
 name: release
 on:
   push:
@@ -123,3 +125,43 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  latest:
+    needs: [version, npm, image]
+    if: needs.version.outputs.prerelease == 'false'
+    runs-on: ubuntu-24.04
+    continue-on-error: true # the release is out either way; a failed announcement is fixed by re-running this job
+    permissions: { contents: write } # this job only: push deploy/latest-release.json to main
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: main }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version-file: .nvmrc }
+      - id: newest
+        name: Is this the highest release? (an older line's patch must not move the announcement back)
+        run: |
+          newest="$(git ls-remote --tags --refs origin 'v*' | sed 's|.*refs/tags/v||' | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n1)"
+          echo "is_newest=$([ "$newest" = "$VERSION" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Write deploy/latest-release.json from what npm and GHCR really serve
+        if: steps.newest.outputs.is_newest == 'true'
+        run: |
+          npm_latest="$(npm view spoor-memory dist-tags.latest 2>/dev/null || true)"
+          image=""
+          if docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION" >/dev/null 2>&1; then image="$VERSION"; fi
+          echo "npm latest: ${npm_latest:-none}; image $VERSION: ${image:-missing}"
+          node deploy/latest-release.mjs --version "$VERSION" --npm "$npm_latest" --image "$image"
+      - name: Commit it to main
+        if: steps.newest.outputs.is_newest == 'true'
+        run: |
+          if git diff --quiet -- deploy/latest-release.json; then
+            echo "deploy/latest-release.json unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/latest-release.json
+          git commit -m "chore: latest-release.json says $VERSION [skip ci]"
+          # main may have moved while the release ran: rebase once and retry
+          git push origin HEAD:main || { git pull --rebase origin main && git push origin HEAD:main; }

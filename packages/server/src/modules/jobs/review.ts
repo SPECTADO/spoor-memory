@@ -1,12 +1,13 @@
 /**
- * The review queue, read side (cleanup-and-jobs.md section 6, api.md section 8): counts and the five
- * sections (stale, archived in the last 30 days, observations expiring within 48 h, open conflicts, push
+ * The review queue (cleanup-and-jobs.md section 6, api.md section 8): counts and the six sections (stale,
+ * archived in the last 30 days, observations expiring within 48 h, open conflicts, possible duplicates, push
  * conflicts), plus the bearer list of undrafted decision memories (api.md section 7.2) the Stop hook drafts
- * ADRs from. Listing only: every action (verify, archive, restore, supersede, delete, bulk) belongs to the
- * items module and reuses its endpoints.
+ * ADRs from. One action lives here, "Not a duplicate" (`dismissDuplicate`); every other one (verify, archive,
+ * restore, supersede, delete, bulk) belongs to the items module and reuses its endpoints.
  */
 
 import {
+  type DuplicateDismissResponse,
   type ItemSummary,
   REVIEW_SECTIONS,
   type ReviewCounts,
@@ -16,9 +17,13 @@ import {
 import { type AnyColumn, and, asc, desc, eq, inArray, isNotNull, type SQL, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { z } from 'zod'
-import { edges, items, projects } from '../../db/schema.js'
+import { duplicatePairs, edges, items, projects } from '../../db/schema.js'
+import { webActor, writeAudit } from '../../lib/audit.js'
 import type { AuthContext } from '../../lib/auth-context.js'
+import { actorLabel } from '../../lib/auth-context.js'
+import { withTx } from '../../lib/db.js'
 import type { ServerDeps } from '../../lib/deps.js'
+import { ApiError } from '../../lib/errors.js'
 import { cursorTimestamp, decodeTypedCursor, page, paginationQuery } from '../../lib/pagination.js'
 import {
   itemHandle,
@@ -93,7 +98,12 @@ interface SectionSpec {
   dir: 'asc' | 'desc'
 }
 
-function sectionSpec(section: Exclude<ReviewSection, 'conflicts'>): SectionSpec {
+/** Open possible duplicates: not dismissed, both items live (not archived, not superseded); deleted ones cascade. */
+const n = alias(items, 'n')
+const x = alias(items, 'x')
+const openPair = () => and(sql`${duplicatePairs.dismissedAt} IS NULL`, live(n), live(x))
+
+function sectionSpec(section: Exclude<ReviewSection, 'conflicts' | 'duplicates'>): SectionSpec {
   switch (section) {
     case 'stale':
       return {
@@ -154,12 +164,19 @@ export class ReviewService {
       .innerJoin(a, eq(a.id, edges.srcId))
       .innerJoin(b, eq(b.id, edges.dstId))
       .where(and(eq(edges.projectId, p), eq(edges.kind, 'conflicts_with'), live(a), live(b)))
+    const [dup] = await this.deps.db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(duplicatePairs)
+      .innerJoin(n, eq(n.id, duplicatePairs.newItemId))
+      .innerJoin(x, eq(x.id, duplicatePairs.existingItemId))
+      .where(and(eq(duplicatePairs.projectId, p), openPair()))
     return {
       counts: {
         stale: row?.stale ?? 0,
         archived: row?.archived ?? 0,
         expiring: row?.expiring ?? 0,
         conflicts: conf?.n ?? 0,
+        duplicates: dup?.n ?? 0,
         push_conflicts: row?.push_conflicts ?? 0,
       },
     }
@@ -169,6 +186,7 @@ export class ReviewService {
   async list(access: ProjectAccess, section: ReviewSection, q: z.output<typeof reviewListQuery>) {
     access.assert('project.read')
     if (section === 'conflicts') return this.#conflicts(access, q)
+    if (section === 'duplicates') return this.#duplicates(access, q)
     const spec = sectionSpec(section)
     const conds: SQL[] = [eq(items.projectId, access.project.id), spec.where]
     if (q.cursor !== undefined) {
@@ -268,6 +286,106 @@ export class ReviewService {
         b: summaries.get(r.bId) as ItemSummary,
       }),
     )
+  }
+
+  /** Open possible duplicates, newest first (`DuplicateReviewRow`). */
+  async #duplicates(access: ProjectAccess, q: z.output<typeof reviewListQuery>) {
+    const conds: SQL[] = [eq(duplicatePairs.projectId, access.project.id), openPair() as SQL]
+    if (q.cursor !== undefined) {
+      const [at, id] = decodeTsCursor(q.cursor)
+      conds.push(sql`(${duplicatePairs.createdAt}, ${duplicatePairs.id}) < (${at}::timestamptz, ${id}::uuid)`)
+    }
+    const rows = await this.deps.db
+      .select({
+        pairId: duplicatePairs.id,
+        cos: duplicatePairs.cos,
+        createdAt: duplicatePairs.createdAt,
+        cursorAt: cursorTimestamp(duplicatePairs.createdAt),
+        newId: duplicatePairs.newItemId,
+        existingId: duplicatePairs.existingItemId,
+      })
+      .from(duplicatePairs)
+      .innerJoin(n, eq(n.id, duplicatePairs.newItemId))
+      .innerJoin(x, eq(x.id, duplicatePairs.existingItemId))
+      .where(and(...conds))
+      .orderBy(desc(duplicatePairs.createdAt), desc(duplicatePairs.id))
+      .limit(q.limit + 1)
+    const ids = [...new Set(rows.flatMap((r) => [r.newId, r.existingId]))]
+    const summaries = new Map<string, ItemSummary>()
+    if (ids.length > 0) {
+      const view = { projectId: access.project.id, projectIsShared: access.shared }
+      for (const s of await loadItems(this.deps.db, inArray(items.id, ids)))
+        summaries.set(s.id, summaryJson(s, view))
+    }
+    return page(
+      rows,
+      q.limit,
+      (r) => [r.cursorAt, r.pairId],
+      (r) => ({
+        pair_id: r.pairId,
+        cos: Number(r.cos.toFixed(4)),
+        created_at: r.createdAt.toISOString(),
+        new: summaries.get(r.newId) as ItemSummary,
+        existing: summaries.get(r.existingId) as ItemSummary,
+      }),
+    )
+  }
+
+  /**
+   * `POST /api/v1/projects/:slug/review/duplicates/:pairId/dismiss` ("Not a duplicate"; editors, like the other
+   * review actions). Stores who and when; the pair stays in the table, so the same pair is not recorded again.
+   * 404 when the pair is not this project's; dismissing a dismissed pair returns it unchanged.
+   */
+  async dismissDuplicate(access: ProjectAccess, pairId: string): Promise<DuplicateDismissResponse> {
+    access.assert('item.write')
+    const notFound = () => new ApiError('not_found', { message: 'No such possible duplicate.' })
+    if (!z.uuid().safeParse(pairId).success) throw notFound()
+    const ctx = access.ctx
+    const label = actorLabel(ctx)
+    return withTx(this.deps.db, async (tx) => {
+      const [pair] = await tx
+        .select({
+          id: duplicatePairs.id,
+          dismissedAt: duplicatePairs.dismissedAt,
+          dismissedByLabel: duplicatePairs.dismissedByLabel,
+          newItemId: duplicatePairs.newItemId,
+          existingItemId: duplicatePairs.existingItemId,
+        })
+        .from(duplicatePairs)
+        .where(and(eq(duplicatePairs.id, pairId), eq(duplicatePairs.projectId, access.project.id)))
+        .for('update')
+      if (!pair) throw notFound()
+      if (pair.dismissedAt) {
+        return {
+          pair_id: pair.id,
+          dismissed_at: pair.dismissedAt.toISOString(),
+          dismissed_by: pair.dismissedByLabel ?? '',
+        }
+      }
+      const handles = new Map(
+        (await loadItems(tx, inArray(items.id, [pair.newItemId, pair.existingItemId]))).map((i) => [
+          i.id,
+          itemHandle(i),
+        ]),
+      )
+      const newHandle = handles.get(pair.newItemId) ?? pair.newItemId
+      const existingHandle = handles.get(pair.existingItemId) ?? pair.existingItemId
+      const [done] = await tx
+        .update(duplicatePairs)
+        .set({ dismissedAt: sql`now()`, dismissedBy: ctx.user?.id ?? null, dismissedByLabel: label })
+        .where(eq(duplicatePairs.id, pair.id))
+        .returning({ at: duplicatePairs.dismissedAt })
+      await writeAudit(tx, webActor(ctx), {
+        action: 'review.duplicate_dismissed',
+        summary: `${newHandle} is not a duplicate of ${existingHandle}`,
+        projectId: access.project.id,
+        itemId: pair.newItemId,
+        itemHandle: newHandle,
+        data: { pair_id: pair.id, existing: existingHandle },
+      })
+      const at = done?.at ?? new Date()
+      return { pair_id: pair.id, dismissed_at: at.toISOString(), dismissed_by: label }
+    })
   }
 
   /**

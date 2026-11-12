@@ -1,6 +1,6 @@
 # Architecture
 
-Status: implemented, 0.7.0 (2026-11-10). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) the near-duplicate rework (0.5), optional Ollama embeddings and resumable imports (0.6), and the instance status page (0.7). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
+Status: implemented, 0.7.1 (2026-11-12). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) the near-duplicate rework (0.5), optional Ollama embeddings and resumable imports (0.6), and the instance status and usage pages (0.7). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
 [docs/design/](docs/design/); terms are defined in [GLOSSARY.md](GLOSSARY.md). Where this file and a design file
 disagree, the design file wins and this file gets fixed. Open questions for the owner: [docs/design/deviations.md](docs/design/deviations.md).
 
@@ -38,14 +38,20 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │    │            hybrid FTS+vector RRF, dedupe, related items (related.ts),         │
  │    │            digest (6 tiers), anchor matcher                                   │
  │    ├─ jobs ── scheduler (in process, DB leases): cleanup, embed-pending, reembed,  │
- │    │          purge-ephemeral; review queue, dashboard, undrafted, job status      │
+ │    │          purge-ephemeral, resource-sample; review queue (+ "Not a duplicate"),│
+ │    │          dashboard,                                                           │
+ │    │          undrafted, job status                                                │
  │    ├─ requests ── agent request log (MCP tool calls, bearer REST), 14 days        │
  │    ├─ transfer ── export / import (zip, lossless or Markdown folder)               │
- │    ├─ status ── IA status page: version, embedding, record counts, DB size, runtime  │
+ │    ├─ status ── IA status page: version, embedding, record counts, DB size, runtime; │
+ │    │            IA usage page: request-log aggregates, host resource samples      │
+ │    │            (the resource-sample job's sampler, every 5 min, kept 14 days);   │
+ │    │            update check (GET latest-release.json from GitHub, cached 6 h)     │
  │    └─ healthz, instance, SPA static files (packages/web build); any other unknown  │
  │       API path or method is a JSON 404                                             │
  │  runtime.ts ── binds the ports: EmbeddingRegistry + SearchPort (search module),    │
- │                JobsPort (jobs scheduler); startup steps 3-8, graceful shutdown     │
+ │                JobsPort (jobs scheduler), UpdatePort (status module's update       │
+ │                check); startup steps 3-8, graceful shutdown                        │
  └───────────────────────────────────────┬────────────────────────────────────────────┘
                                          ▼
                       Postgres 17 + pgvector 0.8.7 (+ unaccent)  ──  named volume
@@ -62,6 +68,9 @@ internals, only its `index.ts` or a port):
  transfer ──▶ items (field cleaners, snapshot, ItemSummary)    review, search ──▶ items summaryJson (one ItemSummary)
  mcp ──▶ items (ItemService, incl. graph walk and related items) + search (SearchService, ContextService)    mirror ──▶ items (PushService)
  device ──▶ tokens (mintToken)    install ──▶ projects (default digest budget)
+ status ──StatusSources (callbacks wired in app.ts)──▶ mcp (open session count), jobs (scheduler on/off)
+ app.ts registers status's resource-sample job on the jobs scheduler (resourceSampleJob)
+ status, search (bearer context), tokens (whoami) ──UpdatePort──▶ the update check (cached; the only outbound call the server makes on its own)
  every module ──▶ @spoor/shared (anchors, wikilinks, frontmatter split/serialize, known keys, ITEM_LIMITS)
  every module ──▶ auth guards, projects access
 ```
@@ -71,7 +80,7 @@ internals, only its `index.ts` or a port):
 | REST API | everything the SPA, CLI and hooks need | [api.md](docs/design/api.md) |
 | MCP server | the nine agent tools, per-session client name, role-aware tool list | [mcp.md](docs/design/mcp.md) |
 | Auth | scrypt passwords, DB sessions, per-user and service tokens, device login, origin check, shared-space rules | [auth-and-security.md](docs/design/auth-and-security.md) |
-| Data model | 15 tables, handles, frontmatter, ADR numbering, export format | [data-model.md](docs/design/data-model.md) |
+| Data model | 17 tables, handles, frontmatter, ADR numbering, export format | [data-model.md](docs/design/data-model.md) |
 | Search and digest | chunking, providers, RRF, dedupe, related items, token estimator, `spoor_context`, anchors | [search-and-digest.md](docs/design/search-and-digest.md) |
 | Export and import | zip export, lossless and Markdown-folder import, zip hardening | [data-model.md](docs/design/data-model.md) §8, [api.md](docs/design/api.md) §9 |
 | Cleanup and jobs | lifecycle (stale, archived), observation expiry, review queue, scheduler | [cleanup-and-jobs.md](docs/design/cleanup-and-jobs.md) |
@@ -111,7 +120,7 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 4. Near-duplicate check (ADR-0025): the nearest chunk-0 vectors within the space, ignoring expired observations, observations when the new item is not one, and the item being superseded. An item with the same title and body returns as a
    non-error `DUPLICATE` result and bumps its `last_used_at`; nothing is saved. Otherwise the closest item with cosine >= threshold (default 0.87, or the active embedding model's own default: 0.75 for embeddinggemma, ADR-0028) is reported after the save as a `note: similar to …` line; one whose values (numbers, identifiers) differ on both sides is a different claim (`search/values.ts`).
 5. Otherwise, in one transaction: insert the item (observations get `expires_at`), revision 1, chunks, wikilink edges, typed relations, audit row (`via=mcp`, client name, token owner).
-6. The result is one short line, `OK created m58 r1 [fact]`, then one `note: linked …` per relation written and, after the commit, at most one `related:` line with up to three similar unlinked items and a ready `spoor_relate` hint (best effort: a failed lookup only drops the line). Updates carry the `revision` they read; a mismatch is `revision_conflict`, never last-write-wins. An update that also adds `relations` writes the edges in the same transaction (deviations.md H3).
+6. The result is one short line, `OK created m58 r1 [fact]`, then one `note: linked …` per relation written and, after the commit, at most one `related:` line with up to three similar unlinked items and a ready `spoor_relate` hint (best effort: a failed lookup only drops the line). Updates carry the `revision` they read; a mismatch is `revision_conflict`, never last-write-wins. An update that also adds `relations` writes the edges in the same transaction (deviations.md H3). A supersede locks the old item first, and an item has at most one superseder (unique index, migration 0007): a second supersede, concurrent or not, is `revision_conflict` naming the successor.
 
 ### 3.3 Human edit (web UI)
 1. The user opens an item (`/projects/:slug/i/:ref`), clicks Edit; the editor loads the item at revision N.
@@ -158,8 +167,9 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
    stale for `archive_days` (90) and not used within `stale_days` → archived (`stale`). Pinned items never go stale (pinning verifies). Each transition and its audit row are one statement.
    A project whose transaction fails is rolled back and skipped; the others are still cleaned and the run ends as `error`. The same job then runs the search module's chunk consistency sweep (§3.7 step 4).
 3. Reads already hide expired observations at once; the job only records the state.
-4. Humans handle the review queue: verify, edit, supersede, archive, restore (an expired observation must be promoted to a fact first), delete (project admin only). Decisions and docs never expire.
-5. `purge-ephemeral` removes expired sessions, old device codes, spent invites and old job rows. Nothing else is ever deleted automatically.
+4. Humans handle the review queue: verify, edit, supersede, archive, restore (an expired observation must be promoted to a fact first), delete (project admin only), and possible duplicates (pairs `duplicate_pairs` recorded when a create is saved next to a similar item: keep one, or "Not a duplicate"). Decisions and docs never expire.
+5. `purge-ephemeral` removes expired sessions, old device codes, spent invites, old job rows, request-log rows and host resource samples older than 14 days. Nothing else is ever deleted automatically.
+6. Every 5 minutes `resource-sample` writes one `resource_samples` row (CPU, load, memory, event-loop delay, database size and connections, pool use, MCP sessions, pending embeddings) for `/admin/usage` (ADR-0033).
 
 ### 3.7 Re-embed
 1. Trigger: a project admin changes `embedding.provider`, or at startup the default provider's tag differs from a project's `embedding_model`. The project gets `embedding_target = newTag`.
@@ -243,7 +253,7 @@ Design files (the *what*): [docs/design/](docs/design/). Research the choices re
 | 15 | [`0015-exclusive-memory.md`](docs/adr/0015-exclusive-memory.md) | Spoor is the agents' only memory by default (accepted) | project setting `memory.exclusive` (default true), the memory rule in the MCP instructions, the `AGENTS.md` block and the SessionStart check | mcp, cli-and-hooks, data-model |
 | 16 | [`0016-keep-the-global-cli-install-…md`](docs/adr/0016-keep-the-global-cli-install-the-sessionstart-digest-warns-when-the-cli-version.md) | Keep the global CLI install; the SessionStart digest warns when the CLI version differs from the server's (accepted) | `Spoor-Server-Version` header, version warning in the digest | cli-and-hooks, api |
 | 17 | [`0017-latest-image-follows-main.md`](docs/adr/0017-latest-image-follows-main.md) | The `latest` image follows `main`; version tags stay on `v*` releases (superseded by ADR-0019) | image tags | deployment |
-| 18 | [`0018-agent-request-log.md`](docs/adr/0018-agent-request-log.md) | An agent request log, kept 14 days, readable by admins (accepted) | `request_log` table (migration 0005), the Request log page, dashboard agent activity | api, data-model, web-ui |
+| 18 | [`0018-agent-request-log.md`](docs/adr/0018-agent-request-log.md) | An agent request log, kept 14 days, readable by admins (accepted) | `request_log` table (migration 0005), the Request log page, the dashboard's Latest activity (rows for admins only) and Status counts | api, data-model, web-ui |
 | 19 | [`0019-develop-image-follows-main.md`](docs/adr/0019-develop-image-follows-main.md) | `develop` follows `main`, `latest` follows the highest release (accepted) | image tags | deployment |
 | 20 | [`0020-no-file-attachment-storage-…md`](docs/adr/0020-no-file-attachment-storage-in-near-versions-json-goes-in-doc-bodies-files-stay.md) | No file or attachment storage in near versions: JSON goes in doc bodies, files stay in the repo with anchors (accepted) | scope | BRIEF |
 | 21 | [`0021-graph-view-…md`](docs/adr/0021-graph-view-one-project-wide-graph-endpoint-rendered-as-d3-force-svg-with-focus.md) | Graph view: one project-wide graph endpoint rendered as d3-force SVG with focus mode, read-only canvas plus side card (proposed) | `GET …/graph`, ghosts, the 1,500-node cap, `edges_project_idx`, `d3-force` 3.0.0, the Map page, dashboard link health | api, web-ui, data-model |

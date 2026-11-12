@@ -10,6 +10,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { MEMORY_TYPES } from '../../db/schema.js'
 import type { ServerDeps } from '../../lib/deps.js'
+import { setLatestVersionHeader } from '../../lib/latest-version.js'
 import { readQuery } from '../../lib/validate.js'
 import type { AppEnv } from '../../types.js'
 import { VERSION } from '../../version.js'
@@ -126,9 +127,11 @@ export function searchRoutes(deps: ServerDeps, services: SearchRouteServices) {
 }
 
 /** Bearer routes, mounted on `/p/:slug/api` after the bearer guards (any role). */
-export function searchBearerRoutes(services: SearchRouteServices) {
+export function searchBearerRoutes(deps: ServerDeps, services: SearchRouteServices) {
   return new Hono<AppEnv>().get('/context', async (c) => {
     const auth = requireBearer(c)
+    // a newer Spoor release, for the digest's advisory line (cli-and-hooks.md section 5.1 step 9)
+    setLatestVersionHeader(c, deps.ports.updates)
     return contextResponse(c, services, auth.project.id)
   })
 }

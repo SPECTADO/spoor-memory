@@ -357,7 +357,7 @@ describe('dedupe defaults follow the active embedding model (ADR-0028)', () => {
   it('an embeddinggemma project notes a near-duplicate at 0.75 and suggests from 0.50', async () => {
     const gem = await gemmaProject()
     const body = await json<{ settings: { dedupe: unknown } }>(await ed.get('/api/v1/projects/gem'))
-    expect(body.settings.dedupe).toEqual({ threshold: 0.75, related_min_cos: 0.5 })
+    expect(body.settings.dedupe).toEqual({ threshold: 0.75, related_min_cos: 0.5, refuse_threshold: 0.9 })
 
     const d = await dedupeIn(gem)
     expect(d.similar?.cos).toBeCloseTo(0.8, 3)
@@ -375,7 +375,7 @@ describe('dedupe defaults follow the active embedding model (ADR-0028)', () => {
   it('a value the admin set wins over the model default, key by key', async () => {
     const gem = await gemmaProject({ dedupe: { threshold: 0.9 } })
     const body = await json<{ settings: { dedupe: unknown } }>(await ed.get('/api/v1/projects/gem'))
-    expect(body.settings.dedupe).toEqual({ threshold: 0.9, related_min_cos: 0.5 })
+    expect(body.settings.dedupe).toEqual({ threshold: 0.9, related_min_cos: 0.5, refuse_threshold: 0.9 })
     expect((await dedupeIn(gem)).similar).toBeNull()
   })
 })

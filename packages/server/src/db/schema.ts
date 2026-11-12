@@ -8,6 +8,7 @@
  *   0004_library_guards.sql     library edge rules (SQLSTATE SPL01), no mcp/cli library revisions (SPL02),
  *                               reserved `l<n>` slug backfill
  *   0005_request_log.sql        generated: the agent request log (ADR-0018)
+ *   0008_duplicate_pairs.sql    generated: possible duplicates for the review queue
  * Enum-like columns are `text` + CHECK (as in the design), not Postgres enum types, so adding a value
  * is a one-line migration. The value lists are exported for the services and for zod schemas.
  */
@@ -23,6 +24,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  real,
   smallint,
   text,
   timestamp,
@@ -331,6 +333,7 @@ export const items = pgTable(
     index('items_tags_gin').using('gin', t.tags),
     index('items_anchored_idx').on(t.projectId).where(sql`cardinality(anchors) > 0`),
     index('items_cleanup_idx').on(t.projectId, t.lifecycle).where(sql`space = 'memories'`),
+    index('items_created_idx').on(t.createdAt), // /admin/usage: items created per day
     check('items_space_check', inList('space', SPACES)),
     check('items_adr_number_check', raw('adr_number BETWEEN 1 AND 99999')),
     check('items_slug_check', raw("slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(slug) <= 80")),
@@ -394,6 +397,7 @@ export const itemRevisions = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.itemId, t.revision] }),
+    index('item_revisions_created_idx').on(t.createdAt), // /admin/usage: revisions written per day
     check('item_revisions_change_check', inList('change', REVISION_CHANGES)),
     check('item_revisions_via_check', inList('via', VIAS)),
   ],
@@ -449,11 +453,45 @@ export const edges = pgTable(
   (t) => [
     unique('edges_src_kind_dst_ref_uq').on(t.srcId, t.kind, t.dstRef),
     index('edges_dst_idx').on(t.dstId, t.kind),
+    // one superseder per item (0007, which first repairs older duplicates); NULL dst_id (dangling) never clashes
+    uniqueIndex('edges_one_superseder_uq').on(t.dstId).where(sql`kind = 'supersedes'`),
     index('edges_project_idx').on(t.projectId), // the project graph (0006)
     index('edges_dangling_idx').on(t.projectId, t.dstRef).where(sql`dst_id IS NULL`),
     check('edges_kind_check', inList('kind', EDGE_KINDS)),
     check('edges_no_self_loop_check', raw('src_id <> dst_id')),
     // scope trigger spoor_edge_scope: 0002_triggers_and_hnsw.sql
+  ],
+)
+
+/**
+ * A create saved next to a similar item (cos at or above `dedupe.threshold`, values agree): the review queue's
+ * "Possible duplicates" section (cleanup-and-jobs.md section 6). One row per pair; it goes with either item.
+ * `dismissed_*`: an editor said "Not a duplicate".
+ */
+export const duplicatePairs = pgTable(
+  'duplicate_pairs',
+  {
+    id: id(),
+    projectId: uuid()
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    newItemId: uuid()
+      .notNull()
+      .references(() => items.id, { onDelete: 'cascade' }),
+    existingItemId: uuid()
+      .notNull()
+      .references(() => items.id, { onDelete: 'cascade' }),
+    cos: real().notNull(),
+    createdAt: tstz().notNull().defaultNow(),
+    dismissedAt: tstz(),
+    dismissedBy: uuid().references(() => users.id, { onDelete: 'set null' }),
+    dismissedByLabel: text(),
+  },
+  (t) => [
+    unique('duplicate_pairs_pair_uq').on(t.newItemId, t.existingItemId),
+    index('duplicate_pairs_open_idx').on(t.projectId, t.createdAt.desc()).where(sql`dismissed_at IS NULL`),
+    index('duplicate_pairs_existing_idx').on(t.existingItemId),
+    check('duplicate_pairs_distinct_check', raw('new_item_id <> existing_item_id')),
   ],
 )
 
@@ -558,6 +596,32 @@ export const requestLog = pgTable(
   ],
 )
 
+/**
+ * Host resource samples for /admin/usage (ADR-0033): one row every 5 minutes from the `resource-sample` job,
+ * written by whichever instance holds the job's lease (`host`). Deleted after 14 days (`purge-ephemeral`).
+ * Nullable columns are values the sampler could not read (no pool counters, first CPU sample).
+ */
+export const resourceSamples = pgTable(
+  'resource_samples',
+  {
+    id: bigint({ mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    at: tstz().notNull().defaultNow(),
+    host: text().notNull(),
+    cpuPercent: real(), // process CPU since the previous sample, percent of one core
+    loadAvg1: real().notNull(),
+    rssBytes: bigint({ mode: 'number' }).notNull(),
+    heapUsedBytes: bigint({ mode: 'number' }).notNull(),
+    eventLoopDelayMs: real(), // p99 since the previous sample
+    dbSizeBytes: bigint({ mode: 'number' }).notNull(),
+    dbConnections: integer().notNull(),
+    poolTotal: integer(),
+    poolWaiting: integer(),
+    mcpSessions: integer().notNull(),
+    embeddingsPending: integer().notNull(),
+  },
+  (t) => [index('resource_samples_at_idx').on(t.at)],
+)
+
 export const TABLES = {
   users,
   sessions,
@@ -570,8 +634,10 @@ export const TABLES = {
   itemRevisions,
   chunks,
   edges,
+  duplicatePairs,
   auditLog,
   jobLocks,
   jobRuns,
   requestLog,
+  resourceSamples,
 } as const

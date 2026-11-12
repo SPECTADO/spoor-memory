@@ -94,6 +94,7 @@ async function bootServer(): Promise<void> {
     SPOOR_ADMIN_PASSWORD: ADMIN.password,
     SPOOR_WEB_DIR: join(tmpdir(), 'spoor-e2e-no-spa'),
     NODE_ENV: 'test',
+    SPOOR_UPDATE_CHECK: 'off',
   })
   const logger = pino({ level: 'silent' })
   const { pool, db } = createDb(config.DATABASE_URL, 5)

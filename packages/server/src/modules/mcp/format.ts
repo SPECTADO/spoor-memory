@@ -71,7 +71,11 @@ export function errorText(code: string, message?: string, hint?: string): string
 export function apiErrorText(err: ApiError, hints: Partial<Record<string, string>> = {}): string {
   const d = err.details ?? {}
   let hint = err.hint ?? hints[err.code]
-  if (err.code === 'revision_conflict' && typeof d.current_revision === 'number') {
+  const by = d.superseded_by as { handle?: unknown } | undefined
+  if (err.code === 'revision_conflict' && typeof by?.handle === 'string') {
+    // the message already says what to do (alreadySuperseded); the hint is the read
+    hint = `spoor_get ids=["${by.handle}"]`
+  } else if (err.code === 'revision_conflict' && typeof d.current_revision === 'number') {
     hint = `current r${d.current_revision}; re-read with spoor_get and re-apply`
   } else if (err.code === 'slug_taken' && typeof d.handle === 'string' && typeof d.revision === 'number') {
     hint = `exists as ${d.handle} r${d.revision}; update it with id="${d.handle}" revision=${d.revision}`
@@ -94,16 +98,39 @@ export interface DuplicateView {
   lifecycle: string
   space: Space
   type: string | null
+  /** `near_copy`: refused at or above `dedupe.refuse_threshold`; default `same_text`. */
+  match?: 'same_text' | 'near_copy'
 }
 
-/** search-and-digest.md section 5: the non-error DUPLICATE result (the same title and body already exist). */
+/**
+ * search-and-digest.md section 5: the non-error DUPLICATE result. `same_text`: the same title and body already
+ * exist. `near_copy`: a reworded copy at or above `dedupe.refuse_threshold`; the reply gives the ways on.
+ */
 export function duplicateText(dup: DuplicateView, tool: 'spoor_remember' | 'spoor_doc_write'): string {
   const stale = dup.lifecycle === 'stale' ? '(stale; spoor_verify restores it) ' : ''
+  const cos = dup.cos.toFixed(2)
+  const head = `DUPLICATE ${dup.handle} r${dup.revision} cos=${cos} [${tagOf(dup)}] ${stale}${oneLine(dup.title)}`
+  const update = `${tool} id="${dup.handle}" revision=${dup.revision} …`
+  if (dup.match === 'near_copy') {
+    const ways =
+      dup.space === 'docs'
+        ? [`same doc → ${update}`, 'different doc → repeat with allow_duplicate=true']
+        : [
+            `adds detail → ${update}`,
+            `replaces it → spoor_supersede old="${dup.handle}" revision=${dup.revision} new={…}`,
+            'different claim → repeat with allow_duplicate=true',
+          ]
+    return [
+      head,
+      `Not saved; it is a near-copy of ${dup.handle} (cos=${cos}).`,
+      `next: ${ways.join(' · ')}`,
+    ].join('\n')
+  }
   const what = dup.space === 'docs' ? 'different doc' : 'different fact'
   return [
-    `DUPLICATE ${dup.handle} r${dup.revision} cos=${dup.cos.toFixed(2)} [${tagOf(dup)}] ${stale}${oneLine(dup.title)}`,
+    head,
     'Not saved; the existing item has the same text.',
-    `next: still true → spoor_verify ids=["${dup.handle}"] · changed → ${tool} id="${dup.handle}" revision=${dup.revision} … · ${what} → repeat with allow_duplicate=true`,
+    `next: still true → spoor_verify ids=["${dup.handle}"] · changed → ${update} · ${what} → repeat with allow_duplicate=true`,
   ].join('\n')
 }
 

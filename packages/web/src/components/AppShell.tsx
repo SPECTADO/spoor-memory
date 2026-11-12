@@ -7,10 +7,10 @@ import { useIsFetching, useIsMutating } from '@tanstack/react-query'
 import { Menu, Search, X } from 'lucide-react'
 import { type FormEvent, useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router'
-import { useInstance, useMe } from '../api/hooks'
+import { useInstance, useMe, useUpdateInfo } from '../api/hooks'
 import { projectPath, useCurrentProjectSlug } from '../lib/paths'
-import { isKnownVersion, versionsDiffer, WEB_VERSION } from '../lib/version'
-import { IconButton, Input } from '../ui'
+import { isKnownVersion, versionsDiffer, versionUrl, WEB_VERSION } from '../lib/version'
+import { ExternalLink, IconButton, Input } from '../ui'
 import { AccountMenu } from './AccountMenu'
 import { AdminNav, ProjectNav } from './Nav'
 import { OfflineBanner } from './OfflineBanner'
@@ -74,7 +74,7 @@ export function AppShell() {
               </Link>
             </nav>
           )}
-          <VersionFooter />
+          <VersionFooter admin={!!me.data?.user.is_admin} />
         </aside>
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 sm:px-6 focus:outline-none">
           <Outlet />
@@ -114,25 +114,44 @@ function ProjectSearchBox({ slug }: { slug: string }) {
 }
 
 /**
- * Bottom of the sidebar: the web UI's version and, once known, the server's (a `0.0.0` fallback is not shown).
- * When the two differ the line turns into a warning with a reload button: this tab runs an old web build.
+ * Bottom of the sidebar: the web UI's version and, once known, the server's (a `0.0.0` fallback is not shown), each
+ * linking to its GitHub release (the repository while unknown). When the two differ the line turns into a warning
+ * with a reload button: this tab runs an old web build. Instance admins also see "Update available" when the
+ * server's update check knows a newer release; the browser itself never calls GitHub.
  */
-function VersionFooter() {
+function VersionFooter({ admin }: { admin: boolean }) {
   const server = useInstance().data?.version
+  const update = useUpdateInfo(admin).data?.update
   const stale = versionsDiffer(WEB_VERSION, server)
   return (
-    <p className={`mt-auto px-2 pt-4 text-xs ${stale ? 'text-warning' : 'text-muted'}`}>
-      {isKnownVersion(WEB_VERSION) ? `Web ${WEB_VERSION}` : 'Web'}
-      {isKnownVersion(server) && <> · Server {server}</>}
-      {stale && (
-        <>
-          {' · '}
-          <button type="button" className="underline" onClick={() => window.location.reload()}>
-            Reload to update
-          </button>
-        </>
+    <div className={`mt-auto space-y-1 px-2 pt-4 text-xs ${stale ? 'text-warning' : 'text-muted'}`}>
+      <p>
+        <ExternalLink href={versionUrl(WEB_VERSION)}>
+          {isKnownVersion(WEB_VERSION) ? `Web ${WEB_VERSION}` : 'Web'}
+        </ExternalLink>
+        {isKnownVersion(server) && (
+          <>
+            {' · '}
+            <ExternalLink href={versionUrl(server)}>Server {server}</ExternalLink>
+          </>
+        )}
+        {stale && (
+          <>
+            {' · '}
+            <button type="button" className="underline" onClick={() => window.location.reload()}>
+              Reload to update
+            </button>
+          </>
+        )}
+      </p>
+      {admin && update?.available && (
+        <p>
+          <ExternalLink href={update.url} className="font-medium text-accent">
+            Update available: {update.latest}
+          </ExternalLink>
+        </p>
       )}
-    </p>
+    </div>
   )
 }
 

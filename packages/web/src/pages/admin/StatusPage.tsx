@@ -1,17 +1,21 @@
 /**
  * `/admin/status` (instance admin): what this deployment runs and holds — version, embedding providers,
- * record counts, database size, runtime stats (api.md §10.4). Read-only; refreshes every 15 s.
+ * record counts, database size, runtime stats (api.md §10.4). Read-only; refreshes every 15 s. Usage over
+ * time is on `/admin/usage` (UsagePage).
  */
 import type { ReactNode } from 'react'
 import { useInstanceStatus } from '../../api/hooks'
 import type { InstanceStatusJson } from '../../api/types'
-import { dateTime, duration } from '../../lib/format'
+import { bytes, dateTime, duration } from '../../lib/format'
+import { versionUrl } from '../../lib/version'
 import {
   Alert,
   Badge,
   Button,
+  ButtonLink,
   cx,
   ErrorState,
+  ExternalLink,
   PageHeader,
   SkeletonRows,
   Table,
@@ -22,19 +26,7 @@ import {
   Tr,
 } from '../../ui'
 
-const UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
-
-/** `1536000` → "1.5 MB" (1024-based). */
-export function bytes(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '—'
-  let v = n
-  let i = 0
-  while (v >= 1024 && i < UNITS.length - 1) {
-    v /= 1024
-    i++
-  }
-  return `${i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)} ${UNITS[i]}`
-}
+export { bytes }
 
 const num = (n: number | null | undefined) => (n === null || n === undefined ? '—' : n.toLocaleString('en'))
 
@@ -108,9 +100,12 @@ export function StatusPage() {
         title="Status"
         description="What this deployment runs and holds. Refreshes every 15 seconds."
         actions={
-          <Button onClick={() => q.refetch()} loading={q.isFetching && !q.isPending}>
-            Refresh
-          </Button>
+          <>
+            <ButtonLink to="/admin/usage">Usage over time</ButtonLink>
+            <Button onClick={() => q.refetch()} loading={q.isFetching && !q.isPending}>
+              Refresh
+            </Button>
+          </>
         }
       />
       {q.isPending ? (
@@ -140,7 +135,19 @@ function StatusView({ s }: { s: InstanceStatusJson }) {
         <Card title="Installation">
           <Facts>
             <Fact label="Version" mono>
-              {i.version}
+              <ExternalLink href={versionUrl(i.version)}>{i.version}</ExternalLink>
+              {s.update && (
+                <span className="font-sans">
+                  {' · '}
+                  {s.update.available ? (
+                    <ExternalLink href={s.update.url} className="font-medium text-accent">
+                      Update available: {s.update.latest}
+                    </ExternalLink>
+                  ) : (
+                    <>latest {s.update.latest}</>
+                  )}
+                </span>
+              )}
             </Fact>
             <Fact label="Public URL" mono>
               {i.public_url}

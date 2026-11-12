@@ -79,6 +79,9 @@ src/
                       sessions bound to their token (sessions.ts: idle TTL, sweep, caps), own bearer auth and 1 MB cap
                       (routes.ts), role-aware tool list (server.ts), the nine tools' contract (tools.ts) and handlers
                       (handlers.ts) delegating to ItemService / SearchService / ContextService, text output (format.ts)
+    status/           IA status snapshot (service.ts), the usage page's request-log aggregates and resource series
+                      (usage.ts, `GET /status/usage`), the `resource-sample` job's sampler (sampler.ts; app.ts
+                      registers the job), the update check (update-check.ts); other modules only via StatusSources
 test/                 integration-test harness and the in-memory port fakes (see Tests)
 ```
 
@@ -144,12 +147,14 @@ Authorisation on every route follows one pattern:
 | `EmbeddingProvider`, `EmbeddingRegistry` | search module, `createEmbeddingRegistry(config)` (local ONNX always; OpenAI / Voyage when keyed, Ollama when its URL is set) | search, projects (provider settings), transfer, `/api/v1/instance`, startup readiness |
 | `SearchPort` (`prepareChunks`, `dedupeCandidates`, `indexItemChunks`) | search module, `SearchService` | item service and push, transfer (chunk rebuild after import), MCP tools later |
 | `JobsPort` (`enqueue`) | jobs module, `Scheduler` | items (`embed-pending`), projects (`reembed`), transfer, startup (`reembed` after a target sync) |
+| `UpdatePort` (`enabled`, `current()`) | status module, `createUpdateChecker` (`SPOOR_UPDATE_CHECK`, `SPOOR_UPDATE_URL`; cached, never waits on the network) | `GET /api/v1/status`, `GET /api/v1/status/update`, the `Spoor-Latest-Version` header of bearer `context` and `whoami` |
 | `SearchJobs` + `BatchContext` | search module's `jobs` (registered as is) | the scheduler's `embed-pending`, `reembed` and `cleanup` (consistency sweep); the jobs module's `JobContext` extends `BatchContext` |
 
 `NoopSearchPort` is the placeholder `runtime.ts` starts with. For tests, `test/ports.ts` (never shipped) has
 `FakeEmbeddingProvider` (deterministic bag-of-words vectors), `StaticEmbeddingRegistry`, `MemoryJobsPort`, and
-`stubPorts()` which bundles them. `createApp` takes `ports` and `modules` explicitly (no fallback to fakes).
-To test the real wiring, `createRuntime(base, { embeddings, scheduler })` takes a fake registry and fake
+`stubPorts()` which bundles them with `NO_UPDATES` (the update check off; `testConfig()` also sets `SPOOR_UPDATE_CHECK=off`,
+so no test calls GitHub). `createApp` takes `ports` and `modules` explicitly (no fallback to fakes).
+To test the real wiring, `createRuntime(base, { embeddings, scheduler, updates })` takes a fake registry and fake
 timers (`FakeClock` from `modules/jobs`).
 
 ## Tests

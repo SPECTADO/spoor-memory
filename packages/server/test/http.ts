@@ -20,6 +20,8 @@ export function testConfig(env: Record<string, string> = {}): Config {
     DATABASE_URL: testDatabaseUrl(),
     SPOOR_PUBLIC_URL: TEST_ORIGIN,
     NODE_ENV: 'test',
+    // tests never call GitHub; the update check is tested with an injected fetch
+    SPOOR_UPDATE_CHECK: 'off',
     ...env,
   })
 }

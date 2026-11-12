@@ -73,11 +73,15 @@ review queue until a human runs the push with `--force` or aligns the file.
 
 **Lifecycle**: The housekeeping axis of an item: `active`, **stale** or **archived**. It is separate from `status`, the domain axis (`active` or `superseded` for memories and docs, `proposed`, `accepted`, `superseded`, `deprecated` for decisions).
 
-**Supersede**: Replacing an item with a newer one: the new item gets a `supersedes` **edge** to the old, and the old item's status becomes `superseded`. For memories through `spoor_supersede`; for ADRs through `supersedes:` in the new ADR file; docs are edited instead.
+**Supersede**: Replacing an item with a newer one: the new item gets a `supersedes` **edge** to the old, and the old item's status becomes `superseded`. For memories through `spoor_supersede`; for ADRs through `supersedes:` in the new ADR file; docs are edited instead. An item has at most one successor: a second supersede is refused with `revision_conflict` naming the existing one.
 
 **Observation**: A **memory** of type `observation`: a short-lived note with a hard expiry (default 7 days) that cannot be extended by verifying. It leaves reads at once when expired and is archived by the cleanup job.
 
-**Request log**: The record of agent requests: one row per MCP tool call and per spoor CLI call, read or write, with the person, token, agent, items and query. Kept 14 days, readable by project and instance admins (ADR-0018). Not the audit log, which keeps every change forever and holds no reads.
+**Request log**: The record of agent requests: one row per MCP tool call and per spoor CLI call, read or write, with the person, token, agent, items and query. Kept 14 days, readable by project and instance admins (ADR-0018); other members see only the last read and write and the daily counts on the dashboard. Not the audit log, which keeps every change forever and holds no reads.
+
+**Resource sample**: One row of `resource_samples`: how the server process and its database were doing at one moment (CPU, load, memory, event-loop delay, database size and connections, pool use, open MCP sessions, pending embeddings). The `resource-sample` **job** writes one every 5 minutes; they are kept 14 days and drawn on the **usage page**.
+
+**Usage page**: `/admin/usage`, for **instance admins**: agent traffic of the last 14 UTC days from the **request log** (per day, by project, operation and client; MCP and CLI only, not web UI use), content written per day, and **resource samples** over 24 hours or 14 days (ADR-0033).
 
 **Backlink**: The incoming side of an **edge**, shown on the target item (who links here). On a shared item only the viewer's own projects' links are shown.
 
@@ -95,7 +99,11 @@ review queue until a human runs the push with `--force` or aligns the file.
 
 **Embedding model tag**: The string that identifies the model, variant and width that produced a chunk's vector (`local:Xenova/multilingual-e5-small@q8/384`). Search reads only vectors whose tag matches the project's active model; a **re-embed** switches it.
 
-**Review queue**: The human work list of a project, five sections: stale memories, recently archived items, observations about to expire, conflicting memories and **push conflicts**, each with its actions (the last one only names the command to force the push).
+**Review queue**: The human work list of a project, six sections: stale memories, recently archived items, observations about to expire, conflicting memories, **possible duplicates** and **push conflicts**, each with its actions (the last one only names the command to force the push).
+
+**Near-copy**: A new memory or doc whose text reads like an existing item of the same space and type at or above the project's `dedupe.refuse_threshold`, with no value that differs. An MCP create of a near-copy is refused with a non-error `DUPLICATE` reply; the setting is off by default and 0.90 with embeddinggemma. Web creates are never refused.
+
+**Possible duplicate**: A pair of items recorded when a create was saved although a similar item (at or above `dedupe.threshold`, values agree) existed. It waits in the **review queue** until a human keeps one (supersede) or says "Not a duplicate", or until either item is archived, superseded or deleted.
 
 **Instance admin**: A user with `is_admin`: manages users, invites and projects, and acts as admin in every project and in the **shared space**. **Project roles** are `admin`, `editor` and `viewer`.
 
@@ -111,11 +119,13 @@ treated as untrusted data either way; provenance helps the reader weigh it. Impo
 
 **Export / import**: A project (or the **shared space**) as one zip: `manifest.json`, one Markdown file per **item**, its **revisions** and its audit log, with labels instead of user ids. Importing it is lossless (ids, numbers, history kept, or remapped) into a new or empty project; a plain folder of Markdown files can be imported too. **Chunks** are not exported; they are rebuilt after the import.
 
-**Job**: Background work the server runs itself on a schedule, one holder at a time across containers (a database lease): `cleanup` (stale, archive, expire, plus a chunk consistency sweep), `embed-pending`, `reembed`, `purge-ephemeral`. A write can ask for a job to run soon; an **instance admin** can start one.
+**Job**: Background work the server runs itself on a schedule, one holder at a time across containers (a database lease): `cleanup` (stale, archive, expire, plus a chunk consistency sweep), `embed-pending`, `reembed`, `purge-ephemeral`, `resource-sample` (one **resource sample** every 5 minutes). A write can ask for a job to run soon; an **instance admin** can start one.
 
 **Install doc**: The public, secret-free page `/p/<slug>/install.md` (and its machine form `install.json`) that tells an agent how to set up one repository: install the CLI, `spoor login`, `spoor init`. It carries only the server URL, slug, version, the project's digest budget and its memory mode (ADR-0015).
 
 **Re-embed**: The job that rebuilds a project's vectors under a new **embedding model tag** after the provider or the default model changes; search keeps using the old model until one transaction switches the project over (see [docs/operations.md](docs/operations.md) §7).
+
+**Update check**: The server's own read of `deploy/latest-release.json` on GitHub (at most every 6 hours, no identifying data sent, off with `SPOOR_UPDATE_CHECK=off`) to learn the newest stable release. Instance admins see "Update available" in the web UI; the CLI's digest gets one advisory line a day through the `Spoor-Latest-Version` header. The release workflow writes the file once npm and the image are published.
 
 **Device token**: A **token** minted by the **device code** flow; it expires after 90 days by default, unlike a token created in the web UI, whose expiry is optional.
 
@@ -129,6 +139,6 @@ treated as untrusted data either way; provenance helps the reader weigh it. Impo
 - A **mirror** connects one repository file to one item (`source_path`), in the direction repository to Spoor only.
 - A **token** belongs to one project and either one user or the project (**service token**); a **device code** belongs to one project and ends as one token.
 - The **digest** is computed from a project's active items plus the **shared space**; **stale** and **archived** items are excluded.
-- The **review queue** lists items by lifecycle (**stale**, **archived**) and by edge (`conflicts_with`); humans move items out of it.
+- The **review queue** lists items by lifecycle (**stale**, **archived**), by edge (`conflicts_with`) and by recorded pair (**possible duplicate**); humans move items out of it.
 - The **map** shows a project's items and **edges**, plus **ghost nodes** for the other ends and one hollow node per **dangling reference**; **related items** are computed from **chunks** and never become edges until a human or agent links them.
 - Every change to an item writes an audit row naming the actor (user or service token, `via`, client name); the audit log outlives deleted items.

@@ -479,6 +479,10 @@ export async function applyPushResult(
     else if (opts.muteUnresolved && UNRESOLVED.has(w.code)) continue
     else if (w.code === 'unresolved_supersedes')
       notes.push(`warning: ${path}: unresolved supersedes ${String(w.ref)}`)
+    else if (w.code === 'supersede_conflict')
+      notes.push(
+        `warning: ${path}: ${String(w.ref)} is already superseded by ${String(w.superseded_by)}; not applied (fix the file)`,
+      )
     else if (w.code === 'unresolved_relation')
       notes.push(`warning: ${path}: unresolved relation ${String(w.ref)}`)
     else if (w.code === 'unresolved_drafted_from')

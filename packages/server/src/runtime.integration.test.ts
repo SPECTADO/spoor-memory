@@ -79,7 +79,13 @@ describe('startup', () => {
     )
     expect(shared.rows).toEqual([{ embedding_model: provider.tag }])
     const locks = await db().execute<{ name: string }>(sql`SELECT name FROM job_locks ORDER BY name`)
-    expect(locks.rows.map((r) => r.name)).toEqual(['cleanup', 'embed-pending', 'purge-ephemeral', 'reembed'])
+    expect(locks.rows.map((r) => r.name)).toEqual([
+      'cleanup',
+      'embed-pending',
+      'purge-ephemeral',
+      'reembed',
+      'resource-sample',
+    ])
     const admins = await db().execute<{ email: string }>(sql`SELECT email FROM users WHERE is_admin`)
     expect(admins.rows).toEqual([{ email: 'root@example.com' }])
 

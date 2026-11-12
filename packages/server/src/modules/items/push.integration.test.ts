@@ -251,6 +251,50 @@ describe('push', () => {
     expect((await item(old.body.spoor_id)).status).toBe('superseded')
   })
 
+  it('a second ADR superseding an already superseded ADR: saved, the edge is not, supersede_conflict', async () => {
+    const one = await push('docs/adr/0001-mysql.md', '# Use MySQL\n')
+    const two = await push('docs/adr/0002-postgres.md', '---\nsupersedes: ADR-0001\n---\n# Use Postgres\n')
+    // the same file again is idempotent
+    const again = await push(
+      'docs/adr/0002-postgres.md',
+      '---\nsupersedes: ADR-0001\n---\n# Use Postgres\n\nmore\n',
+    )
+    expect(again.body.warnings).toEqual([])
+    const three = await push('docs/adr/0003-sqlite.md', '---\nsupersedes: ADR-0001\n---\n# Use SQLite\n')
+    expect(three.status).toBe(200)
+    expect(three.body).toMatchObject({ status: 'created' })
+    expect(three.body.warnings).toEqual([
+      { code: 'supersede_conflict', ref: 'ADR-0001', superseded_by: 'ADR-0002' },
+    ])
+    // the old ADR names a different successor in its status section: same warning, nothing changes
+    const old = await push('docs/adr/0001-mysql.md', '# Use MySQL\n\n## Status\n\nSuperseded by ADR-0003\n')
+    expect(old.body.warnings).toContainEqual({
+      code: 'supersede_conflict',
+      ref: 'ADR-0003',
+      superseded_by: 'ADR-0002',
+    })
+    const e = await db().select().from(edges).where(eq(edges.kind, 'supersedes'))
+    expect(e.map((x) => [x.srcId, x.dstId])).toEqual([[two.body.spoor_id, one.body.spoor_id]])
+  })
+
+  it('adr/import: two files superseding one ADR; the first wins, the second warns', async () => {
+    const r = await s.call('POST', '/adr/import', {
+      files: [
+        { source_path: 'docs/adr/0001-a.md', content: '# A\n' },
+        { source_path: 'docs/adr/0002-b.md', content: '---\nsupersedes: ADR-0001\n---\n# B\n' },
+        { source_path: 'docs/adr/0003-c.md', content: '---\nsupersedes: ADR-0001\n---\n# C\n' },
+      ],
+    })
+    expect(r.status).toBe(200)
+    const { results } = await json<{ results: Result[] }>(r)
+    expect(results.map((x) => x.warnings)).toEqual([
+      [],
+      [],
+      [{ code: 'supersede_conflict', ref: 'ADR-0001', superseded_by: 'ADR-0002' }],
+    ])
+    expect(await db().select().from(edges).where(eq(edges.kind, 'supersedes'))).toHaveLength(1)
+  })
+
   it('spoor_id: rename follows; a taken path is source_path_taken; a foreign id is ignored', async () => {
     const a = await push('docs/adr/0001-a.md', '# A\n')
     await push('docs/adr/0002-b.md', '# B\n')

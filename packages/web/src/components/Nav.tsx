@@ -7,6 +7,7 @@ import {
   Activity,
   BookOpen,
   Briefcase,
+  ChartColumn,
   ClipboardCheck,
   FileText,
   Gauge,
@@ -110,6 +111,7 @@ export function AdminNav() {
       title="Instance"
       entries={[
         { to: '/admin/status', label: 'Status', icon: Gauge },
+        { to: '/admin/usage', label: 'Usage', icon: ChartColumn },
         { to: '/admin/projects', label: 'Projects', icon: Briefcase },
         { to: '/admin/users', label: 'Users', icon: Users },
         { to: '/admin/invites', label: 'Invites', icon: Mail },

@@ -32,7 +32,7 @@ import { edges, items } from '../../db/schema.js'
 import { withTx } from '../../lib/db.js'
 import type { ServerDeps } from '../../lib/deps.js'
 import { ApiError, apiErrorResponse, errorResponse } from '../../lib/errors.js'
-import { type EmbeddingProvider, JobError, LeaseLostError, NoopSearchPort } from '../../ports.js'
+import { type EmbeddingProvider, JobError, LeaseLostError, NO_UPDATES, NoopSearchPort } from '../../ports.js'
 import type { AppEnv } from '../../types.js'
 import { VERSION } from '../../version.js'
 import { createAuthModule } from '../auth/index.js'
@@ -72,6 +72,7 @@ function setup(providers: EmbeddingProvider[] = [provider, other]) {
       embeddings: new StaticEmbeddingRegistry(first as EmbeddingProvider, rest),
       search: new NoopSearchPort(),
       jobs: new MemoryJobsPort(),
+      updates: NO_UPDATES,
     },
   }
   const mod = createSearchModule(deps)

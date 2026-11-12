@@ -10,9 +10,12 @@ mode. Terms are defined in [GLOSSARY.md](../GLOSSARY.md). Agents have their own 
   email: the admin copies the link to you. An invite for an email that already has an account is refused; ask to be added to the
   project instead. A forgotten password is fixed by an instance admin creating a reset invite for you.
 - Sessions last 30 days and end after 14 idle days. Account (top right menu): your name, password and every API token you hold.
-- The bottom of the left menu shows the versions, for example `Web 0.7.0 · Server 0.7.0`. If they differ after an upgrade, the
+- The bottom of the left menu shows the versions, for example `Web 0.7.1 · Server 0.7.1`. If they differ after an upgrade, the
   line turns into a warning: press "Reload to update" to get the current web UI. An open page checks the server's version
-  every 5 minutes.
+  every 5 minutes. Each version links to its release on GitHub.
+- Instance admins also see "Update available: X.Y.Z" there, and on Status, when a newer Spoor release is out. The link opens the
+  release notes. Only an instance admin can update the server; see [operations.md](operations.md) "Update check" to switch the
+  check off.
 
 ## 2. Roles
 
@@ -34,7 +37,13 @@ A project you are not a member of does not exist for you (404). Buttons you cann
 **Projects** lists the projects you can see as cards with item counts, a review badge and your role, plus a card for the shared
 knowledge. Instance admins create projects (New project: name, description, slug; the slug is permanent and becomes part of every
 URL and handle). The **dashboard** of a project shows counts per space (active, stale, archived; the library never stale), the five review sections, the last
-15 changes and **Agent activity**: when an agent last read and last wrote, who, with which agent and which tool. Under the
+15 changes and **Latest activity**: when an agent last read and last wrote, who, with which agent and which tool. Project
+admins and instance admins also see the newest 8 agent requests there (time, read or write, tool, person, token and agent, and the
+outcome when it failed) with a link to the request log. A **Status** box shows, for every member, a bar chart of agent reads and
+writes and one of item changes per day over the last 14 days (UTC days), and a few numbers: agent requests today and in 7 days,
+active agents and people in 14 days, items changed in 7 days, active and stale items, the review-queue total and when cleanup last
+ran. The shared knowledge shows only the item-change parts. The dashboard refreshes every minute while the tab is open and
+says when it last updated. Under the
 counts, a **link health** line such as `12 items without links · 3 dangling references` counts the active and stale items (not
 superseded or deprecated) that have no link of any kind in either direction, and the distinct `[[refs]]` in such items that point at
 nothing yet. The first part opens the map with **Unlinked only**, the second the whole map. Each part shows only when its count is
@@ -49,7 +58,7 @@ MCP tool call and each call of the spoor CLI and its hooks. A row shows the time
 prefix, the agent (for example `claude-code/2.1.303`), read or write, the tool or CLI route, the space and memory type, the items read
 or written, the search or digest query (first 200 characters), the outcome and the duration. Filter by kind, via (`mcp` or `cli`),
 actor/token/agent text and dates. Rows older than 14 days are deleted. Editors and viewers cannot open it; they see only the last
-read and write on the dashboard. Web UI edits are not in it: they are in the **Audit log**.
+read and write on the dashboard and the daily counts in Status. Web UI edits are not in it: they are in the **Audit log**.
 
 ## 4. Spaces and items
 
@@ -172,7 +181,7 @@ The cleanup runs hourly; changed day counts apply at the next run.
 
 ### Review queue
 
-`Review` in the project navigation has five tabs with counts:
+`Review` in the project navigation has six tabs with counts:
 
 | tab | what is in it | actions |
 |---|---|---|
@@ -180,9 +189,11 @@ The cleanup runs hourly; changed day counts apply at the next run.
 | Recently archived | the last 30 days, with the reason (`stale`, `expired`, `manual`) | Restore (promote first for `expired`), Delete |
 | Observations expiring | those expiring within 48 hours | Promote to fact, Archive now |
 | Conflicts | pairs of memories linked `conflicts_with`, side by side | Keep A, Keep B (supersedes the other), Remove relation, Verify both |
+| Possible duplicates | pairs where a new memory or doc was saved although a similar item with the same values exists, with both sides, their age and the similarity | Keep new, Keep existing (supersedes the other; memories only), Not a duplicate (removes the pair for good) |
 | Push conflicts | mirrored ADRs or docs whose repository push was refused because you edited them here | shows the terminal command to force the push, and a link to the history |
 
-Tick rows for bulk Verify or Archive now. Viewers see the queue without actions.
+Tick rows for bulk Verify or Archive now. Viewers see the queue without actions. A possible duplicate also leaves the tab
+when either item is archived, superseded or deleted.
 
 ## 7. Editing and history
 
@@ -190,7 +201,8 @@ Tick rows for bulk Verify or Archive now. Viewers see the queue without actions.
 date (decisions), tags, anchors (one per line) and slug (only at creation), then a CodeMirror Markdown editor with live preview
 (Write and Preview toggle on small screens). Leaving with unsaved changes asks first and can keep a draft in your browser. Creating a
 memory or doc that closely resembles an existing one shows a "similar item exists" warning (not when the two state different numbers
-or identifiers, such as `60` and `600`); you can tick "Skip the duplicate check".
+or identifiers, such as `60` and `600`); you can tick "Skip the duplicate check". If you save anyway, the pair is listed under
+Review, Possible duplicates.
 
 Saves always carry the revision you started from. If an agent or colleague saved in between you get the **conflict dialog**, never a
 silent overwrite: Compare shows a diff, Keep editing keeps your text, "Save my version over rN" re-sends only the fields you changed
@@ -207,6 +219,8 @@ forces it. Agents cannot edit mirrored items through MCP.
 
 **Supersede** (memories): replace a wrong or outdated memory with a new one (written inline or picked); the old one is marked
 `superseded` and links to its replacement. For ADRs, supersede happens in the new ADR file (`supersedes:` in its frontmatter).
+An item has one replacement. If someone else superseded it first, the dialog says which item replaced it; open that one and
+edit or supersede it instead.
 
 ## 8. Tokens and device approval
 
@@ -229,14 +243,24 @@ expire after 90 days. The page does not accept a code from a link, on purpose.
   (optionally revoking their API tokens). The last admin cannot be removed.
 - **Invites**: create a link with optional email, project roles, flags and expiry (default 7 days); copy it, it is shown once; revoke
   open ones. Project admins invite from their project's Members page, for their own project only.
-- **Jobs**: the scheduler's jobs (`cleanup`, `embed-pending`, `reembed`, `purge-ephemeral`) with last run, status, last error, and
-  **Run now**.
+- **Status**: what the deployment runs and holds right now: version, embedding model, record counts, database, runtime.
+  **Usage over time** opens the Usage page.
+- **Usage**: what agents did over the last 14 days and how the host is doing. The counts are agent requests from the request log
+  (MCP tool calls and CLI calls), not web UI use, by UTC day. You see totals, reads and writes per day, items and revisions
+  written per day, and tables by project, operation and client. **Host resources** shows one small chart per metric (CPU,
+  load, memory, event-loop delay, database size and connections, app pool, MCP sessions, pending embeddings) for the last
+  24 hours or 14 days, with the current, lowest and highest value. A sample is taken every 5 minutes; with `SPOOR_JOBS=off`
+  there are none. The page refreshes every minute.
+- **Jobs**: the scheduler's jobs (`cleanup`, `embed-pending`, `reembed`, `purge-ephemeral`, `resource-sample`) with last run,
+  status, last error, and **Run now**.
 - **Instance audit**: user, invite, project and job events.
 
 Project admins also have **Members** (add by email, change role, remove; the last project admin cannot be demoted), **Settings**
 (name, cleanup days, digest budget and decision window, duplicate threshold 0.60 to 0.99, default 0.87, **Related items minimum similarity**
 0.40 to 0.90, default 0.70 (the two defaults are 0.75 and 0.50 in a project that embeds with embeddinggemma; suggested links below it are hidden; it always acts at least 0.01 below the duplicate threshold, so
-with threshold 0.85 a saved 0.90 acts as 0.84), embedding provider with a progress bar
+with threshold 0.85 a saved 0.90 acts as 0.84), **Refuse near-copies from** 0.80 to 1.0 or empty (off; on at 0.90 by default only
+with embeddinggemma; agents then cannot save a reworded copy at or above it whose values agree, and it can not be lower than a
+duplicate threshold you set), embedding provider with a progress bar
 during a re-embed, export, import (a full Spoor export into an empty project; a zip of Markdown files into any project), and for
 instance admins delete) and the project **Audit log** (who or which
 agent changed what, via which channel, filterable).

@@ -1,4 +1,9 @@
+import { REPO_URL, releaseTagUrl } from '@spoor/shared'
+
 declare const __WEB_VERSION__: string | undefined
+
+/** The public repository (one constant, in @spoor/shared); the version text in the footers links here. */
+export { REPO_URL }
 
 /** What the server and the CLI report when they cannot read their own version; never a real release. */
 export const UNKNOWN_VERSION = '0.0.0'
@@ -15,3 +20,6 @@ export const isKnownVersion = (v: string | undefined): v is string => !!v && v !
 /** True when both versions are known and differ: the browser runs a web build the server no longer serves. */
 export const versionsDiffer = (web: string | undefined, server: string | undefined): boolean =>
   isKnownVersion(web) && isKnownVersion(server) && web !== server
+
+/** Where a version text links: its GitHub release page when known, else the repository. */
+export const versionUrl = (v: string | undefined): string => (isKnownVersion(v) ? releaseTagUrl(v) : REPO_URL)

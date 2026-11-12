@@ -486,6 +486,42 @@ describe('spoor_remember', () => {
     expect(log.rows[0]?.data).toMatchObject({ similar_values_differ: true })
   })
 
+  it('a near-copy at or above dedupe.refuse_threshold is refused with the three ways on; logged', async () => {
+    const s = await setup()
+    await db().execute(
+      sql`UPDATE projects SET settings = '{"dedupe":{"threshold":0.8,"refuse_threshold":0.8}}' WHERE id = ${s.project.id}`,
+    )
+    const { client } = await s.connect(s.tokens.editor.secret)
+    const limit =
+      'rate limit of the API gateway for partner keys is 600 requests per minute with bursts allowed'
+    const first = created(await call(client, 'spoor_remember', { title: `The ${limit}` }))
+    const re = await call(client, 'spoor_remember', { title: `Our ${limit}` })
+    expect(re.isError).toBe(false)
+    const lines = re.text.split('\n')
+    expect(lines[0]).toMatch(
+      new RegExp(`^DUPLICATE ${first.handle} r1 cos=0\\.\\d\\d \\[fact\\] The rate limit`),
+    )
+    expect(lines[1]).toMatch(
+      new RegExp(`^Not saved; it is a near-copy of ${first.handle} \\(cos=0\\.\\d\\d\\)\\.$`),
+    )
+    expect(lines[2]).toContain(`spoor_remember id="${first.handle}" revision=1`)
+    expect(lines[2]).toContain(`spoor_supersede old="${first.handle}"`)
+    expect(lines[2]).toContain('repeat with allow_duplicate=true')
+    const log = await db().execute<{ outcome: string; data: Record<string, unknown> }>(
+      sql`SELECT outcome, data FROM request_log WHERE operation = 'spoor_remember' ORDER BY id DESC LIMIT 1`,
+    )
+    expect(log.rows[0]).toMatchObject({
+      outcome: 'duplicate',
+      data: { duplicate: first.handle, match: 'near_copy' },
+    })
+    // values that differ are never refused
+    const values = await call(client, 'spoor_remember', {
+      title:
+        'The rate limit of the API gateway for partner keys is 60 requests per minute with bursts allowed',
+    })
+    expect(values.text).toMatch(/^OK created m\d+ r1 \[fact\]/)
+  })
+
   it('updates with revision (patch semantics), refuses a stale revision, requires one', async () => {
     const s = await setup()
     const { client } = await s.connect(s.tokens.editor.secret)
@@ -736,6 +772,60 @@ describe('spoor_supersede', () => {
     expect(
       (await call(client, 'spoor_supersede', { old: doc.handle, new: { title: 'New architecture' } })).text,
     ).toMatch(/^ERR wrong_space: .*\nhint: Docs are edited, not superseded\.$/)
+  })
+
+  it('two agents superseding one memory at once: one OK, the other told to work on the winner', async () => {
+    const s = await setup()
+    const one = (await s.connect(s.tokens.editor.secret)).client
+    const two = (await s.connect(s.tokens.editor2.secret)).client
+    for (let round = 0; round < 3; round++) {
+      const old = created(
+        await call(one, 'spoor_remember', { title: `Round ${round}: the cache TTL is 60 s`, type: 'fact' }),
+      )
+      const res = await Promise.all([
+        call(one, 'spoor_supersede', {
+          old: old.handle,
+          new: { title: `Round ${round}: the cache TTL is 120 s` },
+        }),
+        call(two, 'spoor_supersede', {
+          old: old.handle,
+          new: { title: `Round ${round}: the cache TTL is 300 s` },
+        }),
+      ])
+      const ok = res.filter((r) => !r.isError)
+      const err = res.filter((r) => r.isError)
+      expect(ok).toHaveLength(1)
+      expect(err).toHaveLength(1)
+      const winner = (ok[0] as ToolText).text.split(' ')[1] as string
+      expect((err[0] as ToolText).text).toBe(
+        `ERR revision_conflict: ${old.handle} was already superseded by ${winner} r1: read it and update or supersede ${winner} instead.\nhint: spoor_get ids=["${winner}"]`,
+      )
+      const edges = await db().execute<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM edges e JOIN items i ON i.id = e.dst_id
+            WHERE e.kind = 'supersedes' AND i.project_id = ${s.project.id} AND i.number = ${Number(old.handle.slice(1))}`,
+      )
+      expect(edges.rows[0]?.n).toBe(1)
+    }
+  })
+
+  it('two spoor_decide with the same supersedes at once: one decision is saved', async () => {
+    const s = await setup()
+    const one = (await s.connect(s.tokens.editor.secret)).client
+    const two = (await s.connect(s.tokens.editor2.secret)).client
+    const old = created(await call(one, 'spoor_decide', { title: 'Deploy with docker compose v1' }))
+    const res = await Promise.all([
+      call(one, 'spoor_decide', { title: 'Deploy with docker compose v2', supersedes: old.handle }),
+      call(two, 'spoor_decide', { title: 'Deploy with kubernetes manifests', supersedes: old.handle }),
+    ])
+    expect(res.filter((r) => r.isError)).toHaveLength(1)
+    const winner = created(res.find((r) => !r.isError) as ToolText).handle
+    expect((res.find((r) => r.isError) as ToolText).text).toMatch(
+      new RegExp(`^ERR revision_conflict: ${old.handle} was already superseded by ${winner} r1: `),
+    )
+    const decisions = await db().execute<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM items WHERE project_id = ${s.project.id} AND type = 'decision'`,
+    )
+    expect(decisions.rows[0]?.n).toBe(2)
   })
 })
 

@@ -49,6 +49,7 @@ import type {
   SupersedeBody,
   TokenCreateRequest,
   TokenJson,
+  UsageRange,
   UserFilters,
   UserPatchBody,
 } from './types'
@@ -326,8 +327,21 @@ export function useDeleteProject() {
   })
 }
 
+/** How often an open dashboard refetches (web-ui.md §3, polling). */
+export const DASHBOARD_REFRESH_MS = 60_000
+
+/**
+ * Polled every minute while the tab is visible (TanStack pauses the interval in a hidden tab, and the
+ * focus refetch catches up when it returns). A refetch keeps the old data on screen, so no skeleton.
+ */
 export const useDashboard = (slug: string) =>
-  useQuery({ queryKey: qk.dashboard(slug), queryFn: ({ signal }) => E.getDashboard(slug, { signal }) })
+  useQuery({
+    queryKey: qk.dashboard(slug),
+    queryFn: ({ signal }) => E.getDashboard(slug, { signal }),
+    staleTime: 30_000,
+    refetchInterval: DASHBOARD_REFRESH_MS,
+    refetchIntervalInBackground: false,
+  })
 
 /** Digest preview: runs only when `params` is set (the form was submitted). */
 export const useContextPreview = (slug: string, params: ContextParams | null) =>
@@ -689,9 +703,11 @@ export const useUndraftedDecisions = (slug: string) =>
     queryFn: ({ signal }) => E.listUndraftedDecisions(slug, { signal }),
   })
 
-/** Identity of a review row: the edge id for conflicts, the handle otherwise. */
+/** Identity of a review row: the edge id for conflicts, the pair id for duplicates, the handle otherwise. */
 export function reviewRowKey(row: ReviewRowOf[ReviewSection]): string {
-  return 'edge_id' in row ? row.edge_id : row.handle
+  if ('edge_id' in row) return row.edge_id
+  if ('pair_id' in row) return row.pair_id
+  return row.handle
 }
 
 /** Outcome callbacks of a review action. They run on the mutation itself, so they still fire when the
@@ -814,6 +830,28 @@ export const useInstanceStatus = () =>
     queryKey: qk.adminStatus(),
     queryFn: ({ signal }) => E.getInstanceStatus({ signal }),
     refetchInterval: 15_000,
+  })
+
+/** `/admin/usage`: request-log aggregates and host samples; heavier than status, so every 60 s (paused in hidden tabs). */
+export const useInstanceUsage = (range: UsageRange) =>
+  useQuery({
+    queryKey: qk.adminUsage(range),
+    queryFn: ({ signal }) => E.getInstanceUsage(range, { signal }),
+    refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
+  })
+
+/**
+ * The sidebar's "Update available" notice (instance admins only: `enabled`). The server caches its update check
+ * for hours, so an hourly poll is plenty; this never touches the status page's heavy queries.
+ */
+export const useUpdateInfo = (enabled: boolean) =>
+  useQuery({
+    queryKey: qk.adminUpdate(),
+    queryFn: ({ signal }) => E.getUpdateInfo({ signal }),
+    enabled,
+    staleTime: 60 * 60_000,
+    refetchInterval: 60 * 60_000,
   })
 
 export function useRunJob() {

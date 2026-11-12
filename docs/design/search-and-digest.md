@@ -252,7 +252,9 @@ This runs when an item is **created** through MCP (`spoor_remember`, `spoor_deci
 `spoor_doc_write` without `id`), within the same project and space. Updates, CLI pushes and imports
 skip it. The web UI runs it as a non-blocking warning. `allow_duplicate=true` skips it on all three
 tools. Since ADR-0025 only the same text is refused; anything else similar is saved and reported, because a
-refused fact is lost when the agent ignores the reply, while a saved duplicate is only clutter.
+refused fact is lost when the agent ignores the reply, while a saved duplicate is only clutter. Since 0.7 a project can
+also refuse near-copies above a stricter cut-off (`dedupe.refuse_threshold`, step 5), on by default only on embeddinggemma,
+and every saved near-duplicate whose values agree goes to the review queue's "Possible duplicates" (step 6).
 
 1. Chunk the candidate. Embed its chunk 0, which is needed for storage anyway.
 2. Run:
@@ -288,7 +290,22 @@ next: still true → spoor_verify ids=["m42"] · changed → spoor_remember id="
 ```
    A hit on a stale item adds `(stale; spoor_verify restores it)`. `allow_duplicate=true` skips the
    check (deviation D6).
-5. **Similar: saved and reported.** Otherwise the similar item is the first row with
+5. **Near-copy: refused (MCP only, when `dedupe.refuse_threshold` is set).** Otherwise the first row with
+   `cos >= refuse_threshold`, `values` null, the same space and the same memory type as the new item refuses the create, the
+   same way as the same text: nothing is saved, `last_used_at` of the existing item is bumped, audit `item.dedupe_hit` with
+   `data.match = 'near_copy'`, and the request log records `outcome = 'duplicate'` with `data.duplicate`, `data.match`,
+   `data.cos`. The reply is the non-error `DUPLICATE` block with its own second and third lines:
+```
+DUPLICATE m42 r3 cos=0.93 [fact] Sessions live in Postgres, not in JWTs
+Not saved; it is a near-copy of m42 (cos=0.93).
+next: adds detail → spoor_remember id="m42" revision=3 … · replaces it → spoor_supersede old="m42" revision=3 new={…} · different claim → repeat with allow_duplicate=true
+```
+   A doc gets `same doc → spoor_doc_write id=… revision=… …` and `different doc → repeat with allow_duplicate=true` (docs are not
+   superseded). The cut-off is `null` (off) by default, 0.90 on `ollama:embeddinggemma` (table below); range 0.80 to 1.0. It
+   is read as `max(refuse_threshold, threshold)` (`refuseThreshold`), and a project that stores both keys must keep
+   `refuse_threshold >= threshold` (400 `invalid_input` on `settings.dedupe.refuse_threshold`). A stored `null` turns a model
+   default off. Web creates never refuse; decisions (the decisions space) are never checked.
+6. **Similar: saved and reported.** Otherwise the similar item is the first row with
    `cos >= settings.dedupe.threshold` (default 0.87, or the active model's own default, see Other models below) and `values` null, else the first such row with values. The create
    is saved. MCP adds one line after the service notes and leaves that item out of the `related:` line; the request log
    records `similar` and `similar_values_differ`:
@@ -298,7 +315,10 @@ note: similar to m53 r1 cos=0.94 [fact] "Public API keys are limited to 600 requ
 note: similar to d3 r1 cos=0.95 [doc] "On-call runbook" · same doc → merge into d3 (spoor_doc_write id="d3" revision=1 …) and ask an editor to archive d8 · different → nothing to do
 ```
    At most three values per side are listed. The web returns `near_duplicate` only for a similar item whose values agree.
-6. If the embedding fails (pending), the check is skipped and the result says
+   When the values agree (MCP note or web warning), the create also records the pair (new item, existing item, cos, time) in
+   `duplicate_pairs` ([data-model.md](data-model.md) §3) for the review queue's "Possible duplicates"
+   ([cleanup-and-jobs.md](cleanup-and-jobs.md) §6). A pair whose values differ is not recorded.
+7. If the embedding fails (pending), the check is skipped and the result says
    `note: duplicate check skipped`.
 
 **Calibration (2026-10-22, ADR-0025).** The spoor-bench pairs (10 reworded duplicates, 10 different facts on the same
@@ -316,10 +336,15 @@ model (`projects.embedding_model`, the model the duplicate check and the related
 During a re-embed the old model's defaults apply until the cut-over. A stored key always wins and is not rescaled when the
 model changes. The table holds one entry; every other model takes the e5 defaults:
 
-| active model | `threshold` | `related_min_cos` |
-|---|---|---|
-| `ollama:embeddinggemma` | 0.75 | 0.50 |
-| any other | 0.87 | 0.70 |
+| active model | `threshold` | `related_min_cos` | `refuse_threshold` |
+|---|---|---|---|
+| `ollama:embeddinggemma` | 0.75 | 0.50 | 0.90 |
+| any other | 0.87 | 0.70 | off (`null`) |
+
+The refusal is off for e5 because there different facts score as high as reworded duplicates (both up to 0.957), so no
+cut-off refuses only copies. On embeddinggemma, different facts score at most 0.65 after the values guard; the two
+exceptions (0.72 and 0.91) state a claim already in the matched item's body. 0.90 sits at the top of the duplicate range
+(0.65 to 0.94), so it refuses only the closest copies; the rest are saved, noted and listed for review.
 
 Calibration of embeddinggemma, through `OllamaProvider` (`title: none | text: ` on both sides) and the real chunker, 256-item
 spoor-bench corpus, 40 reworded duplicates and 40 different facts on the same topics (the 20 spoor-bench pairs plus 60 written

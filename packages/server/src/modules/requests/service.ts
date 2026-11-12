@@ -1,8 +1,10 @@
 /**
  * Reading the agent request log (api.md 10.3, ADR-0018): the filtered, cursor-paged list for project and
- * instance admins, and the newest read and write for the dashboard. Rows are written by `RequestLog`.
+ * instance admins, the newest read and write for the dashboard, and the newest rows for admins there. Rows
+ * are written by `RequestLog`.
  */
 import {
+  type DashboardRequestJson,
   type LastRequestJson,
   REQUEST_KINDS,
   REQUEST_SURFACES,
@@ -118,5 +120,37 @@ export class RequestLogService {
     }
     const [read, write] = await Promise.all([newest('read'), newest('write')])
     return { read, write }
+  }
+
+  /**
+   * The newest `n` requests of the project for the dashboard's "Latest activity" (index
+   * `request_log_project_idx`). No query, handles or token ids: the caller checks `requests.read`.
+   */
+  async latest(projectId: string, n: number): Promise<DashboardRequestJson[]> {
+    const rows = await this.deps.db
+      .select({
+        id: requestLog.id,
+        at: requestLog.at,
+        kind: requestLog.kind,
+        surface: requestLog.surface,
+        operation: requestLog.operation,
+        label: requestLog.actorLabel,
+        clientName: requestLog.clientName,
+        tokenName: requestLog.tokenName,
+        outcome: requestLog.outcome,
+      })
+      .from(requestLog)
+      .where(eq(requestLog.projectId, projectId))
+      .orderBy(desc(requestLog.id))
+      .limit(n)
+    return rows.map((r) => ({
+      id: r.id,
+      at: r.at.toISOString(),
+      kind: r.kind,
+      surface: r.surface,
+      operation: r.operation,
+      actor: { label: r.label, client_name: r.clientName, token_name: r.tokenName },
+      outcome: r.outcome,
+    }))
   }
 }

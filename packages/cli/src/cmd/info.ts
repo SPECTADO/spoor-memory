@@ -1,5 +1,6 @@
 /** `spoor whoami`, `spoor status`, `spoor context` (cli-and-hooks.md sections 4.5, 4.7, 4.10). */
 
+import { isNewerRelease, LATEST_VERSION_HEADER } from '@spoor/shared'
 import {
   api,
   authProblem,
@@ -23,8 +24,21 @@ export interface WhoamiResponse {
   server: { version: string }
 }
 
-export function whoamiLine(w: WhoamiResponse): string {
-  return `${w.user.label} · ${w.project.slug} · ${w.token.role} · token "${w.token.name}" ${w.token.prefix} · server ${w.server.version}`
+/**
+ * Section 5.1 step 9: the server's update check found a newer Spoor release (`Spoor-Latest-Version`). Advisory only:
+ * the user cannot update the server, so the line names who can. At most once a day per checkout (the caller keeps
+ * the day mark); the CLI never asks npm or GitHub itself.
+ */
+export function latestLines(server: string | null | undefined, latest: string | null | undefined): string[] {
+  if (!server || !latest || !isNewerRelease(latest, server)) return []
+  return [`Spoor ${latest} is available; this server runs ${server}. Ask your instance admin to update.`]
+}
+
+/** `latest`: the server's `Spoor-Latest-Version` header (a newer release exists; section 5.1 step 9). */
+export function whoamiLine(w: WhoamiResponse, latest?: string | null): string {
+  const line = `${w.user.label} · ${w.project.slug} · ${w.token.role} · token "${w.token.name}" ${w.token.prefix} · server ${w.server.version}`
+  const update = latestLines(w.server.version, latest)[0]
+  return update ? `${line}\n${update}` : line
 }
 
 export async function cmdWhoami(ctx: Ctx, o: { json?: boolean }): Promise<number> {
@@ -42,7 +56,8 @@ export async function cmdWhoami(ctx: Ctx, o: { json?: boolean }): Promise<number
     ctx.rt.err(`${failureNotice(ctx, r)}\n`)
     return failureExit(r)
   }
-  ctx.rt.out(o.json ? `${JSON.stringify(r.body, null, 2)}\n` : `${whoamiLine(r.body)}\n`)
+  const latest = r.headers?.get(LATEST_VERSION_HEADER)
+  ctx.rt.out(o.json ? `${JSON.stringify(r.body, null, 2)}\n` : `${whoamiLine(r.body, latest)}\n`)
   return 0
 }
 
@@ -127,6 +142,8 @@ export async function cmdStatus(ctx: Ctx, o: { remote?: boolean }): Promise<numb
         const exp =
           typeof e === 'string' ? `expires ${e.slice(0, 10)}` : e === null ? 'no expiry' : 'expiry unknown'
         out.push('', `remote   ${whoamiLine(r.body)} · ${exp}`)
+        const latest = latestLines(r.body.server.version, r.headers?.get(LATEST_VERSION_HEADER))[0]
+        if (latest) out.push(`update   ${latest}`)
       } else {
         out.push('', `remote   ${failureNotice(ctx, r)}`)
         code = Math.max(code, failureExit(r))

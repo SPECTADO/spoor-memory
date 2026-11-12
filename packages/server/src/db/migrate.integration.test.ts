@@ -58,7 +58,7 @@ describe.skipIf(!url)('migrations against a real Postgres', () => {
     )
     const have = new Set(res.rows.map((r) => r.table_name))
     const expected = Object.values(TABLES).map((t) => getTableName(t))
-    expect(expected).toHaveLength(15)
+    expect(expected).toHaveLength(17)
     for (const t of expected) expect(have, t).toContain(t)
   })
 
@@ -82,7 +82,24 @@ describe.skipIf(!url)('migrations against a real Postgres', () => {
     const journal = JSON.parse(
       readFileSync(new URL('./migrations/meta/_journal.json', import.meta.url), 'utf8'),
     ) as { entries: { tag: string }[] }
-    expect(journal.entries.at(-1)?.tag).toBe('0006_edges_project_idx')
+    expect(journal.entries.map((e) => e.tag)).toContain('0007_edges_one_superseder')
+    expect(journal.entries.map((e) => e.tag)).toContain('0008_duplicate_pairs')
+    expect(journal.entries.at(-1)?.tag).toBe('0009_usage_and_resource_samples')
+    const usageIdx = await client.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+        WHERE indexname IN ('item_revisions_created_idx', 'items_created_idx', 'resource_samples_at_idx') ORDER BY 1`,
+    )
+    expect(usageIdx.rows.map((r) => r.indexname)).toEqual([
+      'item_revisions_created_idx',
+      'items_created_idx',
+      'resource_samples_at_idx',
+    ])
+    const superseder = await client.query<{ indexdef: string }>(
+      "SELECT indexdef FROM pg_indexes WHERE tablename = 'edges' AND indexname = 'edges_one_superseder_uq'",
+    )
+    expect(superseder.rows[0]?.indexdef).toMatch(
+      /CREATE UNIQUE INDEX .* ON public\.edges USING btree \(dst_id\) WHERE \(kind = 'supersedes'::text\)/,
+    )
     const un = await client.query<{ s: string }>("SELECT spoor_unaccent('Příliš žluťoučký kůň') AS s")
     expect(un.rows[0]?.s).toBe('Prilis zlutoucky kun')
   })
@@ -369,6 +386,58 @@ describe.skipIf(!url)('migrations against a real Postgres', () => {
         client.off('notice', onNotice)
       }
       expect(notices.join('\n')).toMatch(/2 item slug\(s\) l<n> renamed.*; 1 not renamed.*; 1 item body/)
+    })
+
+    // not a library test, but it needs the same row helpers
+    it('the 0007 repair keeps the earliest superseder and turns later ones into refines (or drops them)', async () => {
+      const file = readFileSync(
+        new URL('./migrations/0007_edges_one_superseder.sql', import.meta.url),
+        'utf8',
+      )
+      const repair = file.split('--> statement-breakpoint').find((s) => s.includes('DO $$'))
+      expect(repair).toBeDefined()
+      const notices: string[] = []
+      const onNotice = (n: { message?: string }) => notices.push(n.message ?? '')
+      client.on('notice', onNotice)
+      try {
+        await inTx(async () => {
+          // the state before 0.7: no index, so a target may have several superseders
+          await client.query('DROP INDEX edges_one_superseder_uq')
+          const p = await project()
+          const old = await item(p, 'memories', { status: 'superseded' })
+          const first = await item(p, 'memories')
+          const second = await item(p, 'memories')
+          const third = await item(p, 'memories')
+          const single = await item(p, 'memories', { status: 'superseded' })
+          const only = await item(p, 'memories')
+          const at = (s: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, s))
+          const sup =
+            'INSERT INTO edges (project_id, src_id, kind, dst_ref, dst_id, created_at) VALUES ($1,$2,$3,$4,$5,$6)'
+          await client.query(sup, [p, second, 'supersedes', old, old, at(2)])
+          await client.query(sup, [p, first, 'supersedes', old, old, at(1)])
+          await client.query(sup, [p, third, 'supersedes', old, old, at(3)])
+          await client.query(sup, [p, third, 'refines', old, old, at(0)]) // already refines: the extra goes
+          await client.query(sup, [p, only, 'supersedes', single, single, at(1)])
+          await client.query(repair as string)
+          const rows = await client.query<{ src_id: string; kind: string; dst_id: string }>(
+            'SELECT src_id, kind, dst_id FROM edges WHERE project_id = $1 ORDER BY kind, created_at',
+            [p],
+          )
+          expect(rows.rows).toEqual([
+            { src_id: third, kind: 'refines', dst_id: old },
+            { src_id: second, kind: 'refines', dst_id: old },
+            { src_id: first, kind: 'supersedes', dst_id: old },
+            { src_id: only, kind: 'supersedes', dst_id: single },
+          ])
+          // the index now builds
+          await client.query(file.split('--> statement-breakpoint').at(-1) as string)
+        })
+      } finally {
+        client.off('notice', onNotice)
+      }
+      expect(notices).toContain(
+        'edges_one_superseder: 1 extra supersedes edge(s) turned into refines, 1 deleted',
+      )
     })
   })
 })

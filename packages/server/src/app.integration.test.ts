@@ -14,18 +14,21 @@ import { addMember, createAdmin, createToken, createUser, DEFAULT_PASSWORD } fro
 import { type Client, json, loginAs, TEST_ORIGIN, testConfig } from '../test/http.js'
 import { FakeEmbeddingProvider, StaticEmbeddingRegistry } from '../test/ports.js'
 import { createApp, createAppModules } from './app.js'
+import { createUpdateChecker } from './modules/status/index.js'
+import type { UpdatePort } from './ports.js'
 import { createRuntime } from './runtime.js'
 import { newReadyState } from './types.js'
+import { VERSION } from './version.js'
 
 const db = () => testDb()
 
-function assemble() {
+function assemble(updates?: UpdatePort) {
   const config = testConfig()
   const logger = pino({ level: 'silent' })
   const provider = new FakeEmbeddingProvider()
   const rt = createRuntime(
     { config, logger, db: db() },
-    { embeddings: new StaticEmbeddingRegistry(provider), scheduler: { instanceId: 'it:app' } },
+    { embeddings: new StaticEmbeddingRegistry(provider), scheduler: { instanceId: 'it:app' }, updates },
   )
   const modules = createAppModules(rt.deps, { scheduler: rt.scheduler, search: rt.search })
   const state = newReadyState()
@@ -36,8 +39,8 @@ function assemble() {
 
 type App = ReturnType<typeof assemble>['app']
 
-async function setup() {
-  const a = assemble()
+async function setup(updates?: UpdatePort) {
+  const a = assemble(updates)
   const admin = await createAdmin(db(), { email: 'admin@example.com' })
   const dev = await createUser(db(), { email: 'dev@example.com' })
   const client = await loginAs(a.app, 'admin@example.com', DEFAULT_PASSWORD)
@@ -101,6 +104,7 @@ describe('assembled app: routes of every module are mounted', () => {
     ['GET', '/api/v1/projects/acme/jobs'],
     ['GET', '/api/v1/jobs'],
     ['GET', '/api/v1/status'],
+    ['GET', '/api/v1/status/update'],
     ['GET', '/api/v1/projects/acme/export'],
     ['GET', '/api/v1/projects/acme/dashboard'],
   ])('%s %s answers', async (method, path) => {
@@ -131,6 +135,72 @@ describe('assembled app: routes of every module are mounted', () => {
     expect(s.database.tables.map((t) => t.name)).toContain('items')
     expect(s.runtime.rss_bytes).toBeGreaterThan(0)
     expect(s.runtime.mcp_sessions).toBe(0)
+  })
+
+  describe('update check', () => {
+    /** The real checker on an injected fetch that serves `deploy/latest-release.json` for `version`. */
+    const checker = async (version: string) => {
+      const c = createUpdateChecker({
+        enabled: true,
+        url: 'https://updates.example/latest-release.json',
+        currentVersion: VERSION,
+        fetch: (async () =>
+          new Response(
+            JSON.stringify({
+              schema: 1,
+              version,
+              npm: version,
+              image: version,
+              released_at: '2026-11-12T10:00:00Z',
+              url: `https://github.com/SPECTADO/spoor-memory/releases/tag/v${version}`,
+            }),
+          )) as typeof fetch,
+      })
+      await c.refresh()
+      return c
+    }
+    const notes = 'https://github.com/SPECTADO/spoor-memory/releases/tag/v99.0.0'
+
+    it('a newer release shows on /status, on /status/update (admins only) and as a header for the CLI', async () => {
+      const { app, client, devClient, project, dev } = await setup(await checker('99.0.0'))
+      const update = { latest: '99.0.0', available: true, url: notes }
+      const s = await json<{ update: unknown }>(await client.get('/api/v1/status'))
+      expect(s.update).toEqual(update)
+      const light = await client.get('/api/v1/status/update')
+      expect(light.status).toBe(200)
+      expect(light.headers.get('cache-control')).toBe('no-store')
+      expect(await json(light)).toEqual({ update })
+      expect((await devClient.get('/api/v1/status/update')).status).toBe(403)
+
+      const t = await createToken(db(), { projectId: project.id, userId: dev.id })
+      const ctx = await bearer(app, 'GET', '/p/acme/api/context', t.secret)
+      expect(ctx.status).toBe(200)
+      expect(ctx.headers.get('spoor-latest-version')).toBe('99.0.0')
+      expect(ctx.headers.get('spoor-server-version')).toBe(VERSION)
+      const who = await bearer(app, 'GET', '/p/acme/api/whoami', t.secret)
+      expect(who.headers.get('spoor-latest-version')).toBe('99.0.0')
+      // the cookie preview of the digest is not the CLI's: no header there
+      const preview = await client.get('/api/v1/projects/acme/context')
+      expect(preview.headers.get('spoor-latest-version')).toBeNull()
+    })
+
+    it('sends no header when the server already runs the latest release', async () => {
+      const old = await setup(await checker('0.0.1'))
+      const s = await json<{ update: { available: boolean } }>(await old.client.get('/api/v1/status'))
+      expect(s.update).toMatchObject({ latest: '0.0.1', available: false })
+      const t = await createToken(db(), { projectId: old.project.id, userId: old.dev.id })
+      const ctx = await bearer(old.app, 'GET', '/p/acme/api/context', t.secret)
+      expect(ctx.headers.get('spoor-latest-version')).toBeNull()
+    })
+
+    it('reports null with the check off (the test default)', async () => {
+      const { app, client, project, dev } = await setup()
+      expect((await json<{ update: unknown }>(await client.get('/api/v1/status'))).update).toBeNull()
+      expect(await json(await client.get('/api/v1/status/update'))).toEqual({ update: null })
+      const t = await createToken(db(), { projectId: project.id, userId: dev.id })
+      const ctx = await bearer(app, 'GET', '/p/acme/api/context', t.secret)
+      expect(ctx.headers.get('spoor-latest-version')).toBeNull()
+    })
   })
 
   it('the bearer surface serves context, push, adr/import, decisions/undrafted, activity and adr|docs/push', async () => {

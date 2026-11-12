@@ -16,7 +16,7 @@ export function createTokensModule(deps: ServerDeps) {
     tokens,
     routes: tokenRoutes(deps, tokens),
     /** Routes of `/p/:slug/api` (mount after `auth.bearerApiGuards`). */
-    bearerRoutes: tokenBearerRoutes(tokens),
+    bearerRoutes: tokenBearerRoutes(deps, tokens),
   }
 }
 

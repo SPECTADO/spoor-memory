@@ -14,7 +14,7 @@ import { createAuthModule, securityHeaders } from './modules/auth/index.js'
 import { createDeviceModule, type DeviceServiceOptions } from './modules/device/index.js'
 import { createInstallModule } from './modules/install/index.js'
 import { createItemsModule } from './modules/items/index.js'
-import { createJobsModule, type Scheduler } from './modules/jobs/index.js'
+import { createJobsModule, resourceSampleJob, type Scheduler } from './modules/jobs/index.js'
 import { createMcpModule } from './modules/mcp/index.js'
 import { createMirrorModule } from './modules/mirror/index.js'
 import { createProjectsModule } from './modules/projects/index.js'
@@ -89,6 +89,12 @@ export function createAppModules(
     context: search.context,
     requests: requests.log,
   })
+  const status = createStatusModule(deps, {
+    mcpSessions: () => mcp.sessions.size,
+    jobsEnabled: () => jobs.scheduler.enabled,
+  })
+  // the sampler needs the MCP session count, so the job is registered here, before startup seeds the locks
+  jobs.scheduler.register(resourceSampleJob(() => status.sampler.sample()))
   return {
     auth: createAuthModule(deps),
     projects: createProjectsModule(deps),
@@ -103,10 +109,7 @@ export function createAppModules(
     install: createInstallModule(deps, { version: shared.installVersion }),
     mirror: createMirrorModule(deps, items),
     mcp,
-    status: createStatusModule(deps, {
-      mcpSessions: () => mcp.sessions.size,
-      jobsEnabled: () => jobs.scheduler.enabled,
-    }),
+    status,
   }
 }
 

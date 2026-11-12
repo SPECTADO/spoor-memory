@@ -61,7 +61,7 @@ const project = (role: string) => ({
 })
 
 const counts = (over: Record<string, number> = {}) => ({
-  counts: { stale: 0, archived: 0, expiring: 0, conflicts: 0, push_conflicts: 0, ...over },
+  counts: { stale: 0, archived: 0, expiring: 0, conflicts: 0, duplicates: 0, push_conflicts: 0, ...over },
 })
 
 function renderReview(path: string) {
@@ -102,6 +102,26 @@ describe('ReviewPage', () => {
     expect(await screen.findByRole('link', { name: /Memory 7/ })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Recently archived/ })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByText('stale', { selector: 'span' })).toBeInTheDocument()
+  })
+
+  it('refreshes a stale tab count after the list loads', async () => {
+    const api = mockApi({
+      ...base,
+      'GET /api/v1/projects/acme': [200, project('editor')],
+      // the first count request ran before the cleanup job committed, the next one after it
+      'GET /api/v1/projects/acme/review': [
+        [200, counts({ stale: 0 })],
+        [200, counts({ stale: 1 })],
+      ],
+      'GET /api/v1/projects/acme/review/stale': [
+        200,
+        { items: [{ ...item(1), days_to_archive: 10, used_since_stale: false }], next_cursor: null },
+      ],
+    })
+    renderReview('/projects/acme/review?section=stale')
+    expect(await screen.findByRole('link', { name: /Memory 1/ })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('link', { name: /^Stale\D*1/ })).toBeInTheDocument())
+    expect(api.calls.filter((c) => c.path === '/api/v1/projects/acme/review')).toHaveLength(2)
   })
 
   it('shows the empty state with the current day settings', async () => {
@@ -267,6 +287,91 @@ describe('ReviewPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Keep A' }))
     await waitFor(() => expect(api.find('POST', '/api/v1/projects/acme/items/m2/supersede')).toHaveLength(1))
     expect(api.find('POST', '/api/v1/projects/acme/items/m2/supersede')[0]?.body).toEqual({ new_id: 'm1' })
+  })
+
+  it('lists possible duplicates with both sides; Keep new / Keep existing supersede; Not a duplicate dismisses', async () => {
+    const pair = (id: string, n: object, e: object) => ({
+      pair_id: id,
+      cos: 0.913,
+      created_at: '2026-10-20T00:00:00Z',
+      new: n,
+      existing: e,
+    })
+    const api = mockApi({
+      ...base,
+      'GET /api/v1/projects/acme': [200, project('editor')],
+      'GET /api/v1/projects/acme/review': [200, counts({ duplicates: 2 })],
+      'GET /api/v1/projects/acme/review/duplicates': [
+        200,
+        {
+          items: [
+            pair(
+              'p1',
+              item(5, { lifecycle: 'active', title: 'Sessions live server-side' }),
+              item(2, { lifecycle: 'active' }),
+            ),
+            pair(
+              'p2',
+              item(7, { handle: 'd7', space: 'docs', type: null, lifecycle: 'active' }),
+              item(6, { handle: 'd6', space: 'docs', type: null, lifecycle: 'active' }),
+            ),
+          ],
+          next_cursor: null,
+        },
+      ],
+      'POST /api/v1/projects/acme/items/m2/supersede': [200, { new: item(5), old: item(2) }],
+      'POST /api/v1/projects/acme/review/duplicates/p2/dismiss': [
+        200,
+        { pair_id: 'p2', dismissed_at: '2026-10-21T00:00:00Z', dismissed_by: 'ann@example.com' },
+      ],
+    })
+    renderReview('/projects/acme/review?section=duplicates')
+    expect(await screen.findByText('Sessions live server-side')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Possible duplicates/ })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getAllByText(/Similarity 0\.91/)).toHaveLength(2)
+    expect(screen.getAllByText('New')).toHaveLength(2)
+    expect(screen.getAllByText('Existing')).toHaveLength(2)
+    // docs are not superseded: only "Not a duplicate" for the doc pair
+    expect(screen.getAllByRole('button', { name: 'Keep new' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Keep existing' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Not a duplicate' })).toHaveLength(2)
+    await userEvent.click(screen.getByRole('button', { name: 'Keep new' }))
+    await waitFor(() => expect(api.find('POST', '/api/v1/projects/acme/items/m2/supersede')).toHaveLength(1))
+    expect(api.find('POST', '/api/v1/projects/acme/items/m2/supersede')[0]?.body).toEqual({ new_id: 'm5' })
+    // the list refetches after the supersede (the mock returns both pairs again): the doc pair is the last one
+    await userEvent.click(
+      (await screen.findAllByRole('button', { name: 'Not a duplicate' })).at(-1) as HTMLElement,
+    )
+    await waitFor(() =>
+      expect(api.find('POST', '/api/v1/projects/acme/review/duplicates/p2/dismiss')).toHaveLength(1),
+    )
+  })
+
+  it('shows possible duplicates to a viewer without actions', async () => {
+    mockApi({
+      ...base,
+      'GET /api/v1/projects/acme': [200, project('viewer')],
+      'GET /api/v1/projects/acme/review': [200, counts({ duplicates: 1 })],
+      'GET /api/v1/projects/acme/review/duplicates': [
+        200,
+        {
+          items: [
+            {
+              pair_id: 'p1',
+              cos: 0.9,
+              created_at: '2026-10-20T00:00:00Z',
+              new: item(5, { lifecycle: 'active' }),
+              existing: item(2, { lifecycle: 'active' }),
+            },
+          ],
+          next_cursor: null,
+        },
+      ],
+    })
+    renderReview('/projects/acme/review?section=duplicates')
+    expect(await screen.findByText('Memory 5')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Not a duplicate' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Keep new' })).not.toBeInTheDocument()
   })
 
   it('restores an expired observation only after the promote confirmation', async () => {

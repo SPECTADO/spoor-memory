@@ -2,6 +2,7 @@ import { existsSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from
 import { join } from 'node:path'
 import { MEMORY_RULE } from '@spoor/shared'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { latestLines } from './cmd/info.js'
 import { versionLines } from './cmd/session.js'
 import { VERSION } from './ctx.js'
 import { readState, updateState } from './state.js'
@@ -349,6 +350,35 @@ describe('hook session-start: the CLI version check', () => {
       srv.on('GET /p/acme/api/context', { text: DIGEST, headers })
       expect((await start(repo)).out).toBe(DIGEST)
     }
+  })
+
+  it('passes on a newer release the server reports, once a day, and never for an older or unknown one', async () => {
+    const repo = makeRepo({ local: localEnv(srv.url), agents: true })
+    const line = `Spoor 9.1.0 is available; this server runs ${VERSION}. Ask your instance admin to update.`
+    const headers = { 'Spoor-Server-Version': VERSION, 'Spoor-Latest-Version': '9.1.0' }
+    srv.on('GET /p/acme/api/context', { text: DIGEST, headers })
+    const day1 = () => Date.parse('2026-11-12T10:00:00Z')
+    const day2 = () => Date.parse('2026-11-13T10:00:00Z')
+    const at = (now: () => number, id: string) =>
+      hook('session-start', repo, { session_id: id, source: 'startup' }, { cwd: repo, now })
+    expect((await at(day1, 's1')).out).toBe(`${line}\n${DIGEST}`)
+    expect((await at(day1, 's2')).out).toBe(DIGEST)
+    expect((await at(day2, 's3')).out).toBe(`${line}\n${DIGEST}`)
+    // only the one context call: no extra request for the notice
+    expect(srv.requests.filter((r) => r.path.includes('/api/context'))).toHaveLength(3)
+    expect(srv.requests.every((r) => r.path.startsWith('/p/acme/'))).toBe(true)
+  })
+
+  it('the update line needs both versions and a stable, newer release', () => {
+    expect(latestLines('0.6.1', '0.7.0')).toEqual([
+      'Spoor 0.7.0 is available; this server runs 0.6.1. Ask your instance admin to update.',
+    ])
+    expect(latestLines('0.7.0', '0.7.0')).toEqual([])
+    expect(latestLines('0.8.0', '0.7.0')).toEqual([])
+    expect(latestLines('0.6.1', '0.7.0-rc.1')).toEqual([])
+    expect(latestLines('0.0.0', '0.7.0')).toEqual([])
+    expect(latestLines(null, '0.7.0')).toEqual([])
+    expect(latestLines('0.6.1', null)).toEqual([])
   })
 
   it('a source-built CLI (0.0.0) is never told to upgrade', () => {

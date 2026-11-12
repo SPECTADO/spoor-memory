@@ -199,13 +199,13 @@ CREATE INDEX device_codes_pending_idx ON device_codes (created_at) WHERE status 
 {
   "cleanup":   { "stale_days": 30, "archive_days": 90, "observation_days": 7 },
   "digest":    { "default_budget": 1500, "decision_window_days": 30 },
-  "dedupe":    { "threshold": 0.87, "related_min_cos": 0.7 },
+  "dedupe":    { "threshold": 0.87, "related_min_cos": 0.7, "refuse_threshold": null },
   "embedding": { "provider": "local" },
   "memory":    { "exclusive": true }
 }
 ```
 Ranges: `stale_days` 1–3650, `archive_days` 1–3650, `observation_days` 1–365,
-`default_budget` 200–8000, `decision_window_days` 1–365, `threshold` 0.60–0.99, `related_min_cos` 0.40–0.90 (the two `dedupe` defaults shown are those of the built-in model; a key nobody stored takes the default of the project's active embedding model, 0.75 and 0.50 for embeddinggemma, search-and-digest.md §5, ADR-0028),
+`default_budget` 200–8000, `decision_window_days` 1–365, `threshold` 0.60–0.99, `related_min_cos` 0.40–0.90, `refuse_threshold` 0.80–1.0 or `null` (the `dedupe` defaults shown are those of the built-in model; a key nobody stored takes the default of the project's active embedding model, 0.75, 0.50 and 0.90 for embeddinggemma, search-and-digest.md §5, ADR-0028),
 `embedding.provider` ∈ providers enabled by env (`local` always). `memory.exclusive` is a boolean, default true (ADR-0015): when on, the
 MCP instructions, the `AGENTS.md` block and the SessionStart hook tell agents to use no other memory store. Changing the provider sets
 `embedding_target` (see search-and-digest.md §3); choosing the active model's provider again clears it.
@@ -213,6 +213,11 @@ MCP instructions, the `AGENTS.md` block and the SessionStart hook tell agents to
 only through `relatedMinCos(settings)` = `min(related_min_cos, threshold − 0.01)` (rounded to 2 decimals), so the floor always stays
 below the duplicate threshold; a stored value at or above the threshold is accepted on write and clamped on read (threshold 0.85 and
 0.90 give 0.84). Patched like every setting (`PATCH /api/v1/projects/:slug`, audit path `dedupe.related_min_cos`).
+`dedupe.refuse_threshold` is the cut-off at which an MCP create is refused as a near-copy (search-and-digest.md §5 step 5);
+`null` = off. It is read through `refuseThreshold(settings)` = `max(refuse_threshold, threshold)`, so a stored threshold above the
+model's default cut-off raises it. A stored `null` is kept (it turns a model default off). When the stored settings hold both
+`threshold` and a non-null `refuse_threshold`, a write with `refuse_threshold < threshold` is 400 `invalid_input`
+(`dedupeOrderIssue`, issue path `settings.dedupe.refuse_threshold`).
 Unknown keys are rejected on write. The column stores only the keys an admin set (a write deep-merges the
 patch and validates the result), so a changed default reaches every project that never overrode it. A new
 project stores `embedding.provider` = the instance's default provider (`SPOOR_EMBEDDING_DEFAULT`) and takes
@@ -285,6 +290,7 @@ CREATE INDEX items_pinned_idx ON items (project_id) WHERE pinned;
 CREATE INDEX items_tags_gin ON items USING gin (tags);
 CREATE INDEX items_anchored_idx ON items (project_id) WHERE cardinality(anchors) > 0;
 CREATE INDEX items_cleanup_idx ON items (project_id, lifecycle) WHERE space = 'memories';
+CREATE INDEX items_created_idx ON items (created_at);  -- /admin/usage: items created per day (migration 0009)
 
 CREATE TABLE item_revisions (            -- append-only, full snapshot per content revision
   item_id      uuid NOT NULL REFERENCES items(id) ON DELETE CASCADE,  -- cascade only under allow_purge
@@ -304,6 +310,7 @@ CREATE TABLE item_revisions (            -- append-only, full snapshot per conte
   created_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (item_id, revision)
 );
+CREATE INDEX item_revisions_created_idx ON item_revisions (created_at);  -- /admin/usage: revisions per day (0009)
 CREATE TRIGGER item_revisions_append_only BEFORE UPDATE OR DELETE ON item_revisions
   FOR EACH ROW EXECUTE FUNCTION spoor_append_only();
 ```
@@ -390,6 +397,8 @@ CREATE TABLE edges (
 CREATE INDEX edges_dst_idx ON edges (dst_id, kind);
 CREATE INDEX edges_project_idx ON edges (project_id);   -- the project graph (migration 0006_edges_project_idx)
 CREATE INDEX edges_dangling_idx ON edges (project_id, dst_ref) WHERE dst_id IS NULL;
+-- one superseder per item (migration 0007_edges_one_superseder); a dangling supersedes edge never clashes
+CREATE UNIQUE INDEX edges_one_superseder_uq ON edges (dst_id) WHERE kind = 'supersedes';
 
 -- scope guard (custom migration): an edge belongs to its source's project, and nothing in _shared
 -- points out of _shared; a project item may point only into its own project or into _shared
@@ -435,7 +444,7 @@ a library page whose `via` is `mcp` or `cli` raises **`SPL02`** (mapped to `read
 Edge kinds: agent-settable `refines | supports | depends_on | conflicts_with` (src → dst;
 `conflicts_with` is symmetric, stored once, queried both ways; the reverse-direction check and the insert
 run under a transaction advisory lock on the unordered pair, so concurrent `a→b` and `b→a` store one edge);
-system `supersedes` (new → old),
+system `supersedes` (new → old; at most one per old item, see below),
 `drafted_from` (ADR → decision memory it was drafted from), `wikilink` (rewritten from the body on
 every content revision; typed edges untouched). Cross-project edges are allowed only from a project
 item to a shared item, never from shared to a project (`spoor_edge_scope` above; `supersedes` and
@@ -460,6 +469,46 @@ When a human re-saves a library page, wikilinks whose ref text is unchanged keep
 errors through `mapEdgeError`.
 For a shared item the scope is every project.
 
+**One superseder per item.** An item has at most one incoming `supersedes` edge (`edges_one_superseder_uq`).
+A supersede (REST, MCP `spoor_supersede`, a create with `supersedes`, `spoor_decide` with `supersedes`, push) first
+locks the old item's row (`FOR UPDATE`), then checks the revision when given, then looks for a `supersedes` edge from
+another item. If one exists, the write fails with `409 revision_conflict` (`details.superseded_by: {handle, revision}`)
+and its transaction rolls back, including the new item a create would have added. So of two concurrent supersedes of one
+item, the second waits for the first and then fails. A retry by the same successor is a no-op. Push and `adr/import`
+do not fail the file: they skip the edge and return the warning `supersede_conflict` (section 7). Both import kinds
+keep the earliest `supersedes` edge per target and turn later ones into `refines` (dropped when that `refines` edge
+already exists), with a note. Migration 0007 repaired existing data the same way before it built the index; it does not
+change statuses. If a write skips the locked check, the index refuses the edge and `addEdge` maps the unique violation to
+the same 409. The edge counts only while the old item is `superseded`: an item that went back to another status (possible
+once its successor is itself superseded, see the sticky status in section 7) keeps a stale incoming edge, and the next
+supersede of it, under the same row lock, first turns that edge into `refines` (dropped when that `refines` edge already
+exists), so the new successor takes the slot.
+
+**Possible duplicates** (migration `0008_duplicate_pairs`): a create saved next to a similar item whose values agree
+(search-and-digest.md §5 step 6) records the pair, read by the review queue (cleanup-and-jobs.md §6).
+```sql
+CREATE TABLE duplicate_pairs (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id         uuid NOT NULL REFERENCES projects ON DELETE CASCADE,
+  new_item_id        uuid NOT NULL REFERENCES items ON DELETE CASCADE,  -- the create that was saved
+  existing_item_id   uuid NOT NULL REFERENCES items ON DELETE CASCADE,  -- the similar item it was saved next to
+  cos                real NOT NULL,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  dismissed_at       timestamptz,                                       -- "Not a duplicate"
+  dismissed_by       uuid REFERENCES users ON DELETE SET NULL,
+  dismissed_by_label text,
+  CONSTRAINT duplicate_pairs_pair_uq UNIQUE (new_item_id, existing_item_id),
+  CHECK (new_item_id <> existing_item_id)
+);
+CREATE INDEX duplicate_pairs_open_idx ON duplicate_pairs (project_id, created_at DESC) WHERE dismissed_at IS NULL;
+CREATE INDEX duplicate_pairs_existing_idx ON duplicate_pairs (existing_item_id);
+```
+A pair is open while `dismissed_at` is null and both items are not archived and active or accepted; an archived or superseded
+item hides its pairs (a restore brings them back), a deleted item takes them with it. Pairs are not exported.
+The similarity check runs before the create's transaction, so the similar item may be deleted in between: the pair is
+inserted only while that item still exists (`INSERT … SELECT … WHERE EXISTS (… FOR KEY SHARE)`), and the create is saved
+without it otherwise.
+
 **Hard delete of an item** (purge transaction): incoming typed, `supersedes` and `drafted_from` edges are
 deleted (they have no meaning without their target); incoming wikilinks become dangling (`dst_id NULL`,
 by the FK). An item whose only `supersedes` source was the deleted item goes back to `status='active'`
@@ -479,7 +528,8 @@ CREATE TABLE audit_log (                -- append-only (same trigger); hard dele
   client_name   text,
   action        text NOT NULL,          -- 'item.create','item.update','item.verify','item.pin','item.stale',
                                         -- 'item.archive','item.restore','item.delete','edge.add','edge.remove',
-                                        -- 'item.push','item.push_rejected','item.dedupe_hit','token.create',
+                                        -- 'item.push','item.push_rejected','item.dedupe_hit',
+                                        -- 'review.duplicate_dismissed','token.create',
                                         -- 'token.revoke','member.set','member.remove','project.update',
                                         -- 'item.expire','project.settings','project.import',
                                         -- 'device.approve','device.deny'; instance-level
@@ -539,10 +589,31 @@ CREATE TABLE request_log (              -- agent requests, kept 14 days (ADR-001
   duration_ms   integer NOT NULL,
   data          jsonb NOT NULL DEFAULT '{}'    -- digest files, tags, budget, HTTP status
 );
-CREATE INDEX request_log_project_idx ON request_log (project_id, id DESC);
+CREATE INDEX request_log_project_idx ON request_log (project_id, id DESC);  -- also the dashboard's activity and 14-day stats
 CREATE INDEX request_log_project_kind_idx ON request_log (project_id, kind, id DESC);
-CREATE INDEX request_log_at_idx ON request_log (at);  -- purge-ephemeral
+CREATE INDEX request_log_at_idx ON request_log (at);  -- purge-ephemeral, /admin/usage
 ```
+```sql
+CREATE TABLE resource_samples (         -- host resources for /admin/usage, kept 14 days (ADR-0033, migration 0009)
+  id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  at                  timestamptz NOT NULL DEFAULT now(),
+  host                text NOT NULL,      -- os.hostname() of the instance that held the job's lease
+  cpu_percent         real,               -- process CPU since the previous sample, percent of one core
+  load_avg1           real NOT NULL,      -- 1-minute load average
+  rss_bytes           bigint NOT NULL,
+  heap_used_bytes     bigint NOT NULL,
+  event_loop_delay_ms real,               -- p99 since the previous sample; NULL on the first sample
+  db_size_bytes       bigint NOT NULL,    -- pg_database_size(current_database())
+  db_connections      integer NOT NULL,   -- pg_stat_activity rows of this database
+  pool_total          integer,            -- the app pool's open connections; NULL without pool counters
+  pool_waiting        integer,
+  mcp_sessions        integer NOT NULL,   -- open MCP sessions of that process
+  embeddings_pending  integer NOT NULL    -- chunks with embedding IS NULL
+);
+CREATE INDEX resource_samples_at_idx ON resource_samples (at);
+```
+The `resource-sample` job writes one row every 5 minutes (cleanup-and-jobs.md §4) and `purge-ephemeral` deletes
+rows older than 14 days. Rows are not append-only and have no project.
 Project deletion (instance admin, UI only) sets `spoor.allow_purge` and cascades everything.
 `audit_log` rows of the project are kept (no FK) and are purged only by that same transaction.
 
@@ -694,7 +765,9 @@ reserved `api`, `assets`, `device`, `invite`, `login`, `admin`, `projects`, `sha
 - `status='superseded'` is sticky: while an incoming `supersedes` edge from a non-superseded item exists, a
   push that says otherwise keeps `superseded` and returns the warning `status_kept_superseded`.
 - An ADR whose frontmatter has `supersedes: ADR-0003` sets ADR-0003 to `status='superseded'` (a
-  `change='supersede'` revision with `via='cli'`) and adds the edge. An ADR with `drafted_from` adds
+  `change='supersede'` revision with `via='cli'`) and adds the edge. If another item already supersedes ADR-0003, the
+  file is saved without the edge and the push returns the warning `supersede_conflict {ref, superseded_by}`. The same
+  applies to `Superseded by …` in the old ADR when it names a different successor. An ADR with `drafted_from` adds
   `drafted_from` edges. A push that would **create** an ADR with `drafted_from: [m59]` while m59 already has
   a `drafted_from` edge from another, non-superseded ADR returns `409 already_drafted {handle:"m59",
   adr:"ADR-0015"}` and writes nothing (two sessions drafted the same memory). The check runs again inside
@@ -779,7 +852,8 @@ export per instance at a time (auth-and-security.md §9):
    instance is set to NULL. Edges whose `dst_ref` starts with `shared:` re-resolve against the target
    instance's shared space (typed edges by `<space>/<slug>`, wikilinks by the wikilink rules), except
    `supersedes` and `drafted_from`, which never point into `_shared`; unresolved ones stay dangling and are
-   listed in `dangling_edges`.
+   listed in `dangling_edges`. A second `supersedes` edge into one item (an archive from before 0.7) is kept as
+   `refines` (section 3, one superseder per item), with a note.
    The manifest is user-editable, so it is validated beyond the column CHECKs: a pinned item cannot be
    `stale` (422), and `last_verified_at`, `last_used_at` and `updated_at` later than the import are clamped
    to the import time (a future time would keep an item from ever going stale).
@@ -788,7 +862,8 @@ export per instance at a time (auth-and-security.md §9):
    insert otherwise). Library → non-library `wikilink`, `refines`, `supports` and `depends_on` edges are kept; edges of the kinds
    the rule refuses (`conflicts_with` between a library and a non-library item, `supersedes` or `drafted_from` into a library page)
    are dropped and listed with the other skipped edges. The claim updates of the import apply the same two filters as §3, and a
-   later `_shared` import resolves typed refs of a library source normally.
+   later `_shared` import resolves typed refs of a library source normally. A `_shared` import re-resolves the dangling
+   `shared:` edges of every project, but not `supersedes` and `drafted_from`: those stay dangling there too.
    An archive that contains `library/` entries needs the library right on the target (`library.write`); a server still on 0.1.0
    rejects it with `invalid_archive`. The format stays `spoor-export/1`.
 7. `audit.jsonl` appended with original timestamps (marked as in step 3), plus the `project.import` row.

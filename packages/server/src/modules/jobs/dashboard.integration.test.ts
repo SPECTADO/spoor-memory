@@ -1,5 +1,6 @@
 // The project dashboard (api.md section 4.1, web-ui.md `/projects/:slug`): counts per space and lifecycle,
-// the review counts and the last 15 content or lifecycle changes, through the assembled app.
+// the review counts, the last 15 content or lifecycle changes, the activity overview (`stats`) and the
+// admin-only request rows (`activity`), through the assembled app.
 import type { DashboardResponse } from '@spoor/shared'
 import { eq, sql } from 'drizzle-orm'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -14,7 +15,7 @@ import {
   DEFAULT_PASSWORD,
 } from '../../../test/factories.js'
 import { type Client, json, loginAs, testApp } from '../../../test/http.js'
-import { auditLog, edges, items } from '../../db/schema.js'
+import { auditLog, edges, items, jobLocks, requestLog } from '../../db/schema.js'
 
 const db = () => testDb()
 const P = '/api/v1/projects/acme'
@@ -76,7 +77,14 @@ describe('GET /api/v1/projects/:slug/dashboard', () => {
       docs: { active: 1, stale: 0, archived: 0 },
       library: { active: 1, stale: 0, archived: 1 },
     })
-    expect(d.review).toEqual({ stale: 1, archived: 1, expiring: 0, conflicts: 0, push_conflicts: 0 })
+    expect(d.review).toEqual({
+      stale: 1,
+      archived: 1,
+      expiring: 0,
+      conflicts: 0,
+      duplicates: 0,
+      push_conflicts: 0,
+    })
     // the same numbers as GET …/review
     expect(d.review).toEqual((await json<{ counts: unknown }>(await ed.get(`${P}/review`))).counts)
   })
@@ -184,5 +192,190 @@ describe('GET /api/v1/projects/:slug/dashboard', () => {
     const sh = await dashboard(out, '/api/v1/projects/_shared')
     expect(sh.counts.memories).toEqual({ active: 1, stale: 0, archived: 0 })
     expect((await (await s.login(s.admin)).get(`${P}/dashboard`)).status).toBe(200)
+  })
+})
+
+const DAY = 86_400_000
+const utcMidnight = (daysAgo: number) => Math.floor(Date.now() / DAY) * DAY - daysAgo * DAY
+const isoDay = (daysAgo: number) => new Date(utcMidnight(daysAgo)).toISOString().slice(0, 10)
+/** A time inside the UTC day `daysAgo` days back (today: one second ago). */
+const inDay = (daysAgo: number) =>
+  new Date(daysAgo === 0 ? Date.now() - 1000 : utcMidnight(daysAgo) + 3_600_000)
+
+type ReqRow = {
+  daysAgo: number
+  kind?: 'read' | 'write'
+  token?: string | null
+  client?: string | null
+  user?: string | null
+  label?: string
+  projectId?: string
+  operation?: string
+  outcome?: string
+}
+async function seedRequests(projectId: string, rows: ReqRow[]) {
+  await db()
+    .insert(requestLog)
+    .values(
+      rows.map((r) => ({
+        at: inDay(r.daysAgo),
+        projectId: r.projectId ?? projectId,
+        kind: r.kind ?? 'read',
+        surface: 'mcp' as const,
+        operation: r.operation ?? (r.kind === 'write' ? 'spoor_remember' : 'spoor_search'),
+        actorUserId: r.user ?? null,
+        actorLabel: r.label ?? 'dev@example.com',
+        tokenId: r.token ?? null,
+        tokenName: r.token ? 'laptop' : null,
+        clientName: r.client ?? null,
+        query: 'secret query text',
+        handles: ['m1'],
+        outcome: r.outcome ?? 'ok',
+        durationMs: 3,
+      })),
+    )
+}
+async function seedChange(
+  projectId: string,
+  daysAgo: number,
+  o: { itemId?: string; user?: string | null; via?: 'web' | 'system'; action?: string } = {},
+) {
+  await db()
+    .insert(auditLog)
+    .values({
+      at: inDay(daysAgo),
+      projectId,
+      actorUserId: o.user ?? null,
+      actorLabel: o.via === 'system' ? 'system' : 'someone@example.com',
+      via: o.via ?? 'web',
+      action: o.action ?? 'item.update',
+      itemId: o.itemId ?? null,
+      itemHandle: 'm1',
+      summary: 'changed',
+    })
+}
+
+describe('dashboard stats', () => {
+  it('counts requests and item changes per UTC day and the totals', async () => {
+    const t1 = '00000000-0000-4000-8000-000000000001'
+    const t2 = '00000000-0000-4000-8000-000000000002'
+    const u1 = s.editor.id
+    const u2 = s.viewer.id
+    await seedRequests(s.acme.id, [
+      { daysAgo: 0, kind: 'read', token: t1, client: 'claude-code/2.1', user: u1 },
+      { daysAgo: 0, kind: 'write', token: t1, client: 'claude-code/2.1', user: u1 },
+      { daysAgo: 3, kind: 'read', token: t1, client: 'codex/1.0', user: u1 },
+      { daysAgo: 8, kind: 'read', token: t2, client: 'claude-code/2.1', user: u2 },
+      // outside the window and in another project: not counted
+      { daysAgo: 20, kind: 'read', token: t2, user: u2 },
+    ])
+    const other = await createProject(db(), { slug: 'other' })
+    await seedRequests(other.id, [{ daysAgo: 0, token: t2, user: u2 }])
+
+    const a = await createItem(db(), { projectId: s.acme.id })
+    const b = await createItem(db(), { projectId: s.acme.id })
+    const outsider = s.outsider.id
+    await seedChange(s.acme.id, 0, { itemId: a.id, user: u1 })
+    await seedChange(s.acme.id, 1, { itemId: a.id, user: u1 })
+    await seedChange(s.acme.id, 6, { itemId: b.id, via: 'system', action: 'item.stale' })
+    await seedChange(s.acme.id, 10, { itemId: b.id, user: outsider })
+    // not an item change (verify is operational) and outside the window: not counted
+    await seedChange(s.acme.id, 0, { itemId: a.id, user: u1, action: 'item.verify' })
+    await seedChange(s.acme.id, 30, { itemId: a.id, user: u2 })
+    await seedChange(other.id, 0, { user: u2 })
+
+    const lastRun = new Date(Date.now() - 600_000)
+    await db()
+      .insert(jobLocks)
+      .values({ name: 'cleanup', lastRunAt: lastRun, lastStatus: 'ok' })
+      .onConflictDoUpdate({ target: jobLocks.name, set: { lastRunAt: lastRun } })
+
+    const st = (await dashboard(await s.login(s.viewer))).stats
+    if (!st) throw new Error('no stats')
+    expect(st.window).toEqual({ days: 14, from: isoDay(13), to: isoDay(0) })
+    expect(st.per_day.map((d) => d.day)).toEqual(Array.from({ length: 14 }, (_, i) => isoDay(13 - i)))
+    const day = (n: number) => st.per_day.find((d) => d.day === isoDay(n))
+    expect(day(0)).toEqual({ day: isoDay(0), reads: 1, writes: 1, changes: 1 })
+    expect(day(1)).toMatchObject({ reads: 0, writes: 0, changes: 1 })
+    expect(day(3)).toMatchObject({ reads: 1, writes: 0, changes: 0 })
+    expect(day(6)).toMatchObject({ changes: 1 })
+    expect(day(8)).toMatchObject({ reads: 1, changes: 0 })
+    expect(day(10)).toMatchObject({ changes: 1 })
+    expect(st.requests).toEqual({ today: 2, last_7_days: 3, agents_14_days: 3 })
+    // u1 and u2 (requests) and the outsider (a web change); the system is not a person
+    expect(st.people_14_days).toBe(3)
+    // a (today, yesterday) and b (stale 6 days ago); b's change 10 days ago is outside the 7 days
+    expect(st.items_changed_7_days).toBe(2)
+    expect(st.last_cleanup_at).toBe(lastRun.toISOString())
+  })
+
+  it('is all zeros for a new project, and leaves out the request parts on _shared', async () => {
+    await db().delete(jobLocks)
+    const st = (await dashboard(ed)).stats
+    expect(st?.per_day).toHaveLength(14)
+    expect(st?.per_day.every((d) => d.reads + d.writes + d.changes === 0)).toBe(true)
+    expect(st?.requests).toEqual({ today: 0, last_7_days: 0, agents_14_days: 0 })
+    expect(st?.people_14_days).toBe(0)
+    expect(st?.items_changed_7_days).toBe(0)
+    expect(st?.last_cleanup_at).toBeNull()
+
+    const item = await createItem(db(), { projectId: s.shared.id })
+    await seedChange(s.shared.id, 2, { itemId: item.id, user: s.admin.id })
+    const sh = (await dashboard(ed, '/api/v1/projects/_shared')).stats
+    expect(sh?.requests).toBeNull()
+    expect(sh?.per_day.find((d) => d.day === isoDay(2))).toMatchObject({ reads: 0, writes: 0, changes: 1 })
+    expect(sh?.people_14_days).toBe(1)
+    expect(sh?.items_changed_7_days).toBe(1)
+  })
+})
+
+describe('dashboard activity (ADR-0018)', () => {
+  it('gives project and instance admins the newest 8 requests, without query or handles', async () => {
+    const rows: ReqRow[] = Array.from({ length: 10 }, (_, i) => ({
+      daysAgo: 0,
+      kind: i % 2 ? 'write' : 'read',
+      token: '00000000-0000-4000-8000-000000000001',
+      client: 'claude-code/2.1',
+      operation: `op_${i}`,
+      outcome: i === 9 ? 'conflict' : 'ok',
+    }))
+    for (const r of rows) await seedRequests(s.acme.id, [r]) // ids in order
+    const pa = await createUser(db())
+    await addMember(db(), s.acme.id, pa.id, 'admin')
+    for (const c of [await s.login(pa), await s.login(s.admin)]) {
+      const act = (await dashboard(c)).activity
+      expect(act).toHaveLength(8)
+      expect(act?.map((r) => r.operation)).toEqual([
+        'op_9',
+        'op_8',
+        'op_7',
+        'op_6',
+        'op_5',
+        'op_4',
+        'op_3',
+        'op_2',
+      ])
+      expect(act?.[0]).toEqual({
+        id: expect.any(Number),
+        at: expect.any(String),
+        kind: 'write',
+        surface: 'mcp',
+        operation: 'op_9',
+        actor: { label: 'dev@example.com', client_name: 'claude-code/2.1', token_name: 'laptop' },
+        outcome: 'conflict',
+      })
+      expect(JSON.stringify(act)).not.toContain('secret query text')
+    }
+  })
+
+  it('leaves the field out for editors and viewers, and on _shared', async () => {
+    await seedRequests(s.acme.id, [{ daysAgo: 0 }])
+    for (const c of [ed, await s.login(s.viewer)]) {
+      const d = await dashboard(c)
+      expect(d).not.toHaveProperty('activity')
+      // members still see the last read and write
+      expect(d.last_requests.read).not.toBeNull()
+    }
+    expect(await dashboard(await s.login(s.admin), '/api/v1/projects/_shared')).not.toHaveProperty('activity')
   })
 })

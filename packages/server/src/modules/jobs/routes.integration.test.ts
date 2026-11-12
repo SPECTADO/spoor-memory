@@ -19,7 +19,7 @@ import {
 } from '../../../test/factories.js'
 import { json, loginAs, testConfig } from '../../../test/http.js'
 import { stubPorts } from '../../../test/ports.js'
-import { auditLog, edges } from '../../db/schema.js'
+import { auditLog, duplicatePairs, edges } from '../../db/schema.js'
 import type { ServerDeps } from '../../lib/deps.js'
 import { ApiError, apiErrorResponse, errorResponse } from '../../lib/errors.js'
 import type { AppEnv } from '../../types.js'
@@ -106,12 +106,19 @@ describe('GET /api/v1/projects/:slug/review', () => {
     await db()
       .insert(edges)
       .values({ projectId: p.id, srcId: a.id, kind: 'conflicts_with', dstRef: `m${b.number}`, dstId: b.id })
+    // one open possible duplicate, one dismissed
+    await db()
+      .insert(duplicatePairs)
+      .values({ projectId: p.id, newItemId: b.id, existingItemId: a.id, cos: 0.9 })
+    await db()
+      .insert(duplicatePairs)
+      .values({ projectId: p.id, newItemId: a.id, existingItemId: b.id, cos: 0.9, dismissedAt: new Date() })
 
     const vi = await login('vi@example.com')
     const res = await vi.get('/api/v1/projects/acme/review')
     expect(res.status).toBe(200)
     expect(await json(res)).toEqual({
-      counts: { stale: 1, archived: 1, expiring: 1, conflicts: 1, push_conflicts: 1 },
+      counts: { stale: 1, archived: 1, expiring: 1, conflicts: 1, duplicates: 1, push_conflicts: 1 },
     })
     const out = await login('out@example.com')
     expect((await out.get('/api/v1/projects/acme/review')).status).toBe(404)

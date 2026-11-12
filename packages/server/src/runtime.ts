@@ -5,6 +5,7 @@
  *   embeddings  = the search module's provider registry (local e5 always, OpenAI / Voyage when keyed, Ollama when its URL is set)
  *   jobs        = the jobs module's scheduler (JobsPort: `enqueue` is a nudge)
  *   search      = the search module's SearchService (SearchPort: prepare / index chunks, dedupe)
+ *   updates     = the status module's update check (UpdatePort: the newest release, cached; off with SPOOR_UPDATE_CHECK=off)
  *
  * The scheduler runs the search module's job functions directly: both modules code against `SearchJobs` and
  * `BatchContext` in src/ports.ts. src/index.ts only reads env, opens the pool and the HTTP server, and calls
@@ -19,8 +20,10 @@ import { bootstrapAdmin } from './modules/auth/index.js'
 import { createScheduler, registerJobs, type Scheduler, type SchedulerOptions } from './modules/jobs/index.js'
 import { ensureSharedProject } from './modules/projects/index.js'
 import { createEmbeddingRegistry, createSearchModule, type SearchModule } from './modules/search/index.js'
-import { type EmbeddingRegistry, NoopSearchPort, type Ports } from './ports.js'
+import { createUpdateChecker } from './modules/status/index.js'
+import { type EmbeddingRegistry, NoopSearchPort, type Ports, type UpdatePort } from './ports.js'
 import type { ReadyState } from './types.js'
+import { VERSION } from './version.js'
 
 export interface RuntimeBase {
   config: Config
@@ -40,6 +43,8 @@ export interface RuntimeOptions {
   embeddings?: EmbeddingRegistry
   /** Scheduler overrides (tests: instance id, fake timers / clock). */
   scheduler?: Partial<Omit<SchedulerOptions, 'db' | 'store' | 'logger' | 'jobs'>>
+  /** Defaults to the update check configured by env (`SPOOR_UPDATE_CHECK`, `SPOOR_UPDATE_URL`). */
+  updates?: UpdatePort
 }
 
 /** Build the ports and the modules that implement them, sharing one SearchService and one scheduler. */
@@ -47,7 +52,15 @@ export function createRuntime(base: RuntimeBase, opts: RuntimeOptions = {}): Run
   const embeddings = opts.embeddings ?? createEmbeddingRegistry(base.config)
   const scheduler = createScheduler(base, opts.scheduler)
   // `search` is replaced below: the SearchService reads `deps.ports` lazily, so it may see itself there
-  const ports: Ports = { embeddings, jobs: scheduler, search: new NoopSearchPort() }
+  const updates =
+    opts.updates ??
+    createUpdateChecker({
+      enabled: base.config.SPOOR_UPDATE_CHECK === 'on',
+      url: base.config.SPOOR_UPDATE_URL,
+      currentVersion: VERSION,
+      logger: base.logger,
+    })
+  const ports: Ports = { embeddings, jobs: scheduler, search: new NoopSearchPort(), updates }
   const deps: ServerDeps = { ...base, ports }
   const search = createSearchModule(deps)
   ports.search = search.search
@@ -98,6 +111,8 @@ export async function startup(rt: Runtime, state: ReadyState, opts: StartupOptio
   await rt.scheduler.start()
   state.ready = true
   logger.info('ready')
+  // the first update check runs in the background, so /admin/status has an answer soon (no-op when off)
+  rt.ports.updates.current()
 }
 
 export interface ShutdownOptions {

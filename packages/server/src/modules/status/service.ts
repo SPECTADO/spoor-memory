@@ -147,6 +147,8 @@ export class StatusService {
           waiting: pool?.waitingCount ?? null,
         },
       },
+      // the newest release, from the update check's cache (null while off or unknown); never waits on the network
+      update: ports.updates.current(),
       runtime: {
         rss_bytes: mem.rss,
         heap_used_bytes: mem.heapUsed,
