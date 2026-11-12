@@ -38,6 +38,7 @@ export default defineConfig({
       SPOOR_ADMIN_PASSWORD: ADMIN.password,
       SPOOR_ADMIN_NAME: ADMIN.name,
       SPOOR_JOBS: 'on',
+      SPOOR_UPDATE_CHECK: 'off', // the e2e server never calls GitHub
       SPOOR_EMBEDDING_DEFAULT: 'local',
       SPOOR_OPENAI_API_KEY: '',
       SPOOR_VOYAGE_API_KEY: '',

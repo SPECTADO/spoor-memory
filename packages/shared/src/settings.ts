@@ -21,6 +21,11 @@ const fields = {
     threshold: z.number().min(0.6).max(0.99),
     /** Minimum cosine of a related-item suggestion; read through `relatedMinCos` (kept below `threshold`). */
     related_min_cos: z.number().min(0.4).max(0.9),
+    /**
+     * MCP creates refuse a near-copy at or above this cosine (values agree, same space and type); `null` = off.
+     * Read through `refuseThreshold` (never below `threshold`).
+     */
+    refuse_threshold: z.number().min(0.8).max(1).nullable(),
   },
   embedding: {
     /** A provider name enabled by env (`local` always); the server checks it against its registry. */
@@ -35,7 +40,7 @@ const fields = {
 export const SETTINGS_DEFAULTS = {
   cleanup: { stale_days: 30, archive_days: 90, observation_days: 7 },
   digest: { default_budget: 1500, decision_window_days: 30 },
-  dedupe: { threshold: 0.87, related_min_cos: 0.7 },
+  dedupe: { threshold: 0.87, related_min_cos: 0.7, refuse_threshold: null },
   embedding: { provider: 'local' },
   memory: { exclusive: true },
 } as const
@@ -43,16 +48,22 @@ export const SETTINGS_DEFAULTS = {
 const f = fields
 const d = SETTINGS_DEFAULTS
 
-type DedupeDefaults = { readonly threshold: number; readonly related_min_cos: number }
+type DedupeDefaults = {
+  readonly threshold: number
+  readonly related_min_cos: number
+  readonly refuse_threshold: number | null
+}
 
 /**
  * Dedupe defaults of models whose cosines sit on another scale than e5-small's, keyed by
  * `<provider>:<model family>` (ADR-0028). embeddinggemma scores a reworded duplicate 0.65 to 0.94 (median
  * 0.85) and a different fact on the same topic at most 0.65 once the values guard has run, where e5-small
  * puts both near 0.9; unrelated items sit below 0.53. Every other model takes `SETTINGS_DEFAULTS.dedupe`.
+ * The near-copy refusal (`refuse_threshold`) is on at 0.90 only for embeddinggemma: on e5-small different
+ * facts score as high as reworded duplicates (up to 0.957), so no value is safe there.
  */
 const DEDUPE_DEFAULTS_BY_MODEL: Readonly<Record<string, DedupeDefaults>> = {
-  'ollama:embeddinggemma': { threshold: 0.75, related_min_cos: 0.5 },
+  'ollama:embeddinggemma': { threshold: 0.75, related_min_cos: 0.5, refuse_threshold: 0.9 },
 }
 
 /**
@@ -93,6 +104,7 @@ export const projectSettings = z.strictObject({
     .strictObject({
       threshold: f.dedupe.threshold.default(d.dedupe.threshold),
       related_min_cos: f.dedupe.related_min_cos.default(d.dedupe.related_min_cos),
+      refuse_threshold: f.dedupe.refuse_threshold.default(d.dedupe.refuse_threshold),
     })
     .prefault({}),
   embedding: z.strictObject({ provider: f.embedding.provider.default(d.embedding.provider) }).prefault({}),
@@ -134,6 +146,7 @@ export const projectSettingsPatch = z.strictObject({
     .strictObject({
       threshold: f.dedupe.threshold.optional(),
       related_min_cos: f.dedupe.related_min_cos.optional(),
+      refuse_threshold: f.dedupe.refuse_threshold.optional(),
     })
     .optional(),
   embedding: z.strictObject({ provider: f.embedding.provider.optional() }).optional(),
@@ -148,6 +161,27 @@ export type ProjectSettingsPatch = z.infer<typeof projectSettingsPatch>
 export function relatedMinCos(settings: Pick<ProjectSettings, 'dedupe'>): number {
   const { threshold, related_min_cos } = settings.dedupe
   return Math.min(related_min_cos, Math.round((threshold - 0.01) * 100) / 100)
+}
+
+/**
+ * The cosine at or above which an MCP create is refused as a near-copy, or `null` when the refusal is off.
+ * Never below the duplicate threshold: a stored `threshold` above the model's default `refuse_threshold` raises it.
+ */
+export function refuseThreshold(settings: Pick<ProjectSettings, 'dedupe'>): number | null {
+  const { threshold, refuse_threshold } = settings.dedupe
+  return refuse_threshold === null ? null : Math.max(refuse_threshold, threshold)
+}
+
+/**
+ * The cross-field rule of stored settings: when an admin stored both `dedupe.threshold` and
+ * `dedupe.refuse_threshold` (not null), the refusal cut-off is not below the threshold. `null` when it holds.
+ */
+export function dedupeOrderIssue(stored: unknown): { path: string; message: string } | null {
+  const dd = isRecord(stored) && isRecord(stored.dedupe) ? stored.dedupe : null
+  if (!dd || typeof dd.threshold !== 'number' || typeof dd.refuse_threshold !== 'number') return null
+  return dd.refuse_threshold < dd.threshold
+    ? { path: 'dedupe.refuse_threshold', message: 'must be at least dedupe.threshold' }
+    : null
 }
 
 type StoredSettings = Record<string, Record<string, unknown>>

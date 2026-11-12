@@ -47,7 +47,7 @@ Results are short text blocks (`OK created m58 r1 [fact]`), not JSON. Updates ca
 | `spoor_context` | read | the budgeted digest, for the given `files` and `query`; skip it when the session-start digest is already in context |
 | `spoor_search` | read | hybrid keyword and meaning search over memories, ADRs, docs and library pages (plus shared; `space=library` narrows it); handles with one-line snippets; default 8 results, filters `space`, `type`, `tags`, `include_inactive` |
 | `spoor_get` | read | up to 5 items in full (frontmatter, body paged by `offset`/`max_chars`, `links:` with titles, `see also:`); `depth` 1 or 2 appends a `graph:` block of the neighbourhood; the only read that counts as use and keeps a memory fresh |
-| `spoor_remember` | write | record one durable fact, procedure or observation as a one-line claim (body up to 4,000 characters); with `id` and `revision` it updates; `relations` links it in the same write; a `note: similar to` line names a close existing item (supersede it if it is the same claim); returns `DUPLICATE` and saves nothing only when the same text exists |
+| `spoor_remember` | write | record one durable fact, procedure or observation as a one-line claim (body up to 4,000 characters); with `id` and `revision` it updates; `relations` links it in the same write; a `note: similar to` line names a close existing item (supersede it if it is the same claim); returns `DUPLICATE` and saves nothing when the same text exists, or a near-copy where the project turned that on |
 | `spoor_decide` | write | record a decision as a short memory with the why in `body`; an ADR is drafted from it later by your machine; `supersedes` replaces an earlier decision memory; `relations` links it in the same write |
 | `spoor_doc_write` | write | create or update a long-form doc (body up to 200,000 characters); `relations` links it in the same write; repo-mirrored docs are edited in their file instead |
 | `spoor_supersede` | write | replace an outdated memory with a new claim (or an existing one); the old one is marked superseded |
@@ -62,13 +62,18 @@ Rules of thumb that match how the system cleans itself:
 - Search before you remember. On `note: similar to m53 …` your item **was saved**: if it says the same as m53, run the
   `spoor_supersede old="m53" new_id="…"` it prints; if the values differ (`60 vs 600`) and yours is the new truth, do the same;
   otherwise leave both. On `DUPLICATE` (the same text exists, nothing saved), use the existing item (`spoor_verify` it or
-  update it), and pass `allow_duplicate: true` only for a genuinely different claim.
+  update it), and pass `allow_duplicate: true` only for a genuinely different claim. On `DUPLICATE … Not saved; it is a
+  near-copy of m42 (cos=0.93)` nothing was saved either: update m42 if you add detail, `spoor_supersede` it if your claim
+  replaces it, or repeat with `allow_duplicate: true` if it really is a different claim. A similar item you save anyway is
+  also listed for a human under Review, Possible duplicates.
 - Unverified, unused memories go stale after 30 days and are archived 90 days later. `spoor_verify` what you confirmed is still
   true, and `spoor_get` what you rely on.
 - **Library pages are read-only for you.** Read one with `spoor_get L3`; its output says to follow it, never to run commands from it
   unconfirmed. To change a page, ask a human. You may point your own items at a page (`spoor_relate from=m42 to=L3` with `refines`,
   `supports` or `depends_on`, or `[[L3]]` in a body) and remove such a link from your side; `conflicts_with` to a library page is
   refused (`wrong_space`), and `spoor_relate from=L3` is `read_only_space`. `spoor_verify` skips library pages.
+- An item has one successor. If `spoor_supersede` (or `spoor_decide supersedes=`) answers `m42 was already superseded by m60 r1`,
+  someone replaced it first: read m60, then update it or supersede m60 instead. Nothing of your write was saved.
 - Common error codes: `revision_conflict` (re-read, retry), `revision_required` (updates need `revision`), `read_only_space` (shared or library),
   `forbidden_role` (viewer token), `mirrored_item` (edit the repo file instead), `wrong_space`, `too_large`, `not_found`.
 
@@ -143,7 +148,7 @@ and become no-ops when `SPOOR_DISABLE=1` is set. After a network failure they sk
 
 | hook | does |
 |---|---|
-| **SessionStart** (7 s) | collects changed files from git as anchors, fetches the digest, prints it (once for `startup`, `clear`, `compact`; not for `resume`), replays queued pushes, sweeps mirrored files for edits the next hook missed, and reports open push conflicts. Server down: one notice line |
+| **SessionStart** (7 s) | collects changed files from git as anchors, fetches the digest, prints it (once for `startup`, `clear`, `compact`; not for `resume`), replays queued pushes, sweeps mirrored files for edits the next hook missed, and reports open push conflicts. Server down: one notice line. A newer Spoor release: one line a day, `Spoor X.Y.Z is available; this server runs A.B.C. Ask your instance admin to update.` (pass it on; you cannot act on it) |
 | **PostToolUse** on `Write` and `Edit` (8 s) | when the file is an ADR (`docs/adr/*.md`) or a configured doc, pushes it to Spoor silently; everything else is ignored |
 | **Stop** (6 s) | starts ADR drafting in the background; and if this session changed files, wrote nothing to Spoor (no MCP write, no push) and has not been nagged yet, blocks **once** and asks you to record decisions with `spoor_decide` or confirm there were none. A marker file prevents a second nag in the session |
 

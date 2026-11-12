@@ -68,7 +68,7 @@ export function createSearchModule(deps: ServerDeps) {
     /** `context.build()` for spoor_context and the REST digest. */
     context,
     routes: searchRoutes(deps, { search, context }),
-    bearerRoutes: searchBearerRoutes({ search, context }),
+    bearerRoutes: searchBearerRoutes(deps, { search, context }),
     /** `SearchJobs` of src/ports.ts (src/runtime.ts registers it with the scheduler as is), plus startup's sync. */
     jobs: {
       embedPending: (ctx?: JobContext) => embedPending(deps, ctx),

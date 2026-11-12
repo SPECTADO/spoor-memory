@@ -3,6 +3,7 @@
  * sections 7, 8). The shared space is the `kind='shared'` row with slug `_shared`, created at startup.
  */
 import {
+  dedupeOrderIssue,
   mergeSettings,
   type ProjectJson,
   type ProjectListItem,
@@ -16,7 +17,7 @@ import {
 } from '@spoor/shared'
 import { type AnyColumn, and, asc, eq, inArray, ne, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
-import { auditLog, edges, items, memberships, projects } from '../../db/schema.js'
+import { auditLog, duplicatePairs, edges, items, memberships, projects } from '../../db/schema.js'
 import { webActor, writeAudit } from '../../lib/audit.js'
 import { allowPurge, type DbOrTx, isUniqueViolation, withTx } from '../../lib/db.js'
 import type { ServerDeps } from '../../lib/deps.js'
@@ -35,6 +36,13 @@ export function resolveSettings(stored: unknown, modelTag?: string | null): Proj
 
 /** Validate a merged settings object, reporting issues under `settings.` (400 `invalid_input`). */
 function validateSettings(stored: Record<string, unknown>): ProjectSettings {
+  const order = dedupeOrderIssue(stored)
+  if (order) {
+    throw new ApiError('invalid_input', {
+      message: 'Invalid settings.',
+      details: { issues: [{ path: `settings.${order.path}`, message: order.message }] },
+    })
+  }
   const parsed = projectSettings.safeParse(stored)
   if (!parsed.success) {
     throw new ApiError('invalid_input', {
@@ -58,7 +66,7 @@ async function listStats(db: DbOrTx, ids: string[]) {
       decisions: sql<number>`(count(*) FILTER (WHERE ${items.space} = 'decisions' AND ${notArchived}))::int`,
       docs: sql<number>`(count(*) FILTER (WHERE ${items.space} = 'docs' AND ${notArchived}))::int`,
       library: sql<number>`(count(*) FILTER (WHERE ${items.space} = 'library' AND ${notArchived}))::int`,
-      // review-queue sections of cleanup-and-jobs.md section 6 (conflicts counted below)
+      // review-queue sections of cleanup-and-jobs.md section 6 (conflicts and duplicates counted below)
       review: sql<number>`(
         count(*) FILTER (WHERE ${items.lifecycle} = 'stale' AND ${items.space} <> 'library')
         + count(*) FILTER (WHERE ${items.lifecycle} = 'archived' AND ${items.space} <> 'library'
@@ -92,6 +100,27 @@ async function listStats(db: DbOrTx, ids: string[]) {
   for (const c of conflicts) {
     const s = out.get(c.projectId)
     if (s) s.review += c.n
+  }
+  // open possible duplicates: not dismissed, both items live (the review queue's `duplicates` section)
+  const n = alias(items, 'n')
+  const x = alias(items, 'x')
+  const dups = await db
+    .select({ projectId: duplicatePairs.projectId, n: sql<number>`count(*)::int` })
+    .from(duplicatePairs)
+    .innerJoin(n, eq(n.id, duplicatePairs.newItemId))
+    .innerJoin(x, eq(x.id, duplicatePairs.existingItemId))
+    .where(
+      and(
+        inArray(duplicatePairs.projectId, ids),
+        sql`${duplicatePairs.dismissedAt} IS NULL`,
+        live(n),
+        live(x),
+      ),
+    )
+    .groupBy(duplicatePairs.projectId)
+  for (const d of dups) {
+    const s = out.get(d.projectId)
+    if (s) s.review += d.n
   }
   return out
 }

@@ -897,6 +897,29 @@ describe('import: lossless round trip (DoD 6)', () => {
     expect(e.find((x) => x.dstRef === 'shared:memories/shared-rule')?.dstId).toBe(ids.sMem)
   })
 
+  it('importing the shared space keeps dangling supersedes edges into it dangling (S2, 0007)', async () => {
+    const { app } = buildApp()
+    const { shared, acme, ids } = await seed()
+    const ia = await adminClient(app)
+    const sharedRow = (await db().select().from(items).where(eq(items.id, ids.sMem)))[0]
+    const sharedZip = await bytes(await ia.get('/api/v1/projects/_shared/export'))
+    await purgeSharedItems(shared.id)
+    // two project items whose lossless import kept a `supersedes` edge into `_shared` dangling
+    const dstRef = `shared:memories/${sharedRow?.slug}`
+    for (const srcId of [ids.m1, ids.m2])
+      await db().insert(edges).values({ projectId: acme.id, srcId, kind: 'supersedes', dstRef, dstId: null })
+    const res = await upload(app, ia, '/api/v1/projects/_shared/import', sharedZip)
+    expect(res.status).toBe(200)
+    const sup = await db()
+      .select()
+      .from(edges)
+      .where(and(eq(edges.projectId, acme.id), eq(edges.kind, 'supersedes'), eq(edges.dstRef, dstRef)))
+    expect(sup.map((e) => e.dstId)).toEqual([null, null])
+    // other links into the shared space still resolve
+    const e = await db().select().from(edges).where(eq(edges.projectId, acme.id))
+    expect(e.find((x) => x.dstRef === 'shared:style-guide')?.dstId).toBe(ids.sDoc)
+  })
+
   it('an edited Markdown file appends one revision on top and is listed', async () => {
     const { app } = buildApp()
     const { ids } = await seed()
@@ -1228,6 +1251,18 @@ describe('import: a folder of Markdown files', () => {
   })
 })
 
+/** Rewrite the manifest of an export zip. */
+function withManifest(zip: Uint8Array, fn: (m: Exported['manifest']) => void): Uint8Array {
+  const files = Object.fromEntries(readZip(zip, allow))
+  const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json'])) as Exported['manifest']
+  fn(manifest)
+  files['manifest.json'] = strToU8(JSON.stringify(manifest))
+  return writeZip(files, new Date())
+}
+
+const projectId = async (slug: string) =>
+  ((await db().select().from(projects).where(eq(projects.slug, slug)))[0] as { id: string }).id
+
 describe('import: phase-2 review regressions', () => {
   const folder = (files: Record<string, string>) =>
     writeZip(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, strToU8(v)])), new Date())
@@ -1281,6 +1316,61 @@ describe('import: phase-2 review regressions', () => {
       .from(edges)
       .where(and(eq(edges.projectId, p?.id as string), eq(edges.kind, 'supersedes')))
     expect(sup.filter((e) => e.dstRef.startsWith('shared:')).map((e) => e.dstId)).toEqual([null])
+  })
+
+  it('one superseder per item: a later supersedes edge of an older archive becomes refines (0007)', async () => {
+    const { app } = buildApp()
+    const { ids } = await seed()
+    const ia = await adminClient(app)
+    const zip = withManifest(await bytes(await ia.get('/api/v1/projects/acme/export')), (m) => {
+      // seed's m6 supersedes m1 already; an archive written before 0.7 could hold a second superseder
+      m.edges.push({
+        id: uuid(),
+        src_id: ids.m2,
+        kind: 'supersedes',
+        dst_ref: ids.m1,
+        dst_id: ids.m1,
+        created_at: '2099-01-01T00:00:00.000Z',
+        created_by_label: 'ann@example.com',
+        client_name: null,
+      })
+    })
+    const res = await upload(app, ia, '/api/v1/projects/import', zip, { slug: 'twice', remap_ids: 'true' })
+    expect(res.status).toBe(200)
+    expect((await json<{ notes: string[] }>(res)).notes).toContain(
+      '1 supersedes edge(s) pointed at an item that another item already supersedes; kept as refines.',
+    )
+    const pid = await projectId('twice')
+    const all = await db().select().from(edges).where(eq(edges.projectId, pid))
+    expect(all.filter((e) => e.kind === 'supersedes')).toHaveLength(1)
+  })
+
+  it('one superseder per item: two folder files superseding one note, the first keeps supersedes', async () => {
+    const { app } = buildApp()
+    const { acme } = await seed()
+    const ia = await adminClient(app)
+    const res = await upload(
+      app,
+      ia,
+      '/api/v1/projects/acme/import',
+      folder({
+        'memories/cache-ttl-60.md': '---\ntype: fact\n---\nThe cache TTL is 60 s.\n',
+        'memories/cache-ttl-120.md': '---\ntype: fact\nsupersedes: cache-ttl-60\n---\nThe TTL is 120 s.\n',
+        'memories/cache-ttl-300.md': '---\ntype: fact\nsupersedes: cache-ttl-60\n---\nThe TTL is 300 s.\n',
+      }),
+    )
+    expect(res.status).toBe(200)
+    const old = (
+      await db()
+        .select()
+        .from(items)
+        .where(and(eq(items.projectId, acme.id), eq(items.slug, 'cache-ttl-60')))
+    )[0]
+    const into = await db()
+      .select()
+      .from(edges)
+      .where(eq(edges.dstId, old?.id as string))
+    expect(into.map((e) => e.kind).sort()).toEqual(['refines', 'supersedes'])
   })
 
   it('a future last_verified is clamped to the import time (D-clamp)', async () => {
@@ -1362,18 +1452,6 @@ describe('import: library pages (ADR-0014)', () => {
       ])
     return { ...s, lib }
   }
-
-  /** Rewrite the manifest of an export zip. */
-  function withManifest(zip: Uint8Array, fn: (m: Exported['manifest']) => void): Uint8Array {
-    const files = Object.fromEntries(readZip(zip, allow))
-    const manifest = JSON.parse(new TextDecoder().decode(files['manifest.json'])) as Exported['manifest']
-    fn(manifest)
-    files['manifest.json'] = strToU8(JSON.stringify(manifest))
-    return writeZip(files, new Date())
-  }
-
-  const projectId = async (slug: string) =>
-    ((await db().select().from(projects).where(eq(projects.slug, slug)))[0] as { id: string }).id
 
   it('a lossless round trip keeps the page, its revisions and its links both ways', async () => {
     const { app } = buildApp()

@@ -4,6 +4,80 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-12
+
+0.7.0 was tagged but never published (its release run failed in the web e2e tests), so this is the first 0.7 release on npm
+and GHCR; it includes everything listed under 0.7.0.
+
+### Added
+
+- **Project dashboard: Status and Latest activity.** A new Status box shows every member two 14-day bar charts (agent reads
+  and writes, item changes per day) and a few numbers: agent requests today and in 7 days, active agents and people in
+  14 days, items changed in 7 days, active and stale items, the review-queue total and the last cleanup run. "Agent activity"
+  is now "Latest activity": everyone still sees the last read and write, and project admins and instance admins also see the
+  newest 8 agent requests with the outcome. Editors and viewers never get request rows; the server leaves them out. The
+  dashboard refreshes every minute while the tab is visible, catches up when you come back, and shows when it last updated.
+  The shared knowledge shows only the item-change parts. `GET …/dashboard` has two new optional fields, `stats` and
+  `activity`.
+- **Usage page for instance admins** (`/admin/usage`, linked from Status and the admin navigation). It shows agent traffic
+  of the last 14 UTC days from the request log: reads, writes, searches, people and tokens per day, totals, and tables by
+  project, operation (with failures and avg / p95 time) and client. It also shows items and revisions written per day. It
+  counts MCP and CLI calls only, not web UI use, and says so. A "Host resources" card charts process CPU, load average,
+  memory, heap, event-loop delay, database size and connections, app pool use, open MCP sessions and pending embeddings over
+  24 hours or 14 days, with the current, lowest and highest value. A new `resource-sample` job takes a sample every
+  5 minutes (only with `SPOOR_JOBS=on`; it is listed on the Jobs page), and `purge-ephemeral` deletes samples after 14 days.
+  The charts are small inline SVG with text alternatives and follow dark mode. New endpoint
+  `GET /api/v1/status/usage?range=24h|14d` (IA). Migration 0009 adds the `resource_samples` table and indexes on
+  `items.created_at` and `item_revisions.created_at`.
+
+- **Possible duplicates in the review queue.** When a memory or doc is saved although a similar item with the same values
+  exists (the MCP `note: similar to` case, or a web save after the "similar item exists" warning), the pair is listed in a new
+  review tab, "Possible duplicates". Each card shows both items with handle, title, type and age, and the similarity. Editors
+  can keep one and supersede the other ("Keep new", "Keep existing"; memories only) or mark the pair "Not a duplicate", which
+  stores who and when. A pair also leaves the tab when either item is archived, superseded or deleted. The pairs count in the
+  review counts, the project list's review total and the dashboard. New endpoint
+  `POST /api/v1/projects/:slug/review/duplicates/:pair_id/dismiss`; migration 0008 adds the `duplicate_pairs` table.
+- **Near-copies can be refused** (`dedupe.refuse_threshold`, project settings, Duplicates). An MCP create whose closest item
+  scores at or above it, in the same space and type and with no differing values, is not saved. The reply is a non-error
+  `DUPLICATE` that says `Not saved; it is a near-copy of m42 (cos=0.93).` and gives three ways on: update m42,
+  `spoor_supersede` it, or repeat with `allow_duplicate=true`. It is audited and logged like the same-text refusal. The
+  setting is 0.80 to 1.0 or empty (off), and cannot be lower than a duplicate threshold you set. Web creates still only warn,
+  and decisions are not checked.
+- **Update notice.** The server checks every 6 hours whether a newer Spoor release exists, by reading
+  `deploy/latest-release.json` from GitHub. Instance admins then see "Update available: X.Y.Z" in the sidebar footer and on
+  `/admin/status`, linked to the release notes. The session digest prints one line a day, `Spoor X.Y.Z is available; this
+  server runs A.B.C. Ask your instance admin to update.`, and `spoor whoami` shows it too. The call sends no version or
+  instance data, fails silently and never slows a request. It is the only outbound call the server makes on its own; set
+  `SPOOR_UPDATE_CHECK=off` to stop it, or `SPOOR_UPDATE_URL` to read a mirror. New endpoint `GET /api/v1/status/update` (IA),
+  a new `update` field on `GET /api/v1/status`, and a `Spoor-Latest-Version` header on the CLI's context and whoami
+  responses. The release workflow writes the file once the npm package and the image are both published.
+- **Version links.** The version text in the sidebar footer and on the login, invite and device pages links to its release
+  on GitHub (the repository while the version is unknown).
+
+### Changed
+
+- **Projects that embed with embeddinggemma refuse near-copies at 0.90 by default.** On the built-in e5 model the refusal stays
+  off, because there different facts score as high as reworded duplicates. A value a project saved is kept; set the field
+  empty to turn it off.
+
+### Fixed
+
+- **An item has one successor.** Two supersedes of one item at the same time (two agents, or `spoor_supersede` and
+  `spoor_decide` with `supersedes`) both succeeded and left two current versions. Now the second one fails with
+  409 `revision_conflict`. The error names the existing successor and its revision. In MCP it reads `m42 was already
+  superseded by m60 r1: read it and update or supersede m60 instead.`, and nothing of the losing write is saved. This also
+  applies to a supersede that is not concurrent. Repeating the same supersede is still fine. Push and ADR import save the
+  file without the edge and warn with `supersede_conflict`. Migration 0007 adds a unique index as a backstop. Before that it
+  repairs existing data: the earliest successor stays, and later ones are turned into `refines` links. Plain edits with a
+  base revision were already safe; a test now covers them.
+  An item that was set back to active after its successor was itself superseded can be superseded again: the old link
+  to the earlier successor becomes a `refines` link.
+- **Shared-space import no longer links project `supersedes` edges into `_shared`.** Re-importing the shared space
+  resolved every dangling `shared:` link of the projects, also the `supersedes` and `drafted_from` ones a project import
+  had kept dangling on purpose. That could mark a shared item superseded from a project, and with the new one-successor
+  index it could fail the whole import with 422. Those two kinds now stay dangling.
+- **Review queue counts**: the section counts (for example "Stale 1") are refreshed whenever a section list loads, so they no longer show 0 next to rows that a cleanup run added a moment earlier.
+
 ## [0.7.0] - 2026-11-10
 
 ### Added

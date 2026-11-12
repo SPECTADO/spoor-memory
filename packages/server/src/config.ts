@@ -50,6 +50,10 @@ const optional = <T extends z.ZodType>(schema: T) =>
 const withDefault = <T extends z.ZodType>(schema: T, def: z.output<T>) =>
   z.preprocess((v) => (v === '' ? undefined : v), schema.default(def as never))
 
+/** The release file the update check reads (operations.md "Update check"); written by the release workflow. */
+export const DEFAULT_UPDATE_URL =
+  'https://raw.githubusercontent.com/SPECTADO/spoor-memory/main/deploy/latest-release.json'
+
 const int = (min: number, max: number) => z.coerce.number().int().min(min).max(max)
 const pgUrl = z.string().regex(/^postgres(ql)?:\/\//, 'must be a postgres:// URL')
 
@@ -79,6 +83,15 @@ const schema = z
     /** Pushes / ADR imports in flight per project (admission control of the push routes). */
     SPOOR_PUSH_CONCURRENCY: withDefault(int(1, 64), 3),
     SPOOR_JOBS: withDefault(z.enum(['on', 'off']), 'on'),
+    /** The only outbound call the server makes on its own: a daily-ish read of the latest-release file. */
+    SPOOR_UPDATE_CHECK: withDefault(z.enum(['on', 'off']), 'on'),
+    SPOOR_UPDATE_URL: withDefault(
+      z
+        .string()
+        .url()
+        .refine((u) => /^https?:$/.test(new URL(u).protocol), 'must be http or https'),
+      DEFAULT_UPDATE_URL,
+    ),
     SPOOR_TRUST_PROXY: optional(z.string().max(4000)),
     SPOOR_WEB_DIR: optional(z.string().min(1)),
     SPOOR_MIGRATIONS_DIR: optional(z.string().min(1)),

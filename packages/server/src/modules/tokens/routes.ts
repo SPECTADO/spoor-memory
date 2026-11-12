@@ -6,6 +6,7 @@ import { tokenCreateRequest } from '@spoor/shared'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { ServerDeps } from '../../lib/deps.js'
+import { setLatestVersionHeader } from '../../lib/latest-version.js'
 import { readJson, readQuery, uuidOr404 } from '../../lib/validate.js'
 import type { AppEnv } from '../../types.js'
 import { requireBearer, requireUser } from '../auth/index.js'
@@ -36,6 +37,10 @@ export function tokenRoutes(deps: ServerDeps, tokens: TokenService) {
 }
 
 /** Mounted under `/p/:slug/api` after the bearer guards. */
-export function tokenBearerRoutes(tokens: TokenService) {
-  return new Hono<AppEnv>().get('/whoami', async (c) => c.json(await tokens.whoami(requireBearer(c))))
+export function tokenBearerRoutes(deps: ServerDeps, tokens: TokenService) {
+  return new Hono<AppEnv>().get('/whoami', async (c) => {
+    const body = await tokens.whoami(requireBearer(c))
+    setLatestVersionHeader(c, deps.ports.updates)
+    return c.json(body)
+  })
 }

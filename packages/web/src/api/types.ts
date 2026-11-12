@@ -10,9 +10,13 @@ import type {
   adrStatuses,
   ConflictReviewRow,
   confidences,
+  DashboardRequestJson,
   DashboardResponse,
+  DashboardStatsJson,
   DeviceApproveResponse,
   DeviceLookupResponse,
+  DuplicateDismissResponse,
+  DuplicateReviewRow,
   ExpiringReviewRow,
   INVITE_STATUSES,
   InviteAcceptRequest,
@@ -58,11 +62,18 @@ export type {
   GraphResponse,
   RelatedItem,
   RelatedResponse,
+  ResourceMetric,
+  ResourcePointJson,
+  ResourceSummaryJson,
+  UsageJson,
+  UsageRange,
 } from '@spoor/shared'
 export { EDGE_KINDS, GRAPH_LIFECYCLES, GRAPH_NODE_CAP, REVIEW_SECTIONS } from '@spoor/shared'
 export type {
   ActorJson,
   AuditRowJson,
+  DashboardRequestJson,
+  DashboardStatsJson,
   DeviceApproveResponse,
   ItemSummary,
   LastRequestJson,
@@ -344,12 +355,15 @@ export type StaleRow = StaleReviewRow
 export type ArchivedRow = ItemSummary
 export type ExpiringRow = ExpiringReviewRow
 export type ConflictRow = ConflictReviewRow
+export type DuplicateRow = DuplicateReviewRow
+export type DuplicateDismissResult = DuplicateDismissResponse
 export type PushConflictRow = PushConflictReviewRow
 export interface ReviewRowOf {
   stale: StaleRow
   archived: ArchivedRow
   expiring: ExpiringRow
   conflicts: ConflictRow
+  duplicates: DuplicateRow
   push_conflicts: PushConflictRow
 }
 export type ReviewRow = ReviewRowOf[ReviewSection]
@@ -468,6 +482,16 @@ export interface InstanceStatusJson {
     system_free_bytes: number
     mcp_sessions: number
   }
+  /** The newest release from the server's update check; null while the check is off or has no answer. */
+  update: UpdateInfoJson | null
+}
+/** `GET /api/v1/status/update` and `update` of the status page (operations.md "Update check"). */
+export interface UpdateInfoJson {
+  latest: string
+  /** `latest` is newer than the server. */
+  available: boolean
+  /** Its release notes on GitHub. */
+  url: string
 }
 export interface InstanceJobsJson {
   scheduler: { enabled: boolean }

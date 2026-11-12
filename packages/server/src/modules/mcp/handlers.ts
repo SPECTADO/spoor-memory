@@ -21,6 +21,7 @@ import {
   type LoadedItem,
   markedHandle,
   type NearDuplicate,
+  type RefusedDuplicate,
   viewOf,
 } from '../items/index.js'
 import { common, type RequestLog, type RequestNote } from '../requests/index.js'
@@ -182,6 +183,13 @@ function similarLines(
   note.data = { ...note.data, similar: similar.handle, similar_values_differ: similar.values !== null }
   return [similarLine({ ...similar, space }, from)]
 }
+
+/** Request-log data of a refused create: which item, how close, and whether it was the same text or a near-copy. */
+const duplicateData = (d: RefusedDuplicate) => ({
+  duplicate: d.handle,
+  match: d.match,
+  cos: Number(d.cos.toFixed(4)),
+})
 
 const similarId = (res: { similar: NearDuplicate | null }): string[] => (res.similar ? [res.similar.id] : [])
 
@@ -429,6 +437,7 @@ export function rememberTool(s: McpServices): Handler<typeof rememberInput> {
       )
       if (res.duplicate) {
         note.outcome = 'duplicate'
+        note.data = { ...note.data, ...duplicateData(res.duplicate) }
         return duplicateText({ ...res.duplicate, space: 'memories' }, 'spoor_remember')
       }
       const item = res.item as NonNullable<typeof res.item>
@@ -540,6 +549,7 @@ export function decideTool(s: McpServices): Handler<typeof decideInput> {
     )
     if (res.duplicate) {
       note.outcome = 'duplicate'
+      note.data = { ...note.data, ...duplicateData(res.duplicate) }
       return duplicateText({ ...res.duplicate, space: 'memories' }, 'spoor_remember')
     }
     const item = res.item as NonNullable<typeof res.item>
@@ -590,6 +600,7 @@ export function docWriteTool(s: McpServices): Handler<typeof docWriteInput> {
       )
       if (res.duplicate) {
         note.outcome = 'duplicate'
+        note.data = { ...note.data, ...duplicateData(res.duplicate) }
         return duplicateText({ ...res.duplicate, space: 'docs' }, 'spoor_doc_write')
       }
       const item = res.item as NonNullable<typeof res.item>

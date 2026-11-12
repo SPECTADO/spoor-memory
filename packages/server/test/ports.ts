@@ -4,7 +4,7 @@
  * `NoopSearchPort`. The real ones are bound in src/runtime.ts.
  */
 import type { EmbeddingProvider, EmbeddingRegistry, JobName, JobsPort, Ports } from '../src/ports.js'
-import { NoopSearchPort } from '../src/ports.js'
+import { NO_UPDATES, NoopSearchPort } from '../src/ports.js'
 
 function l2normalize(v: Float32Array): Float32Array {
   let sum = 0
@@ -113,6 +113,7 @@ export function stubPorts(overrides: Partial<Ports> = {}): Ports {
     embeddings: new StaticEmbeddingRegistry(new FakeEmbeddingProvider()),
     search: new NoopSearchPort(),
     jobs: new MemoryJobsPort(),
+    updates: NO_UPDATES,
     ...overrides,
   }
 }

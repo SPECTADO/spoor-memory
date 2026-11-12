@@ -482,6 +482,19 @@ describe('adr import: two passes', () => {
     expect(existsSync(queueFile(repo))).toBe(false)
   })
 
+  it('supersede_conflict: the file is done, the warning names the existing successor', async () => {
+    const repo = adrRepo(1)
+    srv.on(IMPORT, (q) =>
+      answer(q, () => ({
+        warnings: [{ code: 'supersede_conflict', ref: 'ADR-0003', superseded_by: 'ADR-0005' }],
+      })),
+    )
+    const r = await run(['adr', 'import'], { cwd: repo })
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('ADR-0003 is already superseded by ADR-0005; not applied (fix the file)')
+    expect(existsSync(queueFile(repo))).toBe(false)
+  })
+
   it('a run stopped in pass 2 leaves status edges; the next run sends only those, without the edges header', async () => {
     const repo = adrRepo(2)
     const a = 'docs/adr/0001-a.md'

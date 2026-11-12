@@ -22,7 +22,7 @@ import {
 } from '../../ui'
 
 /** The jobs `POST /jobs/:name/run` accepts (api.md §10). */
-export const RUNNABLE_JOBS = ['cleanup', 'embed-pending', 'reembed', 'purge-ephemeral']
+export const RUNNABLE_JOBS = ['cleanup', 'embed-pending', 'reembed', 'purge-ephemeral', 'resource-sample']
 
 const REASONS: Record<string, string> = {
   disabled: 'the scheduler is disabled on this instance',

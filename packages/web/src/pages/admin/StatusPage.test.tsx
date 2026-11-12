@@ -73,7 +73,9 @@ const status = {
     system_free_bytes: 2 * 1024 ** 3,
     mcp_sessions: 1,
   },
+  update: null as null | { latest: string; available: boolean; url: string },
 }
+const NOTES = 'https://github.com/SPECTADO/spoor-memory/releases/tag/v0.7.0'
 
 describe('AdminStatusPage', () => {
   it('shows the embedding model, record counts and database size', async () => {
@@ -90,6 +92,42 @@ describe('AdminStatusPage', () => {
     const records = screen.getByRole('region', { name: 'Records' })
     expect(within(records).getByText('4 active of 5')).toBeInTheDocument()
     expect(screen.getByRole('table', { name: 'Table sizes' })).toHaveTextContent('10 MB')
+  })
+
+  it('shows the latest release next to the version, and links it when it is newer', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({ is_admin: true })],
+      'GET /api/v1/status': [200, { ...status, update: { latest: '0.7.0', available: true, url: NOTES } }],
+    })
+    renderApp('/admin/status')
+    const install = await screen.findByRole('region', { name: 'Installation' })
+    expect(within(install).getByRole('link', { name: '0.6.1' })).toHaveAttribute(
+      'href',
+      'https://github.com/SPECTADO/spoor-memory/releases/tag/v0.6.1',
+    )
+    expect(within(install).getByRole('link', { name: 'Update available: 0.7.0' })).toHaveAttribute(
+      'href',
+      NOTES,
+    )
+  })
+
+  it('says "latest" when the server is current, and nothing when the check has no answer', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({ is_admin: true })],
+      'GET /api/v1/status': [200, { ...status, update: { latest: '0.6.1', available: false, url: NOTES } }],
+    })
+    const { unmount } = renderApp('/admin/status')
+    const install = await screen.findByRole('region', { name: 'Installation' })
+    expect(install).toHaveTextContent('0.6.1 · latest 0.6.1')
+    expect(within(install).queryByText(/Update available/)).not.toBeInTheDocument()
+    unmount()
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({ is_admin: true })],
+      'GET /api/v1/status': [200, status],
+    })
+    renderApp('/admin/status')
+    const plain = await screen.findByRole('region', { name: 'Installation' })
+    expect(plain).not.toHaveTextContent('latest')
   })
 
   it('formats byte counts', () => {

@@ -243,6 +243,8 @@ running the same command again continues where it stopped. Why it is built this 
      ([api.md](api.md) §7.3).
    - `ambiguous_ref` warnings: print the file and the ref; the server did not apply it, a human fixes the file.
    - `unresolved_relation` and `unresolved_drafted_from` are printed as notes; `unresolved_supersedes` as before.
+   - `supersede_conflict {ref, superseded_by}`: printed as `warning: <file>: ADR-0003 is already superseded by ADR-0005; not
+     applied (fix the file)`. The file itself is saved and not sent again.
    - per-file `error`: print it, continue, exit 2 at the end. A per-file `internal` (nothing wrong with the file) is sent at
      most 3 times in all within the run (2 re-sends); `not processed` (the server stopped after repeated errors) does not use
      up those attempts for its first 9 answers, after which they count as usual. A file refused for its content (local
@@ -325,7 +327,7 @@ See §6. `spoor adr draft [--since ISO] [--max N] [--dry-run] [--session ID]`.
 
 ### 4.7 `spoor whoami`
 
-Prints the `whoami` response in one line (`ann@example.com · acme · editor · token "claude-code (device 2026-10-19)" spr_Ab12Cd34 · server 0.1.0`). Human mode. A small addition to the required list, used for support and by `login`.
+Prints the `whoami` response in one line (`ann@example.com · acme · editor · token "claude-code (device 2026-10-19)" spr_Ab12Cd34 · server 0.1.0`), plus the §5.1 step 9 "is available" line when the response carries `Spoor-Latest-Version` (`spoor status --remote` shows it as `update   …`; `--json` prints only the body). Human mode. A small addition to the required list, used for support and by `login`.
 
 ### 4.8 `spoor hook <session-start|stop|post-tool-use>`
 
@@ -445,6 +447,11 @@ m12 [proc] Run `pnpm db:migrate` before integration tests
    hooks pin).` The global CLI never updates itself, so this line is how it learns of a server upgrade; `spoor init` also moves
    the `npx` fallback pin of §7.2. Silent when the header is missing (a server before this check) or either side is not a
    release version (`0.0.0`).
+   **Newer release.** When the response also carries `Spoor-Latest-Version` (the server's update check knows a newer stable
+   release; operations.md "Update check") and it is newer than `Spoor-Server-Version`, the hook prints, after the version line
+   and before the digest, `Spoor <latest> is available; this server runs <server>. Ask your instance admin to update.` At most
+   once a day per checkout (`.spoor/notice-day`, kind `update`, like the opted-out line). It is advisory: the CLI makes no extra
+   request and never asks npm or GitHub.
 10. Exit 0.
 
 ### 5.2 Stop: one nag, then hand drafting to the background

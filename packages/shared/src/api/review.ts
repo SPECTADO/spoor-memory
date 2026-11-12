@@ -5,7 +5,14 @@
 import { z } from 'zod'
 import type { ItemSummary } from './items.js'
 
-export const REVIEW_SECTIONS = ['stale', 'archived', 'expiring', 'conflicts', 'push_conflicts'] as const
+export const REVIEW_SECTIONS = [
+  'stale',
+  'archived',
+  'expiring',
+  'conflicts',
+  'duplicates',
+  'push_conflicts',
+] as const
 export type ReviewSection = (typeof REVIEW_SECTIONS)[number]
 
 /** `GET /api/v1/projects/:slug/review`. */
@@ -13,7 +20,7 @@ export interface ReviewCounts {
   counts: Record<ReviewSection, number>
 }
 
-/** Rows of `GET …/review/:section` (conflicts are pairs, every other section an `ItemSummary` plus extras). */
+/** Rows of `GET …/review/:section` (conflicts and duplicates are pairs, every other section an `ItemSummary` plus extras). */
 export type StaleReviewRow = ItemSummary & { days_to_archive: number | null; used_since_stale: boolean }
 export type ExpiringReviewRow = ItemSummary & { expires_in_s: number | null }
 export type PushConflictReviewRow = ItemSummary & {
@@ -23,6 +30,25 @@ export interface ConflictReviewRow {
   edge_id: string
   a: ItemSummary
   b: ItemSummary
+}
+
+/**
+ * A possible duplicate: `new` was saved although `existing` scored `cos` (at or above `dedupe.threshold`, values
+ * agree). Open until dismissed, or until either item is archived, superseded or deleted.
+ */
+export interface DuplicateReviewRow {
+  pair_id: string
+  cos: number
+  created_at: string
+  new: ItemSummary
+  existing: ItemSummary
+}
+
+/** `POST …/review/duplicates/:pair_id/dismiss` ("Not a duplicate"): who and when, kept on the pair. */
+export interface DuplicateDismissResponse {
+  pair_id: string
+  dismissed_at: string
+  dismissed_by: string
 }
 
 export const REVIEW_BULK_ACTIONS = ['verify', 'archive'] as const

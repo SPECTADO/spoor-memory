@@ -5,7 +5,15 @@ import { describe, expect, it } from 'vitest'
 import { testDb } from '../../../test/db.js'
 import { createProject, createUser } from '../../../test/factories.js'
 import { testConfig } from '../../../test/http.js'
-import { deviceCodes, invites, jobLocks, jobRuns, requestLog, sessions } from '../../db/schema.js'
+import {
+  deviceCodes,
+  invites,
+  jobLocks,
+  jobRuns,
+  requestLog,
+  resourceSamples,
+  sessions,
+} from '../../db/schema.js'
 import { randomSecret, sha256 } from '../../lib/crypto.js'
 import { createScheduler } from './index.js'
 import { PgJobStore } from './store.js'
@@ -143,6 +151,11 @@ describe('purge-ephemeral', () => {
         (at, project_id, kind, surface, operation, actor_label, outcome, duration_ms) VALUES
       (now() - interval '13 days', ${project.id}, 'read', 'mcp', 'spoor_search', 'a@example.com', 'ok', 3),
       (now() - interval '15 days', ${project.id}, 'write', 'cli', 'POST /push', 'a@example.com', 'ok', 9)`)
+    // host resource samples of the usage page keep 14 days too (ADR-0033)
+    await db().execute(sql`INSERT INTO resource_samples
+        (at, host, load_avg1, rss_bytes, heap_used_bytes, db_size_bytes, db_connections, mcp_sessions, embeddings_pending)
+      VALUES (now() - interval '13 days', 'kept', 0.5, 1, 1, 1, 1, 0, 0),
+             (now() - interval '15 days', 'purged', 0.5, 1, 1, 1, 1, 0, 0)`)
   }
 
   it('deletes only rows past their fixed cutoffs and reports the counts', async () => {
@@ -158,12 +171,13 @@ describe('purge-ephemeral', () => {
     expect(await db().select().from(deviceCodes)).toHaveLength(2)
     expect(await db().select().from(invites)).toHaveLength(3)
     expect((await db().select().from(requestLog)).map((r) => r.operation)).toEqual(['spoor_search'])
+    expect((await db().select().from(resourceSamples)).map((r) => r.host)).toEqual(['kept'])
     const runs = await db().select().from(jobRuns).orderBy(jobRuns.startedAt)
     // the 29-day-old cleanup row and this purge run itself remain
     expect(runs.map((r) => r.name)).toEqual(['cleanup', 'purge-ephemeral'])
     expect(runs[1]).toMatchObject({
       status: 'ok',
-      stats: { sessions: 2, device_codes: 1, invites: 3, job_runs: 1, request_log: 1 },
+      stats: { sessions: 2, device_codes: 1, invites: 3, job_runs: 1, request_log: 1, resource_samples: 1 },
     })
   })
 })

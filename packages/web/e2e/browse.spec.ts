@@ -82,6 +82,36 @@ async function mockApi(page: Page) {
               at: '2026-10-19T08:00:00Z',
             },
           ],
+          links: { unlinked_items: 0, dangling_refs: 0 },
+          last_requests: { read: null, write: null },
+          stats: {
+            window: { days: 14, from: '2026-10-06', to: '2026-10-19' },
+            per_day: Array.from({ length: 14 }, (_, i) => ({
+              day: `2026-10-${String(6 + i).padStart(2, '0')}`,
+              reads: i,
+              writes: i % 2,
+              changes: i % 3,
+            })),
+            requests: { today: 13, last_7_days: 60, agents_14_days: 2 },
+            people_14_days: 1,
+            items_changed_7_days: 2,
+            last_cleanup_at: null,
+          },
+          activity: [
+            {
+              id: 1,
+              at: '2026-10-19T08:00:00Z',
+              kind: 'write',
+              surface: 'mcp',
+              operation: 'spoor_remember_with_a_rather_long_tool_name',
+              actor: {
+                label: 'someone.with.a.long.address@example-company.com',
+                client_name: 'claude-code/2.1.303',
+                token_name: 'laptop',
+              },
+              outcome: 'conflict',
+            },
+          ],
         })
       case 'GET /api/v1/projects/acme/spaces/memories/items': {
         lists.push(url.search)
@@ -112,11 +142,28 @@ async function mockApi(page: Page) {
   return { lists }
 }
 
+test('the dashboard fits a phone screen', async ({ page }) => {
+  await mockApi(page)
+  await page.setViewportSize({ width: 375, height: 800 })
+  await page.goto('/projects/acme')
+  await expect(page.getByRole('region', { name: 'Status' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Latest agent requests' })).toBeVisible()
+  const fits = await page.evaluate(
+    () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+  )
+  expect(fits).toBe(true)
+})
+
 test('dashboard to a filtered, pinnable memory list and a search', async ({ page }) => {
   await mockApi(page)
   await page.goto('/projects/acme')
   await expect(page.getByRole('heading', { name: 'Acme', level: 1 })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Use UTC everywhere' })).toBeVisible()
+  const status = page.getByRole('region', { name: 'Status' })
+  await expect(status.getByRole('img', { name: /Agent requests per day/ })).toBeVisible()
+  await expect(
+    page.getByRole('region', { name: 'Latest activity' }).getByText('Latest agent requests'),
+  ).toBeVisible()
   await expect(page.getByRole('link', { name: 'Install guide (install.md)' })).toHaveAttribute(
     'href',
     '/p/acme/install.md',

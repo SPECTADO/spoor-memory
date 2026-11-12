@@ -86,6 +86,15 @@ Response headers on every route:
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy: same-origin`
 
+The browser never talks to another host: the "Update available" notice comes from the server (`GET /api/v1/status/update`),
+so `connect-src 'self'` stays. Links to GitHub (the version text, release notes) are plain `<a target="_blank" rel="noreferrer">`.
+
+**Outbound calls.** Besides embedding providers an admin configures, the server makes one call of its own: the update check
+(`SPOOR_UPDATE_CHECK`, default `on`; [operations.md](../operations.md) "Update check"). A plain GET of `SPOOR_UPDATE_URL` with
+User-Agent `spoor`: no version, host name, instance id, user or project data. The answer is untrusted: zod-validated, at most
+8 KB, a stable `x.y.z` only, and its `url` must be `https://github.com/SPECTADO/…`, so a tampered file cannot make the UI link
+elsewhere. Any failure is silent and no request waits on it. `off` makes no call at all.
+
 ## 5. Invites, tokens
 
 **Invites**:

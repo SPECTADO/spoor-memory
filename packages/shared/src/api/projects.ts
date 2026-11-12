@@ -7,7 +7,7 @@ import { projectSettingsPatch } from '../settings.js'
 import { isValidProjectSlug } from '../slug.js'
 import { emailSchema, nameSchema, PROJECT_ROLES, type ProjectRole } from './auth.js'
 import type { ItemSummary } from './items.js'
-import type { LastRequestJson } from './requests.js'
+import type { LastRequestJson, RequestKind, RequestSurface } from './requests.js'
 import type { ReviewSection } from './review.js'
 
 // ---- projects (api.md 4.1) ----------------------------------------------------------------------------
@@ -64,7 +64,7 @@ export interface ProjectJson {
   settings: {
     cleanup: { stale_days: number; archive_days: number; observation_days: number }
     digest: { default_budget: number; decision_window_days: number }
-    dedupe: { threshold: number; related_min_cos: number }
+    dedupe: { threshold: number; related_min_cos: number; refuse_threshold: number | null }
     embedding: { provider: string }
     memory: { exclusive: boolean }
   }
@@ -126,6 +126,58 @@ export interface DashboardResponse {
    * dangling wikilinks written in such items.
    */
   links: { unlinked_items: number; dangling_refs: number }
+  /** Activity overview and basic numbers for every member. Optional: older servers leave it out. */
+  stats?: DashboardStatsJson
+  /**
+   * The newest agent requests (at most 8, newest first). Only for project admins and instance admins
+   * (`requests.read`, ADR-0018): the server leaves the field out for other members and on `_shared`.
+   */
+  activity?: DashboardRequestJson[]
+}
+
+/** How many request rows `activity` carries. */
+export const DASHBOARD_ACTIVITY = 8
+
+/** One UTC day of the dashboard's activity overview. */
+export interface DashboardDayJson {
+  /** `YYYY-MM-DD` (UTC). */
+  day: string
+  /** Agent reads and writes (request log); 0 on `_shared`. */
+  reads: number
+  writes: number
+  /** Item changes (audit log, the `recent` actions), items deleted since included. */
+  changes: number
+}
+
+/** `DashboardResponse.stats`: counts only, no rows, queries or handles. */
+export interface DashboardStatsJson {
+  /** The last 14 UTC days, `from` to `to` (today) inclusive. */
+  window: { days: number; from: string; to: string }
+  /** One row per day of the window, oldest first. */
+  per_day: DashboardDayJson[]
+  /**
+   * Agent requests: `today` = the current UTC day, `last_7_days` = the last 7 UTC days (today included),
+   * `agents_14_days` = distinct token and client pairs. `null` on `_shared` (no request log there).
+   */
+  requests: { today: number; last_7_days: number; agents_14_days: number } | null
+  /** Distinct people (or service tokens) with an agent request or an item change in the window; the system is not counted. */
+  people_14_days: number
+  /** Distinct items with a `recent` change in the last 7 UTC days. */
+  items_changed_7_days: number
+  /** When the instance's `cleanup` job last ran, `null` if never. */
+  last_cleanup_at: string | null
+}
+
+/** A row of `DashboardResponse.activity`: no query, handles or token ids. */
+export interface DashboardRequestJson {
+  id: number
+  at: string
+  kind: RequestKind
+  surface: RequestSurface
+  operation: string
+  actor: { label: string; client_name: string | null; token_name: string | null }
+  /** `ok`, or the error code. */
+  outcome: string
 }
 
 // ---- memberships (api.md 4.2) -------------------------------------------------------------------------

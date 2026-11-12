@@ -14,7 +14,7 @@ const project: ProjectJson = {
   settings: {
     cleanup: { stale_days: 30, archive_days: 90, observation_days: 7 },
     digest: { default_budget: 1500, decision_window_days: 30 },
-    dedupe: { threshold: 0.92, related_min_cos: 0.7 },
+    dedupe: { threshold: 0.92, related_min_cos: 0.7, refuse_threshold: null },
     embedding: { provider: 'local' },
     memory: { exclusive: true },
   },
@@ -134,5 +134,55 @@ describe('SettingsForm', () => {
     expect(api.find('PATCH', '/api/v1/projects/acme')[0]?.body).toEqual({
       settings: { dedupe: { related_min_cos: 0.6 } },
     })
+  })
+
+  it('refuse_threshold: empty means off, a number is checked against 0.80-1.0, clearing it sends null', async () => {
+    const api = mockApi({ [patchPath]: [200, project] })
+    const { unmount } = renderWithProviders(<SettingsForm project={project} />)
+    const field = screen.getByLabelText('Refuse near-copies from (cosine)')
+    expect(field).toHaveValue(null)
+    expect(screen.getByText(/Empty = off/)).toBeInTheDocument()
+    await userEvent.type(field, '0.7')
+    await userEvent.click(screen.getByRole('button', { name: 'Save duplicates' }))
+    expect(await screen.findByText('Enter a value from 0.8 to 1.')).toBeInTheDocument()
+    await userEvent.clear(field)
+    await userEvent.type(field, '0.95')
+    await userEvent.click(screen.getByRole('button', { name: 'Save duplicates' }))
+    await waitFor(() => expect(api.find('PATCH', '/api/v1/projects/acme')).toHaveLength(1))
+    expect(api.find('PATCH', '/api/v1/projects/acme')[0]?.body).toEqual({
+      settings: { dedupe: { refuse_threshold: 0.95 } },
+    })
+    unmount()
+
+    const on = {
+      ...project,
+      settings: { ...project.settings, dedupe: { ...project.settings.dedupe, refuse_threshold: 0.9 } },
+    }
+    renderWithProviders(<SettingsForm project={on} />)
+    const set = screen.getByLabelText('Refuse near-copies from (cosine)')
+    expect(set).toHaveValue(0.9)
+    await userEvent.clear(set)
+    await userEvent.click(screen.getByRole('button', { name: 'Save duplicates' }))
+    await waitFor(() => expect(api.find('PATCH', '/api/v1/projects/acme')).toHaveLength(2))
+    expect(api.find('PATCH', '/api/v1/projects/acme')[1]?.body).toEqual({
+      settings: { dedupe: { refuse_threshold: null } },
+    })
+  })
+
+  it('shows the server error when the cut-off is below the stored threshold', async () => {
+    mockApi({
+      [patchPath]: apiError(400, 'invalid_input', {
+        message: 'Invalid settings.',
+        details: {
+          issues: [
+            { path: 'settings.dedupe.refuse_threshold', message: 'must be at least dedupe.threshold' },
+          ],
+        },
+      }),
+    })
+    renderWithProviders(<SettingsForm project={project} />)
+    await userEvent.type(screen.getByLabelText('Refuse near-copies from (cosine)'), '0.9')
+    await userEvent.click(screen.getByRole('button', { name: 'Save duplicates' }))
+    expect(await screen.findByText('must be at least dedupe.threshold')).toBeInTheDocument()
   })
 })

@@ -7,7 +7,7 @@
  * context → the admin adds them as a member → memory, decision and doc are written in the editor → search
  * finds all three → the dashboard previews the digest → an edit shows up in the history with a diff → a stale save meets the revision conflict
  * dialog → an item made old in SQL goes stale through the cleanup job and shows in the review queue →
- * Verify clears it → a token is shown once → the device page approves a code requested through the public
+ * Verify clears it → a possible duplicate is marked "Not a duplicate" → a token is shown once → the device page approves a code requested through the public
  * API → the export downloads a zip → it re-imports into a new, empty project from the settings page.
  */
 import { readFileSync } from 'node:fs'
@@ -20,7 +20,8 @@ const DEV = { email: 'dev@example.com', name: 'Dev Eloper', password: 'dev-passw
 // one rare word in all three items, so the search hits exactly them
 const WORD = 'zephyrine'
 
-test.describe.configure({ mode: 'serial' })
+// serial stateful walk on a database created once per run: a retry would rerun from the first test on leftover state
+test.describe.configure({ mode: 'serial', retries: 0 })
 test.setTimeout(180_000)
 
 let admin: Page
@@ -180,6 +181,12 @@ test('search finds all three', async () => {
 test('the dashboard counts the items and previews the digest', async () => {
   await admin.goto(`/projects/${SLUG}`)
   await expect(admin.getByRole('link', { name: `Sessions use ${WORD} cookies` })).toBeVisible()
+  // the status overview counts the items created above; the admin also sees the latest agent requests
+  const status = admin.getByRole('region', { name: 'Status' })
+  await expect(status.getByRole('img', { name: /Item changes per day/ })).toBeVisible()
+  await expect(
+    admin.getByRole('region', { name: 'Latest activity' }).getByText('Latest agent requests'),
+  ).toBeVisible()
   await admin.getByRole('button', { name: 'Preview digest' }).click()
   const dialog = admin.getByRole('dialog', { name: 'Digest preview' })
   await dialog.getByLabel(/Query/).fill(WORD)
@@ -251,6 +258,17 @@ test('an unverified memory goes stale and shows in the review queue; Verify clea
     admin.getByRole('status').getByText(/cleanup (started|did not start: it is already running)/),
   ).toBeVisible()
 
+  // wait until the run has finished, so the list and the section counts agree
+  await expect(async () => {
+    const runs = await sql(
+      `SELECT count(*) FILTER (WHERE finished_at IS NOT NULL)::int AS done,
+              count(*) FILTER (WHERE finished_at IS NULL)::int AS running
+       FROM job_runs WHERE name = 'cleanup' AND started_at >= now() - interval '5 minutes'`,
+    )
+    expect(runs.rows[0]?.running).toBe(0)
+    expect(runs.rows[0]?.done).toBeGreaterThan(0)
+  }).toPass({ timeout: 30_000 })
+
   const row = admin.getByRole('row', { name: new RegExp(handles.memory) })
   await expect(async () => {
     await admin.goto(`/projects/${SLUG}/review`)
@@ -268,6 +286,43 @@ test('an unverified memory goes stale and shows in the review queue; Verify clea
     [SLUG, Number(handles.memory.replace(/^m/, ''))],
   )
   expect(lifecycle.rows[0]?.lifecycle).toBe('active')
+})
+
+test('a possible duplicate shows in the review queue; Not a duplicate clears it', async () => {
+  const second = await createItem(
+    admin,
+    'memories',
+    'Deploys wait for a green build',
+    'A second memory for the pair.',
+  )
+  // the pair a create saved next to a similar item records (cos from the real model is not under test here)
+  const inserted = await sql(
+    `INSERT INTO duplicate_pairs (project_id, new_item_id, existing_item_id, cos)
+     SELECT p.id, n.id, e.id, 0.91 FROM projects p
+       JOIN items n ON n.project_id = p.id AND n.space = 'memories' AND n.number = $2
+       JOIN items e ON e.project_id = p.id AND e.space = 'memories' AND e.number = $3
+     WHERE p.slug = $1
+     ON CONFLICT (new_item_id, existing_item_id) DO UPDATE SET cos = 0.91`,
+    [SLUG, Number(second.replace(/^m/, '')), Number(handles.memory.replace(/^m/, ''))],
+  )
+  expect(inserted.rowCount).toBe(1)
+  await admin.goto(`/projects/${SLUG}/review?section=duplicates`)
+  await expect(admin.getByRole('navigation', { name: 'Review sections' })).toContainText(
+    /Possible duplicates\D*1/,
+  )
+  await expect(admin.getByText('Similarity 0.91', { exact: false })).toBeVisible()
+  await expect(admin.getByRole('link', { name: second, exact: true })).toBeVisible()
+  await expect(admin.getByRole('link', { name: handles.memory, exact: true })).toBeVisible()
+  await admin.getByRole('button', { name: 'Not a duplicate' }).click()
+  await expect(admin.getByRole('status').getByText('Marked as not a duplicate.')).toBeVisible()
+  await expect(admin.getByText('Nothing needs review.')).toBeVisible()
+  const pair = await sql(
+    `SELECT dismissed_at, dismissed_by_label FROM duplicate_pairs d JOIN projects p ON p.id = d.project_id
+     WHERE p.slug = $1`,
+    [SLUG],
+  )
+  expect(pair.rows[0]?.dismissed_by_label).toBe(ADMIN.email)
+  expect(pair.rows[0]?.dismissed_at).not.toBeNull()
 })
 
 test('a new token is shown exactly once', async () => {
@@ -342,6 +397,37 @@ test('the export downloads a zip', async () => {
   const file = await download.path()
   expect(readFileSync(file).subarray(0, 2).toString('latin1')).toBe('PK')
   exportFile = file
+})
+
+test('the usage page shows a host sample the admin took from the jobs page, and fits a phone screen', async () => {
+  await admin.goto('/admin/jobs')
+  await admin.getByRole('button', { name: 'Run resource-sample now' }).click()
+  await expect(async () => {
+    const r = await sql('SELECT count(*)::int AS n FROM resource_samples')
+    expect(r.rows[0]?.n).toBeGreaterThan(0)
+  }).toPass({ timeout: 30_000 })
+
+  await admin.goto('/admin/status')
+  await admin.getByRole('link', { name: 'Usage over time' }).click()
+  await expect(admin.getByRole('heading', { level: 1, name: 'Usage' })).toBeVisible()
+  await expect(admin.getByLabel('Totals for the last 14 days')).toBeVisible()
+  await expect(admin.getByRole('img', { name: /Agent requests per day/ })).toBeVisible()
+  const host = admin.getByRole('region', { name: 'Host resources' })
+  await expect(host.getByText(/Sampled every 5 minutes on/)).toBeVisible()
+  await expect(host.getByRole('img', { name: /Memory \(RSS\), last 24 hours: now \d/ })).toBeVisible()
+  await host.getByRole('button', { name: '14 days' }).click()
+  await expect(host.getByRole('img', { name: /Memory \(RSS\), last 14 days/ })).toBeVisible()
+
+  await admin.setViewportSize({ width: 375, height: 800 })
+  try {
+    await expect(host).toBeVisible()
+    const fits = await admin.evaluate(
+      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    )
+    expect(fits).toBe(true)
+  } finally {
+    await admin.setViewportSize({ width: 1280, height: 720 })
+  }
 })
 
 test('the export re-imports into a new, empty project from the settings page (DoD 6 in the UI)', async () => {

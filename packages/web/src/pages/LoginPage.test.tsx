@@ -21,6 +21,15 @@ describe('LoginPage', () => {
     })
   })
 
+  it('links the version in the footer to its GitHub release', async () => {
+    mockApi({ 'GET /api/v1/instance': [200, { version: '0.6.1', providers: [] }] })
+    renderApp('/login')
+    const link = await screen.findByRole('link', { name: 'Spoor 0.6.1' })
+    expect(link).toHaveAttribute('href', 'https://github.com/SPECTADO/spoor-memory/releases/tag/v0.6.1')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noreferrer')
+  })
+
   it('ignores a next= that is not an in-app path', async () => {
     mockApi({
       'POST /api/v1/auth/login': [200, { user: meFixture().user }],

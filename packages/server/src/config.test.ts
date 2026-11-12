@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ConfigError, loadConfig } from './config.js'
+import { ConfigError, DEFAULT_UPDATE_URL, loadConfig } from './config.js'
 
 const base = { DATABASE_URL: 'postgres://u:p@localhost:5432/spoor' }
 
@@ -87,6 +87,23 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...base, SPOOR_PUSH_CONCURRENCY: '' }).SPOOR_PUSH_CONCURRENCY).toBe(3)
     expect(() => loadConfig({ ...base, SPOOR_PUSH_CONCURRENCY: '0' })).toThrow(/SPOOR_PUSH_CONCURRENCY/)
     expect(() => loadConfig({ ...base, SPOOR_PUSH_CONCURRENCY: '65' })).toThrow(/SPOOR_PUSH_CONCURRENCY/)
+  })
+
+  it('SPOOR_UPDATE_CHECK: on by default with the GitHub file, off switches it off, a bad URL is a problem', () => {
+    const c = loadConfig(base)
+    expect(c.SPOOR_UPDATE_CHECK).toBe('on')
+    expect(c.SPOOR_UPDATE_URL).toBe(DEFAULT_UPDATE_URL)
+    expect(DEFAULT_UPDATE_URL).toBe(
+      'https://raw.githubusercontent.com/SPECTADO/spoor-memory/main/deploy/latest-release.json',
+    )
+    expect(loadConfig({ ...base, SPOOR_UPDATE_CHECK: 'off' }).SPOOR_UPDATE_CHECK).toBe('off')
+    expect(loadConfig({ ...base, SPOOR_UPDATE_CHECK: '', SPOOR_UPDATE_URL: '' }).SPOOR_UPDATE_CHECK).toBe(
+      'on',
+    )
+    const mirror = 'https://mirror.example/latest-release.json'
+    expect(loadConfig({ ...base, SPOOR_UPDATE_URL: mirror }).SPOOR_UPDATE_URL).toBe(mirror)
+    expect(() => loadConfig({ ...base, SPOOR_UPDATE_CHECK: 'yes' })).toThrow(/SPOOR_UPDATE_CHECK/)
+    expect(() => loadConfig({ ...base, SPOOR_UPDATE_URL: 'ftp://x/y' })).toThrow(/SPOOR_UPDATE_URL/)
   })
 
   it('rejects a public URL with a path', () => {

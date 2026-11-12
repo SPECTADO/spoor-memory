@@ -9,6 +9,7 @@ import {
   claudeMdImportsAgents,
   currentAgentsBlock,
   isReleaseVersion,
+  LATEST_VERSION_HEADER,
   MEMORY_MODE_HEADER,
   MEMORY_RULE,
   SERVER_VERSION_HEADER,
@@ -50,7 +51,7 @@ import {
 import type { Deadline } from '../runtime.js'
 import { addPending, type Drafted, readState, type State, updateState } from '../state.js'
 import { padAdr } from '../writeback.js'
-import { contextQuery } from './info.js'
+import { contextQuery, latestLines } from './info.js'
 
 export const SESSION_START_DEADLINE_MS = 7000
 export const STOP_DEADLINE_MS = 6000
@@ -260,6 +261,7 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
   let answered = false
   let agents: string[] = []
   let version: string[] = []
+  let update: string[] = []
   if (problem) {
     logRun(ctx.root, problem, ctx.rt.now())
     main = sessionNotice(ctx, 'not_configured')
@@ -278,6 +280,8 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
       // an older server sends no header: its projects are exclusive by default
       agents = agentsLines(ctx, r.headers?.get(MEMORY_MODE_HEADER) !== 'shared')
       version = versionLines(VERSION, r.headers?.get(SERVER_VERSION_HEADER))
+      update = latestLines(r.headers?.get(SERVER_VERSION_HEADER), r.headers?.get(LATEST_VERSION_HEADER))
+      if (update.length > 0 && !oncePerDay(ctx.root, 'update', ctx.rt.now())) update = []
       const text = typeof r.body === 'string' ? r.body : JSON.stringify(r.body)
       main = text.endsWith('\n') ? text.slice(0, -1) : text
       // 6. queue replay and mirror sweep in the time left (marked automatic: not the agent's own recording);
@@ -305,7 +309,7 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
         if (d) d.announced = true
       }
     })
-  const out = [...status, ...agents, ...version, main].join('\n')
+  const out = [...status, ...agents, ...version, ...update, main].join('\n')
   return cutOutput(`${out}\n`)
 }
 

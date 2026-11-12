@@ -2,7 +2,7 @@
 // Layering: the importer refuses any supersedes of or by a library page; the DB trigger alone accepts a
 // library-to-library supersedes, so the two layers differ by design (import never writes one).
 import { describe, expect, it } from 'vitest'
-import { libraryClaimAllowed, refusedLibraryEdge } from './import.js'
+import { libraryClaimAllowed, oneSuperseder, refusedLibraryEdge } from './import.js'
 
 describe('refusedLibraryEdge', () => {
   it('keeps wikilinks and refines / supports / depends_on in both directions', () => {
@@ -48,5 +48,35 @@ describe('libraryClaimAllowed', () => {
   it('other sources are unrestricted', () => {
     expect(libraryClaimAllowed('memories', null, 'docs')).toBe(true)
     expect(libraryClaimAllowed('memories', 'some-id', 'library')).toBe(true)
+  })
+})
+
+describe('oneSuperseder', () => {
+  const e = (srcId: string, kind: 'supersedes' | 'refines', dstId: string | null, s = 0) => ({
+    srcId,
+    kind,
+    dstRef: dstId ?? 'gone',
+    dstId,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, s)),
+  })
+  it('keeps the earliest superseder per target; later ones become refines, or go when refines exists', () => {
+    const { rows, changed } = oneSuperseder([
+      e('b', 'supersedes', 'o', 2),
+      e('a', 'supersedes', 'o', 1),
+      e('c', 'supersedes', 'o', 3),
+      e('c', 'refines', 'o'),
+      e('d', 'supersedes', 'p', 1),
+      e('x', 'supersedes', null),
+      e('y', 'supersedes', null),
+    ])
+    expect(changed).toBe(2)
+    expect(rows.map((r) => `${r.srcId} ${r.kind} ${r.dstId}`)).toEqual([
+      'b refines o',
+      'a supersedes o',
+      'c refines o',
+      'd supersedes p',
+      'x supersedes null',
+      'y supersedes null',
+    ])
   })
 })

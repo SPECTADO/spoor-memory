@@ -10,6 +10,7 @@ export {
   AdminJobsPage,
   AdminProjectsPage,
   AdminStatusPage,
+  AdminUsagePage,
   AdminUsersPage,
 } from './admin'
 export { EditorNewPage, HistoryPage, ItemEditPage, ItemPage } from './item'

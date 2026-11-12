@@ -59,7 +59,15 @@ import type { ServerDeps } from '../../lib/deps.js'
 import { ApiError, loggableError } from '../../lib/errors.js'
 import type { Space } from '../../ports.js'
 import { PushAdmission } from './admission.js'
-import { addEdge, rewriteWikilinks, sharedProjectId, TYPED_KINDS, type TypedKind } from './links.js'
+import {
+  addEdge,
+  rewriteWikilinks,
+  sharedProjectId,
+  supersededByOf,
+  supersederOf,
+  TYPED_KINDS,
+  type TypedKind,
+} from './links.js'
 import {
   dateFromSection,
   fileStem,
@@ -800,6 +808,11 @@ export class PushService {
     type Op = (tx: Tx, self: LoadedItem) => Promise<void>
     const ops: Op[] = []
     const prepared: Map<string, Awaited<ReturnType<ItemService['prepare']>>> = new Map()
+    /** `supersede_conflict` once per ref, also when the transaction runs again. */
+    const conflict = (ref: string, by: string) => {
+      if (!warnings.some((w) => w.code === 'supersede_conflict' && w.ref === ref))
+        warnings.push({ code: 'supersede_conflict', ref, superseded_by: by })
+    }
 
     for (const r of parsed.relations) {
       const { item, ambiguous } = await this.resolveRef(caller, r.to, batch, 'read')
@@ -817,14 +830,23 @@ export class PushService {
         // an already superseded target is never re-embedded (a re-send of an applied supersede)
         if (item.status !== 'superseded')
           prepared.set(item.id, await this.items.prepare(item, { defer: batch.deferEmbedding }))
+        const ref = parsed.supersedes
         ops.push(async (tx, self) => {
           const settings = await this.items.projectSettings(self.projectId, tx)
           // never a fallback prepare inside the transaction (a second connection and a model call while
           // the transaction is held): a target whose status changed meanwhile gets pending chunks
-          await this.items.applySupersede(tx, caller, self, item, {
-            obsDays: settings.cleanup.observation_days,
-            prepared: prepared.get(item.id) ?? this.items.pendingPrepared(item),
-          })
+          try {
+            await this.items.applySupersede(tx, caller, self, item, {
+              obsDays: settings.cleanup.observation_days,
+              prepared: prepared.get(item.id) ?? this.items.pendingPrepared(item),
+            })
+          } catch (err) {
+            // another item already supersedes the target: the file's claim is not applied, the push goes
+            // on (thrown before any statement failed, so the transaction is still usable)
+            const by = supersededByOf(err)
+            if (!by) throw err
+            conflict(ref, by)
+          }
         })
       }
     }
@@ -833,7 +855,15 @@ export class PushService {
       if (ambiguous) warnings.push(ambiguous)
       else if (!item || item.space !== parsed.space || item.id === p.row.id) {
         warnings.push({ code: 'unresolved_supersedes', ref: parsed.supersededBy })
-      } else ops.push(async (tx, self) => void (await addEdge(tx, item, 'supersedes', self, actor)))
+      } else {
+        const ref = parsed.supersededBy
+        ops.push(async (tx, self) => {
+          // `self` is locked: a superseder other than the one this file names wins, the file's line warns
+          const by = await supersederOf(tx, self, item.id)
+          if (by) conflict(ref, by.handle)
+          else await addEdge(tx, item, 'supersedes', self, actor)
+        })
+      }
     }
     for (const ref of parsed.draftedFrom) {
       const { item, ambiguous } = await this.resolveRef(caller, ref, batch, 'write')

@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
 import { useInstance } from '../api/hooks'
+import { versionUrl } from '../lib/version'
+import { ExternalLink } from '../ui'
 
 /** Frame of the pages outside the shell (login, invite, device): one centred column and the version footer. */
 export function CenteredPage({
@@ -22,7 +24,9 @@ export function CenteredPage({
         </div>
       </main>
       {instance.data && (
-        <footer className="mt-8 text-center text-xs text-muted">Spoor {instance.data.version}</footer>
+        <footer className="mt-8 text-center text-xs text-muted">
+          <ExternalLink href={versionUrl(instance.data.version)}>Spoor {instance.data.version}</ExternalLink>
+        </footer>
       )}
     </div>
   )

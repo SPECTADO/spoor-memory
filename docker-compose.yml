@@ -49,6 +49,8 @@ services:
       SPOOR_OLLAMA_EMBED_DIMS: ${SPOOR_OLLAMA_EMBED_DIMS:-}
       SPOOR_TRUST_PROXY: ${SPOOR_TRUST_PROXY:-}
       SPOOR_PUSH_CONCURRENCY: ${SPOOR_PUSH_CONCURRENCY:-}
+      SPOOR_UPDATE_CHECK: ${SPOOR_UPDATE_CHECK:-}
+      SPOOR_UPDATE_URL: ${SPOOR_UPDATE_URL:-}
     healthcheck: # same probe as the image HEALTHCHECK, repeated so `up --wait` works with any image
       test:
         - CMD

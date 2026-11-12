@@ -47,6 +47,14 @@ async function mockApi(page: Page, opts: { loggedIn: boolean }) {
         })
       case 'GET /api/v1/projects':
         return json(200, projects)
+      case 'GET /api/v1/status/update':
+        return json(200, {
+          update: {
+            latest: '0.2.0',
+            available: true,
+            url: 'https://github.com/SPECTADO/spoor-memory/releases/tag/v0.2.0',
+          },
+        })
       case 'GET /api/v1/device/lookup':
         return json(200, {
           project: { slug: 'acme', name: 'Acme' },
@@ -84,6 +92,19 @@ test('log in, land on the project list, open and close the create dialog with th
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
   await expect(open).toBeFocused()
+})
+
+test('the sidebar links the versions to GitHub and tells an admin about a newer release', async ({
+  page,
+}) => {
+  await mockApi(page, { loggedIn: true })
+  await page.goto('/projects')
+  const sidebar = page.getByRole('complementary', { name: 'Sidebar' })
+  const server = sidebar.getByRole('link', { name: 'Server 0.1.0' })
+  await expect(server).toHaveAttribute('href', 'https://github.com/SPECTADO/spoor-memory/releases/tag/v0.1.0')
+  await expect(server).toHaveAttribute('target', '_blank')
+  const update = sidebar.getByRole('link', { name: 'Update available: 0.2.0' })
+  await expect(update).toHaveAttribute('href', 'https://github.com/SPECTADO/spoor-memory/releases/tag/v0.2.0')
 })
 
 test('approve a CLI login read-only', async ({ page }) => {

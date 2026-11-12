@@ -47,6 +47,7 @@ export {
   ItemService,
   mirroredItem,
   type NearDuplicate,
+  type RefusedDuplicate,
   type Warning,
 } from './service.js'
 export {

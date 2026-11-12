@@ -12,6 +12,7 @@ import type {
   DashboardJson,
   DeviceApproveResponse,
   DeviceLookup,
+  DuplicateDismissResult,
   EdgeJson,
   EdgesResponse,
   GraphParams,
@@ -68,6 +69,9 @@ import type {
   TokenCreateResponse,
   TokenJson,
   UndraftedDecisionsResponse,
+  UpdateInfoJson,
+  UsageJson,
+  UsageRange,
   UserFilters,
   UserJson,
   UserPatchBody,
@@ -242,6 +246,9 @@ export const listReviewSection = <S extends ReviewSection>(
 ) => api<Page<ReviewRowOf[S]>>(`${P(slug)}/review/${seg(section)}`, { query: { ...p }, ...o })
 export const reviewBulk = (slug: string, body: ReviewBulkBody) =>
   api<ReviewBulkResult>(`${P(slug)}/review/bulk`, { body })
+/** "Not a duplicate" on a possible duplicate (editors). */
+export const dismissDuplicate = (slug: string, pairId: string) =>
+  api<DuplicateDismissResult>(`${P(slug)}/review/duplicates/${seg(pairId)}/dismiss`, { method: 'POST' })
 /** Decision memories without an ADR yet (cookie twin of the Stop hook's bearer list), every member's. */
 export const listUndraftedDecisions = (slug: string, o: Sig = {}) =>
   api<UndraftedDecisionsResponse>(`${P(slug)}/decisions/undrafted`, o)
@@ -269,6 +276,9 @@ export const listProjectRequests = (slug: string, f: RequestFilters = {}, o: Sig
 export const getProjectJobs = (slug: string, o: Sig = {}) => api<ProjectJobsJson>(`${P(slug)}/jobs`, o)
 export const getInstanceJobs = (o: Sig = {}) => api<InstanceJobsJson>('/jobs', o)
 export const getInstanceStatus = (o: Sig = {}) => api<InstanceStatusJson>('/status', o)
+export const getInstanceUsage = (range: UsageRange, o: Sig = {}) =>
+  api<UsageJson>('/status/usage', { query: { range }, ...o })
+export const getUpdateInfo = (o: Sig = {}) => api<{ update: UpdateInfoJson | null }>('/status/update', o)
 export const runJob = (name: string) => api<RunJobResult>(`/jobs/${seg(name)}/run`, { method: 'POST' })
 
 /** Public install doc of a project (served by the server, not under /api). */

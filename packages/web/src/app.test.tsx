@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
-import { UNKNOWN_VERSION, versionsDiffer, WEB_VERSION } from './lib/version'
+import { REPO_URL, UNKNOWN_VERSION, versionsDiffer, versionUrl, WEB_VERSION } from './lib/version'
 import { apiError, meFixture, mockApi, renderApp } from './test/utils'
 
 const project = (role: 'admin' | 'editor' | 'viewer', slug = 'demo') => ({
@@ -27,6 +27,7 @@ const projectList = {
     },
   ],
 }
+const NOTES = 'https://github.com/SPECTADO/spoor-memory/releases/tag/v9.9.0'
 const reviewCounts = { counts: { stale: 1, archived: 0, expiring: 1, conflicts: 0, push_conflicts: 0 } }
 
 describe('app shell', () => {
@@ -115,6 +116,66 @@ describe('app shell', () => {
     await waitFor(() => expect(sidebar).toHaveTextContent(`Web ${WEB_VERSION}`))
     expect(sidebar).not.toHaveTextContent('Server')
     expect(within(sidebar).queryByRole('button', { name: 'Reload to update' })).not.toBeInTheDocument()
+  })
+
+  it('links each version to its GitHub release, and the repository while unknown', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture()],
+      'GET /api/v1/projects': [200, projectList],
+      'GET /api/v1/instance': [200, { version: '9.8.7', providers: [] }],
+    })
+    renderApp('/projects')
+    const sidebar = await screen.findByRole('complementary', { name: 'Sidebar' })
+    const server = await within(sidebar).findByRole('link', { name: 'Server 9.8.7' })
+    expect(server).toHaveAttribute('href', 'https://github.com/SPECTADO/spoor-memory/releases/tag/v9.8.7')
+    expect(server).toHaveAttribute('target', '_blank')
+    expect(server).toHaveAttribute('rel', 'noreferrer')
+    const web = within(sidebar).getByRole('link', { name: /^Web/ })
+    expect(web).toHaveAttribute('href', versionUrl(WEB_VERSION))
+    expect(versionUrl(UNKNOWN_VERSION)).toBe(REPO_URL)
+    expect(versionUrl(undefined)).toBe('https://github.com/SPECTADO/spoor-memory')
+  })
+
+  it('shows instance admins "Update available" next to the reload warning', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({ is_admin: true })],
+      'GET /api/v1/projects': [200, projectList],
+      'GET /api/v1/instance': [200, { version: '9.8.7', providers: [] }],
+      'GET /api/v1/status/update': [200, { update: { latest: '9.9.0', available: true, url: NOTES } }],
+    })
+    renderApp('/projects')
+    const sidebar = await screen.findByRole('complementary', { name: 'Sidebar' })
+    const notice = await within(sidebar).findByRole('link', { name: 'Update available: 9.9.0' })
+    expect(notice).toHaveAttribute('href', NOTES)
+    expect(notice).toHaveAttribute('target', '_blank')
+    expect(notice).toHaveAttribute('rel', 'noreferrer')
+    expect(within(sidebar).getByRole('button', { name: 'Reload to update' })).toBeInTheDocument()
+  })
+
+  it('shows no update notice when the server is current, and never asks for it as a non-admin', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({ is_admin: true })],
+      'GET /api/v1/projects': [200, projectList],
+      'GET /api/v1/instance': [200, { version: WEB_VERSION, providers: [] }],
+      'GET /api/v1/status/update': [200, { update: { latest: '9.9.0', available: false, url: NOTES } }],
+    })
+    const { unmount } = renderApp('/projects')
+    const sidebar = await screen.findByRole('complementary', { name: 'Sidebar' })
+    await waitFor(() => expect(sidebar).toHaveTextContent(`Server ${WEB_VERSION}`))
+    expect(within(sidebar).queryByText(/Update available/)).not.toBeInTheDocument()
+    unmount()
+
+    const { find } = mockApi({
+      'GET /api/v1/me': [200, meFixture()],
+      'GET /api/v1/projects': [200, projectList],
+      'GET /api/v1/instance': [200, { version: WEB_VERSION, providers: [] }],
+      'GET /api/v1/status/update': [200, { update: { latest: '9.9.0', available: true, url: NOTES } }],
+    })
+    renderApp('/projects')
+    const member = await screen.findByRole('complementary', { name: 'Sidebar' })
+    await waitFor(() => expect(member).toHaveTextContent(`Server ${WEB_VERSION}`))
+    expect(within(member).queryByText(/Update available/)).not.toBeInTheDocument()
+    expect(find('GET', '/api/v1/status/update')).toHaveLength(0)
   })
 
   it('compares versions only when both are known', () => {

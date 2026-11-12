@@ -24,11 +24,12 @@ import {
   normalizeFilePath,
   RELATED_PENDING_NOTE,
   type RelatedResponse,
+  refuseThreshold,
   relatedMinCos,
 } from '@spoor/shared'
 import { and, asc, desc, eq, inArray, ne, or, type SQL, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
-import { edges, itemRevisions, items, memberships, projects } from '../../db/schema.js'
+import { duplicatePairs, edges, itemRevisions, items, memberships, projects } from '../../db/schema.js'
 import { writeAudit } from '../../lib/audit.js'
 import {
   allowPurge,
@@ -47,11 +48,13 @@ import { resolveSettings } from '../projects/index.js'
 import { graph } from './graph.js'
 import {
   addEdge,
+  alreadySuperseded,
   claimWikilinks,
   resolveWikilinks,
   rewriteWikilinks,
   sharedProjectId,
   sqlTextArray,
+  supersederOf,
   TYPED_KINDS,
   type TypedKind,
 } from './links.js'
@@ -133,13 +136,21 @@ export interface NearDuplicate extends DuplicateHit {
   values: { new: string[]; existing: string[] } | null
 }
 
+/**
+ * A refused MCP create: `same_text` = the same title and body exist (ADR-0025); `near_copy` = a candidate at or
+ * above `dedupe.refuse_threshold` whose values agree, in the same space and type.
+ */
+export interface RefusedDuplicate extends DuplicateHit {
+  match: 'same_text' | 'near_copy'
+}
+
 export interface CreateResult {
   /** `null` when an MCP create was refused as a duplicate. */
   item: ItemJson | null
   row: LoadedItem | null
   warnings: Warning[]
-  /** Set only when an MCP create was refused: the same title and body already exist. */
-  duplicate: DuplicateHit | null
+  /** Set only when an MCP create was refused: the same text, or a near-copy (`match`). */
+  duplicate: RefusedDuplicate | null
   /** Set when the create was saved next to a similar item (MCP: the `note: similar to` line). */
   similar: NearDuplicate | null
   /** `duplicate check skipped` etc., for the MCP text result. */
@@ -464,8 +475,9 @@ export class ItemService {
 
   /**
    * Near-duplicate check (search-and-digest.md section 5, ADR-0025). `same`: a candidate with the same title and
-   * body. `similar`: the first candidate at or above the per-project threshold whose values agree, else the first
-   * one at or above it whose values differ. `skipped` when no probe vector exists.
+   * body. `nearCopy`: the first candidate at or above `dedupe.refuse_threshold` (when on) whose values agree and
+   * whose type is the new item's. `similar`: the first candidate at or above the per-project threshold whose
+   * values agree, else the first one at or above it whose values differ. `skipped` when no probe vector exists.
    */
   async dedupe(
     caller: Caller,
@@ -473,8 +485,14 @@ export class ItemService {
     type: string | null,
     excludeItemId: string | null,
     prepared: PreparedChunks,
-  ): Promise<{ same: DedupeCandidate | null; similar: DedupeCandidate | null; skipped: boolean }> {
+  ): Promise<{
+    same: DedupeCandidate | null
+    nearCopy: DedupeCandidate | null
+    similar: DedupeCandidate | null
+    skipped: boolean
+  }> {
     const settings = await this.projectSettings(caller.project.id)
+    const refuse = refuseThreshold(settings)
     const res = await this.deps.ports.search.dedupeCandidates(this.db, {
       projectId: caller.project.id,
       space,
@@ -482,10 +500,16 @@ export class ItemService {
       excludeItemId,
       prepared,
     })
-    if (res.skipped) return { same: null, similar: null, skipped: true }
+    if (res.skipped) return { same: null, nearCopy: null, similar: null, skipped: true }
     const near = res.candidates.filter((c) => c.cos >= settings.dedupe.threshold)
     return {
       same: res.candidates.find((c) => c.sameText) ?? null,
+      nearCopy:
+        refuse === null
+          ? null
+          : (res.candidates.find(
+              (c) => c.cos >= refuse && c.values === null && c.space === space && c.type === type,
+            ) ?? null),
       similar: near.find((c) => c.values === null) ?? near[0] ?? null,
       skipped: false,
     }
@@ -507,9 +531,10 @@ export class ItemService {
   /**
    * Create an item (web `POST …/spaces/:space/items`, MCP `spoor_remember` / `spoor_decide` /
    * `spoor_doc_write`). Duplicates (ADR-0025): a similar item is reported and the create saved (web: a
-   * `near_duplicate` warning unless the values differ; MCP: `similar`). Only MCP (`dedupe: 'block'`) refuses, and
-   * only the same title and body: it writes nothing but `last_used_at` of the existing item and returns it.
-   * `allow_duplicate` skips the check.
+   * `near_duplicate` warning unless the values differ; MCP: `similar`), and the pair is recorded for the review
+   * queue's "Possible duplicates" when the values agree. Only MCP (`dedupe: 'block'`) refuses: the same title and
+   * body, or a near-copy at or above `dedupe.refuse_threshold`; it writes nothing but `last_used_at` of the
+   * existing item (and an audit row) and returns it. `allow_duplicate` skips the check.
    */
   async create(
     caller: Caller,
@@ -550,14 +575,20 @@ export class ItemService {
     if (mode !== 'off' && space !== 'decisions') {
       const found = await this.dedupe(caller, space, fields.type, old?.id ?? null, prepared)
       if (found.skipped) notes.push('duplicate check skipped')
-      const same = found.same
-      if (same && mode === 'block') {
-        const dup = this.dupJson(caller, same)
+      const hit = mode === 'block' ? (found.same ?? found.nearCopy) : null
+      if (hit) {
+        const match = hit === found.same ? 'same_text' : 'near_copy'
+        const dup: RefusedDuplicate = { ...this.dupJson(caller, hit), match }
         await withTx(this.db, async (tx) => {
-          await touchUsed(tx, [same.id])
-          const existing = (await loadItem(tx, same.id)) as LoadedItem
-          await this.audit(tx, caller, 'item.dedupe_hit', existing, `duplicate of ${dup.handle} refused`, {
-            cos: Number(same.cos.toFixed(4)),
+          await touchUsed(tx, [hit.id])
+          const existing = (await loadItem(tx, hit.id)) as LoadedItem
+          const summary =
+            match === 'same_text'
+              ? `duplicate of ${dup.handle} refused`
+              : `near-copy of ${dup.handle} refused`
+          await this.audit(tx, caller, 'item.dedupe_hit', existing, summary, {
+            cos: Number(hit.cos.toFixed(4)),
+            match,
           })
         })
         return { item: null, row: null, warnings, duplicate: dup, similar: null, notes }
@@ -576,6 +607,7 @@ export class ItemService {
     }
 
     const oldPrepared = old && old.status !== 'superseded' ? await this.prepare(old) : null
+    const pair: NearDuplicate | null = similar?.values === null ? similar : null
     let pending = false
     const row = await this.createTx(explicitSlug, async (tx) => {
       const actor = actorOf(caller)
@@ -589,6 +621,17 @@ export class ItemService {
       })
       for (const r of relTargets) await addEdge(tx, created, r.kind, r.to, actor)
       if (old) await this.applySupersede(tx, caller, created, old, { obsDays, prepared: oldPrepared })
+      // saved next to a similar item whose values agree: a possible duplicate for the review queue. The
+      // dedupe check ran outside this transaction, so the similar item may be gone by now: the pair is
+      // written only while it exists (key-share locked, so it cannot go before this commits), never a
+      // foreign-key failure that would lose the new item for a best-effort review row
+      if (pair) {
+        await tx.execute(sql`
+          INSERT INTO ${duplicatePairs} (project_id, new_item_id, existing_item_id, cos)
+          SELECT ${caller.project.id}, ${created.id}, ${pair.id}, ${pair.cos}
+           WHERE EXISTS (SELECT 1 FROM ${items} WHERE id = ${pair.id} FOR KEY SHARE)
+          ON CONFLICT DO NOTHING`)
+      }
       pending = (await this.index(tx, created, prepared)) || pending
       await this.audit(
         tx,
@@ -621,6 +664,12 @@ export class ItemService {
   /**
    * new → old `supersedes` edge, and the old item's status becomes `superseded` (a `change='supersede'`
    * revision; checked against `expected` when given). Inside the caller's transaction.
+   *
+   * The old item's row is locked first, so two concurrent supersedes of one item run one after the other:
+   * the second sees the first's edge and fails with 409 `revision_conflict` naming the successor
+   * (`alreadySuperseded`); its transaction, and the new item it created, roll back. A retry by the same
+   * successor is a no-op. This is an ApiError thrown before any failed statement, so a caller may catch it
+   * and go on in the same transaction (push turns it into a warning).
    */
   async applySupersede(
     tx: Tx,
@@ -630,7 +679,6 @@ export class ItemService {
     opts: { expected?: number; obsDays: number; prepared: PreparedChunks | null },
   ): Promise<LoadedItem> {
     const actor = actorOf(caller)
-    await addEdge(tx, newer, 'supersedes', old, actor)
     const current = (await loadItem(tx, old.id, true)) as LoadedItem
     if (opts.expected !== undefined && opts.expected !== current.revision) {
       throw new ApiError('revision_conflict', {
@@ -639,6 +687,9 @@ export class ItemService {
         details: { current_revision: current.revision },
       })
     }
+    const by = await supersederOf(tx, current, newer.id)
+    if (by) throw alreadySuperseded(handleOf(current, viewOf(caller.project)), current.revision, by)
+    await addEdge(tx, newer, 'supersedes', current, actor)
     if (current.status === 'superseded') return current
     const updated = await writeContent(tx, {
       item: current,

@@ -1,6 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { DASHBOARD_REFRESH_MS } from '../api/hooks'
+import { qk } from '../api/keys'
 import { projectFixture, summary } from '../test/browseFixtures'
 import { meFixture, mockApi, renderApp } from '../test/utils'
 import { reviewCounts } from './DashboardPage'
@@ -19,10 +21,23 @@ const dashboard = (review: Record<string, number>) => ({
     },
   ],
 })
+const stats = () => ({
+  window: { days: 14, from: '2026-10-06', to: '2026-10-19' },
+  per_day: Array.from({ length: 14 }, (_, i) => ({
+    day: `2026-10-${String(6 + i).padStart(2, '0')}`,
+    reads: i,
+    writes: 1,
+    changes: i % 3,
+  })),
+  requests: { today: 5, last_7_days: 40, agents_14_days: 3 },
+  people_14_days: 2,
+  items_changed_7_days: 7,
+  last_cleanup_at: new Date(Date.now() - 3_600_000).toISOString(),
+})
 const setup = (
   role: 'viewer' | 'admin',
   review = { stale: 2, archived: 0, expiring: 0, conflicts: 1, push_conflicts: 0 },
-  extra: Record<string, [number, unknown]> = {},
+  extra: Parameters<typeof mockApi>[0] = {},
 ) =>
   mockApi({
     'GET /api/v1/me': [200, meFixture({}, [{ project: { id: 'p-acme', slug: 'acme', name: 'Acme' }, role }])],
@@ -34,6 +49,12 @@ const setup = (
 describe('reviewCounts', () => {
   it('reads a missing push_conflicts count as 0', () => {
     expect(reviewCounts({ stale: 1, archived: 0, expiring: 0, conflicts: 0 }).push_conflicts).toBe(0)
+  })
+
+  it('reads a missing duplicates count (a server before 0.7) as 0', () => {
+    const c = reviewCounts({ stale: 1, archived: 0, expiring: 0, conflicts: 0, push_conflicts: 2 })
+    expect(c.duplicates).toBe(0)
+    expect(c.push_conflicts).toBe(2)
   })
 })
 
@@ -50,6 +71,10 @@ describe('DashboardPage', () => {
       '/projects/acme/review?section=stale',
     )
     expect(screen.getByRole('link', { name: 'Conflicts' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Possible duplicates' })).toHaveAttribute(
+      'href',
+      '/projects/acme/review?section=duplicates',
+    )
     const recent = screen.getByRole('link', { name: 'Retry with jitter' })
     expect(recent).toHaveAttribute('href', '/projects/acme/i/m9')
     expect(within(recent.closest('li') as HTMLElement).getByText('created')).toBeInTheDocument()
@@ -186,7 +211,7 @@ describe('DashboardPage', () => {
       })
     withLast('viewer')
     const { unmount } = renderApp('/projects/acme')
-    const activity = await screen.findByRole('region', { name: 'Agent activity' })
+    const activity = await screen.findByRole('region', { name: 'Latest activity' })
     expect(within(activity).getByText('spoor_search')).toBeInTheDocument()
     expect(within(activity).getByText('ann@example.com via claude-code/2.1')).toBeInTheDocument()
     expect(within(activity).getByText('None in the last 14 days.')).toBeInTheDocument()
@@ -195,11 +220,143 @@ describe('DashboardPage', () => {
 
     withLast('admin')
     renderApp('/projects/acme')
-    const forAdmin = await screen.findByRole('region', { name: 'Agent activity' })
+    const forAdmin = await screen.findByRole('region', { name: 'Latest activity' })
     expect(within(forAdmin).getByRole('link', { name: /Request log/ })).toHaveAttribute(
       'href',
       '/projects/acme/requests',
     )
+  })
+
+  it('shows the status overview: numbers and the two 14-day charts', async () => {
+    setup('viewer', undefined, {
+      'GET /api/v1/projects/acme/dashboard': [
+        200,
+        { ...dashboard({ stale: 2, conflicts: 1 }), stats: stats() },
+      ],
+    })
+    renderApp('/projects/acme')
+    const status = await screen.findByRole('region', { name: 'Status' })
+    const tile = (label: string) => within(status).getByText(label).closest('div') as HTMLElement
+    expect(within(tile('Agent requests today')).getByText('5')).toBeInTheDocument()
+    expect(within(tile('Agent requests, 7 days')).getByText('40')).toBeInTheDocument()
+    expect(within(tile('Active agents, 14 days')).getByText('3')).toBeInTheDocument()
+    expect(within(tile('Active people, 14 days')).getByText('2')).toBeInTheDocument()
+    expect(within(tile('Items changed, 7 days')).getByText('7')).toBeInTheDocument()
+    // from the counts: 12 + 3 + 4 + 2 active, 2 + 1 stale; review 2 + 1
+    expect(within(tile('Active items')).getByText('21')).toBeInTheDocument()
+    expect(within(tile('Stale items')).getByText('3')).toBeInTheDocument()
+    expect(within(tile('In the review queue')).getByText('3')).toBeInTheDocument()
+    expect(within(tile('Last cleanup')).getByText(/ago/)).toBeInTheDocument()
+    expect(within(status).getByRole('img', { name: /Agent requests per day/ })).toBeInTheDocument()
+    expect(within(status).getByRole('img', { name: /Item changes per day/ })).toBeInTheDocument()
+    // every number is in the hidden table too
+    const table = within(status).getByRole('table', { name: 'Agent requests per day' })
+    expect(within(table).getAllByRole('row')).toHaveLength(15)
+  })
+
+  it('works with an older server: no stats or activity, still the totals and the last requests', async () => {
+    setup('admin')
+    renderApp('/projects/acme')
+    const status = await screen.findByRole('region', { name: 'Status' })
+    expect(within(status).getByText('Active items')).toBeInTheDocument()
+    expect(within(status).queryByText('Agent requests today')).not.toBeInTheDocument()
+    expect(within(status).queryByRole('img')).not.toBeInTheDocument()
+    const activity = screen.getByRole('region', { name: 'Latest activity' })
+    expect(within(activity).getAllByText('None in the last 14 days.')).toHaveLength(2)
+    expect(within(activity).queryByText('Latest agent requests')).not.toBeInTheDocument()
+  })
+
+  it('lists the newest agent requests when the server sends them (admins)', async () => {
+    const activity = [
+      {
+        id: 2,
+        at: '2026-10-19T08:00:00Z',
+        kind: 'write',
+        surface: 'mcp',
+        operation: 'spoor_remember',
+        actor: { label: 'ann@example.com', client_name: 'claude-code/2.1', token_name: 'laptop' },
+        outcome: 'conflict',
+      },
+      {
+        id: 1,
+        at: '2026-10-19T07:00:00Z',
+        kind: 'read',
+        surface: 'cli',
+        operation: 'GET /context',
+        actor: { label: 'service:ci', client_name: null, token_name: null },
+        outcome: 'ok',
+      },
+    ]
+    setup('admin', undefined, {
+      'GET /api/v1/projects/acme/dashboard': [200, { ...dashboard({}), activity }],
+    })
+    renderApp('/projects/acme')
+    const region = await screen.findByRole('region', { name: 'Latest activity' })
+    const list = within(region).getByRole('list', { name: 'Latest agent requests' })
+    const rows = within(list).getAllByRole('listitem')
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0] as HTMLElement).getByText('write')).toBeInTheDocument()
+    expect(within(rows[0] as HTMLElement).getByText('spoor_remember')).toBeInTheDocument()
+    expect(within(rows[0] as HTMLElement).getByText('conflict')).toBeInTheDocument()
+    expect(
+      within(rows[0] as HTMLElement).getByText('ann@example.com via laptop, claude-code/2.1'),
+    ).toBeInTheDocument()
+    expect(within(rows[1] as HTMLElement).getByText('service:ci')).toBeInTheDocument()
+    expect(within(rows[1] as HTMLElement).queryByText('ok')).not.toBeInTheDocument()
+    expect(within(region).getByRole('link', { name: /Request log/ })).toBeInTheDocument()
+  })
+
+  it('on _shared shows only the audit-based status parts and no agent activity', async () => {
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({}, [])],
+      'GET /api/v1/projects/_shared': [200, projectFixture('_shared', 'viewer')],
+      'GET /api/v1/projects/_shared/dashboard': [
+        200,
+        { ...dashboard({}), stats: { ...stats(), requests: null } },
+      ],
+    })
+    renderApp('/shared')
+    const status = await screen.findByRole('region', { name: 'Status' })
+    expect(within(status).getByText('Items changed, 7 days')).toBeInTheDocument()
+    expect(within(status).queryByText('Agent requests today')).not.toBeInTheDocument()
+    expect(within(status).queryByRole('img', { name: /Agent requests per day/ })).not.toBeInTheDocument()
+    expect(within(status).getByRole('img', { name: /Item changes per day/ })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Latest activity' })).not.toBeInTheDocument()
+  })
+
+  it('refetches every minute in the background and says when it last updated', async () => {
+    setup('viewer')
+    const { qc } = renderApp('/projects/acme')
+    expect(await screen.findByText(/^Updated/)).toHaveTextContent(/Refreshes every minute/)
+    const q = qc.getQueryCache().find({ queryKey: qk.dashboard('acme') })
+    const opts = q?.observers[0]?.options
+    expect(opts?.refetchInterval).toBe(DASHBOARD_REFRESH_MS)
+    expect(DASHBOARD_REFRESH_MS).toBe(60_000)
+    expect(opts?.refetchIntervalInBackground).toBe(false)
+  })
+
+  it('keeps the page on a failed refetch and offers to try again', async () => {
+    setup('viewer', undefined, {
+      'GET /api/v1/projects/acme/dashboard': [
+        [200, dashboard({})],
+        [500, { error: 'internal', request_id: 'r' }],
+      ],
+    })
+    const { qc } = renderApp('/projects/acme')
+    expect(await screen.findByRole('region', { name: 'Status' })).toBeInTheDocument()
+    await qc.refetchQueries({ queryKey: qk.dashboard('acme') })
+    expect(await screen.findByText('Could not refresh.')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Status' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
+  it('refreshes the project with each dashboard refetch', async () => {
+    const m = setup('viewer')
+    const { qc } = renderApp('/projects/acme')
+    await screen.findByRole('region', { name: 'Status' })
+    await waitFor(() => expect(m.find('GET', '/api/v1/projects/acme')).toHaveLength(1))
+    await qc.refetchQueries({ queryKey: qk.dashboard('acme') })
+    await waitFor(() => expect(m.find('GET', '/api/v1/projects/acme')).toHaveLength(2))
   })
 
   it('says so when nothing needs review', async () => {
