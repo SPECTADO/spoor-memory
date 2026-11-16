@@ -171,34 +171,99 @@ Full tour: [docs/user-guide.md](docs/user-guide.md).
 
 ## Install the server (Docker Compose)
 
-You need Docker with the compose plugin, 2 CPUs and about 2 GB of memory for the app container.
+You need Docker with the compose plugin (Compose 2.23.1 or later), 2 CPUs and about 2 GB of memory for the app container.
+Spoor is published as a ready-made image, `ghcr.io/spectado/spoor-memory`; you do not need this repository to run it.
 
-```sh
-git clone https://github.com/SPECTADO/spoor-memory.git && cd spoor-memory
-cp .env.example .env
+**1. Create a folder with a `docker-compose.yml`:**
+
+```yaml
+name: spoor
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spoor
+      POSTGRES_DB: spoor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
+    volumes:
+      - spoor-pgdata:/var/lib/postgresql/data
+    configs:
+      - source: app-role
+        target: /docker-entrypoint-initdb.d/01-app-role.sh
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spoor -d spoor"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    image: ghcr.io/spectado/spoor-memory:latest # pin a version such as :0.7.1 in production
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 40s
+    mem_limit: 2g
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://spoor_app:${POSTGRES_APP_PASSWORD}@db:5432/spoor
+      DATABASE_MIGRATE_URL: postgres://spoor:${POSTGRES_PASSWORD}@db:5432/spoor
+      SPOOR_PUBLIC_URL: ${SPOOR_PUBLIC_URL:-http://localhost:3000}
+      SPOOR_ADMIN_EMAIL: ${SPOOR_ADMIN_EMAIL:?set SPOOR_ADMIN_EMAIL in .env}
+      SPOOR_ADMIN_PASSWORD: ${SPOOR_ADMIN_PASSWORD:?set SPOOR_ADMIN_PASSWORD in .env}
+    ports:
+      - "3000:3000"
+
+configs:
+  app-role: # runs once, on an empty volume: creates the runtime database role (no superuser)
+    content: |
+      psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" <<SQL
+      CREATE ROLE spoor_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '$$POSTGRES_APP_PASSWORD';
+      GRANT CONNECT, TEMPORARY ON DATABASE $$POSTGRES_DB TO spoor_app;
+      GRANT USAGE, CREATE ON SCHEMA public TO spoor_app;
+      SQL
+
+volumes:
+  spoor-pgdata:
 ```
 
-Edit `.env` and set at least:
-
-| variable | value |
-|---|---|
-| `POSTGRES_PASSWORD`, `POSTGRES_APP_PASSWORD` | two random URL-safe strings: `openssl rand -hex 24` |
-| `SPOOR_ADMIN_EMAIL` | your email, the first admin login |
-| `SPOOR_ADMIN_PASSWORD` | at least 12 characters |
-| `SPOOR_PUBLIC_URL` | the URL people will type, `http://localhost:3000` for a local trial |
-| `SPOOR_IMAGE` | `ghcr.io/spectado/spoor-memory:0.7.1` to run the published image (recommended) |
-
-Start it with the published image:
+**2. Put a `.env` next to it:**
 
 ```sh
-docker compose pull && docker compose up -d
+POSTGRES_PASSWORD=          # openssl rand -hex 24
+POSTGRES_APP_PASSWORD=      # openssl rand -hex 24 (a different one)
+SPOOR_ADMIN_EMAIL=you@example.com
+SPOOR_ADMIN_PASSWORD=       # at least 12 characters
+SPOOR_PUBLIC_URL=http://localhost:3000   # the URL people will type
+```
+
+The two database passwords go into connection URLs, so use URL-safe characters only.
+
+**3. Start it:**
+
+```sh
+docker compose up -d
 curl -s localhost:3000/healthz   # {"status":"ok",...} once migrations ran and the model loaded (up to two minutes)
 ```
 
-Or build the image from the checkout: leave `SPOOR_IMAGE` at its default and run `docker compose up -d --build`.
-
 Compose starts two containers: `db` (Postgres 17 with pgvector, data in the `spoor-pgdata` volume) and `app` (API, MCP
-endpoint and web UI on port 3000). Postgres is the only state.
+endpoint and web UI on port 3000). Postgres is the only state. To set any other option from
+[Environment variables](#environment-variables), add it under `environment:` of the `app` service.
+
+**The full compose file.** The [`docker-compose.yml`](docker-compose.yml) in this repository is the same setup with every
+option wired to `.env` (see [`.env.example`](.env.example)), a pinned Postgres image and the optional Caddy service for
+HTTPS. To use it, or to build the image yourself:
+
+```sh
+git clone https://github.com/SPECTADO/spoor-memory.git && cd spoor-memory
+cp .env.example .env             # fill it in; set SPOOR_IMAGE=ghcr.io/spectado/spoor-memory:0.7.1 to pull
+docker compose pull && docker compose up -d
+# or build from the checkout: leave SPOOR_IMAGE at its default and run
+docker compose up -d --build
+```
 
 **Image tags** at `ghcr.io/spectado/spoor-memory`:
 
@@ -209,8 +274,8 @@ endpoint and web UI on port 3000). Postgres is the only state.
 | `develop` | the newest commit on `main` that passed CI |
 | `sha-<short>` | one specific `main` build, for pinning or rolling back |
 
-**HTTPS.** Agents and browsers should reach Spoor over HTTPS. The compose file includes an optional Caddy service that
-gets a Let's Encrypt certificate (ports 80 and 443 open, DNS pointing at the host):
+**HTTPS.** Agents and browsers should reach Spoor over HTTPS. The repository's compose file includes an optional Caddy
+service that gets a Let's Encrypt certificate (ports 80 and 443 open, DNS pointing at the host):
 
 ```sh
 # .env
@@ -461,7 +526,7 @@ Details and other models: [docs/operations.md](docs/operations.md), section 7.
 
 - **Backup.** `docker compose exec -T db pg_dump -U spoor -Fc spoor > spoor-$(date +%F).dump`. The file holds password
   and token hashes, so treat it as a secret. A project can also be exported as a zip from its Settings page.
-- **Upgrade.** Back up, set the new version in `SPOOR_IMAGE`, then `docker compose pull && docker compose up -d`.
+- **Upgrade.** Back up, set the new image version (in `docker-compose.yml`, or `SPOOR_IMAGE` with the repository's file), then `docker compose pull && docker compose up -d`.
   Migrations run at startup and are forward-only; to roll back, restore the dump and start the older image.
 - **Health.** `GET /healthz` reports the database, migrations and the embedding model. Instance admins see status, usage
   and job pages in the web UI.
