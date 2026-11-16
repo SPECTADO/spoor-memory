@@ -1,3 +1,5 @@
+import { VERSION } from './ctx.js'
+
 export interface Command {
   path: string[]
   summary: string
@@ -10,12 +12,13 @@ export const commands: Command[] = [
     path: ['login'],
     summary: 'Authenticate this repo with a Spoor server (device flow)',
     usage:
-      'spoor login [--server URL] [--project SLUG] [--token <TOKEN|->] [--no-browser] [--no-init] [--untrack]',
+      'spoor login [--server URL] [--project SLUG] [--token <TOKEN|->] [--no-browser] [--no-init] [--untrack] [--local-memory sync|delete]',
   },
   {
     path: ['init'],
-    summary: 'Write or merge .mcp.json, the .claude/settings.json hooks and .gitignore for this repo',
-    usage: 'spoor init [--server URL] [--project SLUG] [--dry-run]',
+    summary: 'Set this project up for Spoor: spoor.config.json, .mcp.json, the hooks, .gitignore, AGENTS.md',
+    usage:
+      'spoor init [--server URL] [--project SLUG] [--dry-run] [--local-memory sync|delete] [--recall on|off]',
   },
   {
     path: ['whoami'],
@@ -50,6 +53,11 @@ export const commands: Command[] = [
   },
   { path: ['docs', 'push'], summary: 'Push one doc file to Spoor', usage: 'spoor docs push <file>' },
   {
+    path: ['memory', 'sync'],
+    summary: 'Sync the local memory files with Spoor, both ways (local_memory.mode: sync)',
+    usage: 'spoor memory sync [--take-server | --take-local]',
+  },
+  {
     path: ['hook', 'session-start'],
     summary: 'Claude Code SessionStart hook (always exits 0)',
     usage: 'spoor hook session-start',
@@ -59,6 +67,12 @@ export const commands: Command[] = [
     path: ['hook', 'stop'],
     summary: 'Claude Code Stop hook (always exits 0)',
     usage: 'spoor hook stop',
+    hook: true,
+  },
+  {
+    path: ['hook', 'user-prompt-submit'],
+    summary: 'Claude Code UserPromptSubmit hook: prompt recall (always exits 0)',
+    usage: 'spoor hook user-prompt-submit',
     hook: true,
   },
   {
@@ -73,7 +87,7 @@ export function helpText(): string {
   const w = Math.max(...commands.map((c) => c.path.join(' ').length))
   const lines = commands.map((c) => `  ${c.path.join(' ').padEnd(w)}  ${c.summary}`)
   return [
-    'spoor: Spoor memory CLI',
+    `spoor ${VERSION}: Spoor memory CLI`,
     '',
     'Usage: spoor <command> [options]',
     '',

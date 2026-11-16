@@ -263,6 +263,28 @@ test('phone width: item view and editor have no horizontal scroll; editor uses W
   expect(await overflow()).toBeLessThanOrEqual(0)
 })
 
+test('a Markdown table keeps readable columns next to long cells', async ({ page }) => {
+  await mockApi(page, {})
+  await page.goto('/projects/acme/i/m42/edit')
+  const editor = page.getByRole('textbox', { name: 'Editor' })
+  await expect(editor).toBeVisible()
+  const long = 'Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor. '.repeat(6)
+  await editor.fill(
+    `| ID | Status | Description | Notes |\n| --- | --- | --- | --- |\n| m12 | active | ${long} | ${long} |\n`,
+  )
+  const preview = page.getByRole('region', { name: 'Preview' })
+  await expect(preview.locator('table')).toBeVisible()
+  // the short columns were squeezed to one or two characters per line ("a/c/t/i/v/e")
+  const cell = preview.locator('td', { hasText: /^active$/ })
+  const box = await cell.evaluate((td) => {
+    const r = document.createRange()
+    r.selectNodeContents(td)
+    return { lines: r.getClientRects().length, width: td.getBoundingClientRect().width }
+  })
+  expect(box.lines).toBe(1)
+  expect(box.width).toBeGreaterThanOrEqual(50)
+})
+
 test('a library page shows Edit but no Pin or Verify controls', async ({ page }) => {
   await mockApi(page, {})
   // routes registered later win over mockApi's catch-all

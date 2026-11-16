@@ -1,6 +1,6 @@
 # Architecture
 
-Status: implemented, 0.7.1 (2026-11-12). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) the near-duplicate rework (0.5), optional Ollama embeddings and resumable imports (0.6), and the instance status and usage pages (0.7). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
+Status: implemented, 0.7.5 (2026-11-16). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) the near-duplicate rework (0.5), optional Ollama embeddings and resumable imports (0.6), and the instance status and usage pages (0.7). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
 [docs/design/](docs/design/); terms are defined in [GLOSSARY.md](GLOSSARY.md). Where this file and a design file
 disagree, the design file wins and this file gets fixed. Open questions for the owner: [docs/design/deviations.md](docs/design/deviations.md).
 
@@ -28,7 +28,7 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │    │         tools delegating to the items and search services                     │
  │    ├─ device ── RFC 8628 code/token (public) + lookup/approve/deny (cookie)        │
  │    ├─ install ── public install.md / install.json                                  │
- │    ├─ mirror ── bearer activity (Stop nag), adr/push, docs/push                    │
+ │    ├─ mirror ── bearer activity (Stop nag), pull, adr/push, docs/push              │
  │    ├─ auth, projects, tokens, audit  users, sessions, invites, permission matrix,  │
  │    │                                 projects + settings, tokens, audit log        │
  │    ├─ items ── item service, revisions (append-only), edges, wikilinks, resolver,  │
@@ -106,7 +106,8 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 1. Claude Code starts a session and runs the SessionStart hook command `spoor init` wrote (`command -v spoor … && exec spoor hook session-start`, falling back to a pinned `npx spoor-memory@<server version>`) with `{session_id, source}` on stdin. `resume` and `fork` print nothing.
 2. For `source` = `startup`, `clear` or `compact` the CLI writes `.spoor/session/<id>.json` (kept on `compact`), and collects anchors from git
    (uncommitted, untracked and recently committed files, at most 80). Everything runs under one 7 s deadline and a 5-minute circuit breaker after a network failure.
-3. It calls `GET /p/<slug>/api/context?file=…` with the token from `SPOOR_TOKEN` (set by `.claude/settings.local.json`), then, in the time left, replays queued pushes and sweeps the mirrored files for edits the Write/Edit hook missed.
+   The hook does this only in a project set up for Spoor (its root holds `spoor.config.json`); anywhere else, and in the home directory, it exits at once and writes nothing (ADR-0036).
+3. It calls `GET /p/<slug>/api/context?file=…` with the token from `SPOOR_TOKEN` (set by `.claude/settings.local.json`), then, in the time left, replays queued pushes and sweeps the mirrored files for edits the Write/Edit hook missed. Local memory files the team chose to keep in sync (`local_memory.mode: sync`) also take a newer text from Spoor first (`GET …/api/pull`).
 4. The server authenticates the token (hash lookup, revocation, membership), builds the digest in six tiers (library, pinned, accepted decisions of the last 30 days, anchored,
    relevant to the query, recently verified) inside the token budget, and reads nothing that bumps `last_used_at`.
 5. The CLI prints any open push conflicts or orphaned mirror files, then the digest, to stdout; Claude Code adds it to the context. The digest names itself as `spoor_context` output, so the agent does not fetch it again.
@@ -262,6 +263,8 @@ Design files (the *what*): [docs/design/](docs/design/). Research the choices re
 | 24 | [`0024-mcp-tools-list-budget-…md`](docs/adr/0024-mcp-tools-list-budget-raised-to-4-000-estimated-tokens-for-relations-on-all.md) | MCP tools/list budget raised to 4,000 estimated tokens for relations on all write tools and `spoor_get` depth (accepted) | the `tools.test.ts` ceiling, measured 3,932 | mcp |
 | 25 | [`0025-near-duplicates-are-saved-…md`](docs/adr/0025-near-duplicates-are-saved-with-a-note-only-the-same-text-is-refused.md) | Near-duplicates are saved with a note; only the same text is refused, differing values never count, default threshold 0.87 (proposed) | `sameText`, `search/values.ts`, `note: similar to`, `dedupe.threshold` default | search-and-digest, mcp |
 | 27 | [`0027-imports-are-a-resumable-client-queue-…md`](docs/adr/0027-imports-are-a-resumable-client-queue-the-server-defers-embeddings-for-imports-and-limits-concurrent-pushes.md) | Imports are a resumable client queue; the server defers embeddings for imports and limits concurrent pushes (proposed) | `import-queue.ts`, `backoff.ts`, `items/admission.ts`, `Spoor-Defer-Embedding`, `SPOOR_PUSH_CONCURRENCY` | cli-and-hooks, api, data-model, search-and-digest |
+| 36 | [`0036-the-cli-works-only-in-projects-set-up-for-spoor-…md`](docs/adr/0036-the-cli-works-only-in-projects-set-up-for-spoor-local-memory-files-are-synced-or-deleted.md) | The CLI works only in projects set up for Spoor; local memory files are synced both ways or imported and deleted | project root never the home directory, `spoor.config.json` marker, hooks silent elsewhere, `local_memory.mode`, `GET …/api/pull` | cli-and-hooks §2, §4.11 |
+| 37 | [`0037-prompt-recall-…md`](docs/adr/0037-prompt-recall-an-opt-in-userpromptsubmit-hook-shows-items-above-a-per-model-cosine-floor.md) | Prompt recall: an opt-in UserPromptSubmit hook shows the items above a per-model cosine floor | `GET …/api/recall`, `recallMinCos`, session `.shown` list, never trips the breaker | cli-and-hooks §5.4, api §7.2 |
 
 [deviations.md](docs/design/deviations.md) §D lists nine slightly different topics (for example "session-managed MCP transport" and "in-process scheduler" as their own ADRs); the list above
 folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule. ADRs 0001 to 0020 and 0024 are decided (0017 is superseded by 0019);

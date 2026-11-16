@@ -4,6 +4,50 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-11-16
+
+### Added
+
+- **Memory files from before Spoor.** When a repo that already has `MEMORY.md`, `.memory/`, `memory-bank/`,
+  `.claude/memory/` or `.cursor/memory/` files gets Spoor, `spoor init` (and `spoor login`) now asks what to do with them:
+  **sync** keeps them and syncs them with Spoor both ways (as docs: file edits are pushed, edits made in Spoor come back
+  into the file at session start), **delete** imports them into Spoor and deletes them only after the server took them.
+  The answer is committed in `spoor.config.json` (`local_memory.mode`); `--local-memory sync|delete` answers without a
+  prompt, and until someone answers the session-start digest reminds the agent to ask (once a day). New command
+  `spoor memory sync [--take-server | --take-local]`; new bearer endpoint `GET /p/:slug/api/pull?source_path=…`
+  (ADR-0036). A CLI older than this release reports `local_memory` (and `recall`) in `spoor.config.json` as an unknown key: update the
+  CLI on every machine before choosing.
+- **Prompt recall (opt-in).** `spoor init --recall on` installs a fourth Claude Code hook, UserPromptSubmit: for every
+  prompt of four words or more the server returns the few memory items that clearly match it, and they are added to the
+  context, without the items the session already saw from the digest or an earlier prompt. An item is shown only above a
+  similarity floor per embedding model (0.86 for `local` e5-small, 0.45 for `ollama` embeddinggemma, measured on the
+  benchmark corpus so that 25 unrelated prompts got nothing; a model without a measured floor shows nothing unless
+  `recall.min_cos` is set). Off by default; `--recall off` removes the hook. It fails silently and never trips the
+  circuit breaker. New bearer endpoint `GET /p/:slug/api/recall`; settings `recall.{enabled, max_items, min_chars,
+  min_cos}` in `spoor.config.json` (ADR-0037).
+- `spoor status` and `spoor --help` show the installed CLI version; `spoor status --remote` says when it differs from the
+  server's.
+
+### Changed
+
+- **The CLI only works in projects set up for Spoor.** `spoor init` writes `spoor.config.json` (server and project) as
+  the committed marker; a repo set up by an older CLI still counts through its `.mcp.json`. In any other directory the
+  hooks exit silently without creating `.spoor/`, and every command except `spoor login` and `spoor init` refuses
+  (ADR-0036). Run `spoor init` once in existing repos and commit the new `spoor.config.json`.
+
+### Fixed
+
+- **The home directory was taken for a project.** With no `.git` or `.claude` nearer, the CLI walked up to `~/.claude`
+  (Claude Code's global configuration) and treated the home directory as the repo root: `spoor login` there wrote the hooks
+  into the user-level `~/.claude/settings.json` (so they ran in every project and left `.spoor/` directories behind) and
+  put `AGENTS.md`, `CLAUDE.md` and `.mcp.json` into `~`. The walk now stops below the home directory, and `login` and
+  `init` refuse to run in it. If this happened to you, remove the Spoor entries from `~/.claude/settings.json`,
+  `~/.claude/settings.local.json` and `~/.mcp.json`, the Spoor block from `~/AGENTS.md`, the import from `~/CLAUDE.md`,
+  and `~/.spoor/`.
+- **Web UI: Markdown tables with columns one or two characters wide.** Next to a long cell, short columns were squeezed
+  until every letter wrapped. Cells now break only overlong words and keep a minimum width; a table that is too wide
+  scrolls sideways.
+
 ## [0.7.1] - 2026-11-12
 
 0.7.0 was tagged but never published (its release run failed in the web e2e tests), so this is the first 0.7 release on npm

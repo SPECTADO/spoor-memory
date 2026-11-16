@@ -11,7 +11,7 @@ Your Spoor admin gives you the server URL and the project slug; the project's in
 
 ```sh
 npm i -g spoor-memory@<server version>        # Node 22 or later; global: the hooks look for spoor on the PATH
-cd <your repo>                                # every command runs from the repo root
+cd <your repo>                                # every command runs from the repo root (never from your home directory)
 spoor login --server https://spoor.example.com --project acme --no-browser
 ```
 
@@ -21,17 +21,36 @@ spoor login --server https://spoor.example.com --project acme --no-browser
 1. writes `SPOOR_URL`, `SPOOR_PROJECT` and the token `SPOOR_TOKEN` into `.claude/settings.local.json` (mode 0600, other
    keys kept) and refuses to run if that file or `.spoor/` is tracked by git (`--untrack` runs `git rm --cached` for you);
 2. adds `.claude/settings.local.json` and `.spoor/` to `.gitignore`;
-3. runs `spoor init`: merges the project's `.mcp.json` (the MCP server `spoor`, token only as `${SPOOR_TOKEN}`) and
+3. runs `spoor init`: writes `spoor.config.json` (server and project; the marker of a project set up for Spoor), merges the project's `.mcp.json` (the MCP server `spoor`, token only as `${SPOOR_TOKEN}`) and
    `.claude/settings.json` (the three hooks and the `mcp__spoor` permission). It renders these blocks itself from
    `SPOOR_URL`, the slug and the server version of `<server>/p/<slug>/install.json`; nothing else from the server ends up
    in a committed file. Init also writes a managed Spoor block to `AGENTS.md`, adds an `@AGENTS.md` import to `CLAUDE.md` and,
    when the project's memory is exclusive (the default, ADR-0015), sets `autoMemoryEnabled: false` in an untracked
    `.claude/settings.local.json`, so Claude Code auto-memory is off for that user.
 
+**Only in projects set up for Spoor.** The CLI works in a directory that holds `spoor.config.json` (or the `.mcp.json` of
+an older install). Anywhere else the hooks do nothing and create no file, and every command except `spoor login` and
+`spoor init` refuses. Your home directory is never a project: `spoor login` and `spoor init` refuse to run there, because
+`~/.claude/settings.json` is Claude Code's global configuration.
+
+**Memory files from before Spoor.** If the repo still has `MEMORY.md`, `.memory/`, `memory-bank/`, `.claude/memory/` or
+`.cursor/memory/` files, `spoor init` asks once what to do with them: **sync** keeps them and syncs them with Spoor both
+ways (as docs; edits in the web UI come back into the file at the next session start), **delete** imports them into Spoor
+and then deletes them. The answer is stored in `spoor.config.json` (`local_memory.mode`; commit it). Without a terminal
+use `spoor init --local-memory sync|delete`. `spoor memory sync` runs the sync by hand; when a file changed on both sides
+it stops with a conflict that `--take-server` or `--take-local` resolves.
+
+**Prompt recall (optional).** `spoor init --recall on` adds a UserPromptSubmit hook: for each prompt of four words or
+more the server returns at most three memory items that clearly match it (a similarity floor per embedding model), and
+they are added to the context, without the ones the session already saw. Most prompts add nothing. It costs one small
+request per prompt; `spoor init --recall off` removes it. Settings: `recall.{enabled, max_items, min_chars, min_cos}` in
+`spoor.config.json`. Commit the changed `spoor.config.json` and `.claude/settings.json`.
+
 **Keeping the CLI up to date.** A global install does not update itself. When the server is upgraded, the next session's
 digest starts with a line that names the new version: run `npm i -g spoor-memory@<server version>`, then `spoor init` in
-each repo (it moves the version the SessionStart hook pins; commit the changed `.claude/settings.json`). `spoor --version`
-shows what is installed.
+each repo (it moves the version the SessionStart hook pins; commit the changed `.claude/settings.json`). `spoor --version`,
+the first line of `spoor --help` and the `cli` line of `spoor status` show what is installed; `spoor status --remote`
+also says when it differs from the server.
 
 Before the first npm release (a server at version `0.0.0`) build the CLI from a source checkout instead:
 `pnpm install && pnpm --filter "spoor-memory..." build && npm i -g ./packages/cli`.
@@ -50,7 +69,7 @@ spoor status --remote # project, role, token expiry (asks the server), push conf
 spoor context --git   # the digest an agent gets at session start
 ```
 
-Commit `.mcp.json`, `.claude/settings.json`, the ADR files and `spoor.config.json` (if you made one). Never commit
+Commit `spoor.config.json`, `.mcp.json`, `.claude/settings.json`, `AGENTS.md`, `CLAUDE.md` and the ADR files. Never commit
 `.claude/settings.local.json` or `.spoor/`. A teammate on an already set-up repo only installs the CLI and runs
 `spoor login`.
 
@@ -80,22 +99,23 @@ Commit `.mcp.json`, `.claude/settings.json`, the ADR files and `spoor.config.jso
 | `SPOOR_DRAFTING=1` | set by the CLI for the drafting child, so its own hooks do nothing |
 | `CI` | drafting is skipped unless `spoor.config.json` sets `draft.in_ci: true` |
 
-`spoor.config.json` (committed, optional, every key optional): `server`, `project` (never the token), `adr_dir`
+`spoor.config.json` (committed; `spoor init` creates it; every key optional): `server`, `project` (never the token), `adr_dir`
 (default `docs/adr`), `docs.{include, exclude, write_back}`, `draft.{enabled, command, timeout_s, max_per_run, deadline_s,
-in_ci}`, `context.{max_tokens, max_files}`. Details: [cli-and-hooks.md](../../docs/design/cli-and-hooks.md) §2.
+in_ci}`, `context.{max_tokens, max_files}`, `recall.{enabled, max_items, min_chars, min_cos}`, `local_memory.{mode, paths}`. Details: [cli-and-hooks.md](../../docs/design/cli-and-hooks.md) §2.
 
 ## Commands
 
 | command | mode | what it does |
 |---|---|---|
-| `spoor login [--server URL] [--project SLUG] [--token T\|-] [--no-browser] [--no-init] [--untrack]` | human | device flow (or a pasted token), writes `env.SPOOR_URL/PROJECT/TOKEN` into `.claude/settings.local.json` (0600, other keys kept), adds `.gitignore` lines, runs `init` |
-| `spoor init [--dry-run]` | human | reads the server version from `/p/<slug>/install.json`, merges `.mcp.json`, `.claude/settings.json` (hooks, `mcp__spoor`) and `.gitignore`, writes the `AGENTS.md` block and `CLAUDE.md` import and sets `autoMemoryEnabled` in `.claude/settings.local.json` (ADR-0015), with blocks it renders itself (`@spoor/shared` install.ts); idempotent |
-| `spoor whoami [--json]`, `spoor status [--remote]` | human | identity; local config, push conflicts, queue, orphans, breaker |
+| `spoor login [--server URL] [--project SLUG] [--token T\|-] [--no-browser] [--no-init] [--untrack] [--local-memory sync\|delete]` | human | device flow (or a pasted token), writes `env.SPOOR_URL/PROJECT/TOKEN` into `.claude/settings.local.json` (0600, other keys kept), adds `.gitignore` lines, runs `init` |
+| `spoor init [--dry-run] [--local-memory sync\|delete] [--recall on\|off]` | human | reads the server version from `/p/<slug>/install.json`, writes `spoor.config.json` when missing, merges `.mcp.json`, `.claude/settings.json` (hooks, `mcp__spoor`) and `.gitignore`, writes the `AGENTS.md` block and `CLAUDE.md` import and sets `autoMemoryEnabled` in `.claude/settings.local.json` (ADR-0015), with blocks it renders itself (`@spoor/shared` install.ts); then settles memory files from before Spoor (asks once, ADR-0036); idempotent |
+| `spoor whoami [--json]`, `spoor status [--remote]` | human | identity; CLI version, local config, push conflicts, queue, orphans, breaker |
 | `spoor context [--query T] [--files a,b \| --git] [--budget N] [--no-shared] [--json]` | agent | prints the digest |
 | `spoor adr import [--dir D] [--dry-run] [--all]`, `spoor docs import [--dry-run] [--all]` | human | push of existing files, resumable: see "Imports" below |
 | `spoor adr push <file> [--force]`, `spoor docs push <file>` | agent | push one file (`--force` needs a TTY and a typed `y`) |
+| `spoor memory sync [--take-server \| --take-local]` | human | two-way sync of the local memory files (`local_memory.mode: sync`); the flags resolve a file changed on both sides |
 | `spoor adr draft [--since ISO] [--max N] [--dry-run] [--session ID]` | agent | drafts proposed ADRs from undrafted decision memories |
-| `spoor hook session-start\|stop\|post-tool-use` | hook | always exit 0 within 7 / 6 / 8 s |
+| `spoor hook session-start\|stop\|post-tool-use\|user-prompt-submit` | hook | always exit 0 within 7 / 6 / 8 / 3 s; nothing at all outside a project set up for Spoor |
 
 Exit codes (human mode): 0 ok, 1 usage or config, 2 conflict or partial failure, 3 server unreachable or token rejected.
 Agent-facing commands print one notice on stderr and exit 0 for server down / token rejected / not configured
@@ -111,7 +131,9 @@ src/
   runtime.ts          Io seam (stdout, stderr, env, cwd, stdin, clock, spawn, browser) and Deadline; strips terminal
                       control characters from everything printed
   ctx.ts              per-run context: config (config.ts), spoor.config.json (repo-config.ts), HTTP client, notices
-  config.ts           SPOOR_URL / SPOOR_PROJECT / SPOOR_TOKEN resolution and token origin binding
+  config.ts           the project root (never the home directory), the spoor.config.json marker, SPOOR_URL /
+                      SPOOR_PROJECT / SPOOR_TOKEN resolution and token origin binding
+  local-memory.ts     memory files from before Spoor: the pull half of sync, import-and-delete, session-start lines
   http.ts             fetch client with User-Agent and the 5-minute circuit breaker
   hook-guard.ts       runHook: SPOOR_DRAFTING / SPOOR_DISABLE guard, exceptions swallowed
   state.ts            .spoor/state.json (bases, drafted, pending, conflicts) under .spoor/state.lock

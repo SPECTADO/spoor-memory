@@ -55,8 +55,17 @@ export function mcpJsonBlock(v: InstallBlockValues) {
   }
 }
 
-/** cli-and-hooks.md section 7.2: the `.claude/settings.json` block (merged by `spoor init`). */
-export function settingsJsonBlock(v: InstallBlockValues) {
+/** The UserPromptSubmit entry of prompt recall (ADR-0037); `spoor init` writes it only for a project that turned it on. */
+export const recallHookGroup = () => ({
+  hooks: [{ type: 'command', timeout: 5, command: spoorHookCommand('user-prompt-submit', 'exit 0') }],
+})
+
+/**
+ * cli-and-hooks.md section 7.2: the `.claude/settings.json` block (merged by `spoor init`). `recall: true` adds the
+ * UserPromptSubmit hook; `false` renders the event with no entry, which makes the merge remove an older one;
+ * left out (the server's install doc) the event is not mentioned.
+ */
+export function settingsJsonBlock(v: InstallBlockValues, opts: { recall?: boolean } = {}) {
   const { version } = checkInstallBlockValues(v)
   const sessionFallback = isReleaseVersion(version)
     ? `exec npx --yes --prefer-offline spoor-memory@${version} hook session-start`
@@ -78,6 +87,7 @@ export function settingsJsonBlock(v: InstallBlockValues) {
         },
       ],
       Stop: [{ hooks: [{ type: 'command', timeout: 15, command: spoorHookCommand('stop', 'exit 0') }] }],
+      ...(opts.recall === undefined ? {} : { UserPromptSubmit: opts.recall ? [recallHookGroup()] : [] }),
     },
   }
 }

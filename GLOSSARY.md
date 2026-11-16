@@ -71,6 +71,12 @@ review queue until a human runs the push with `--force` or aligns the file.
 
 **Handle**: The short id agents and humans use instead of uuids: `m<number>` for memories, `d<number>` for docs, `L<number>` for library pages, `ADR-<4 digits>` for decisions, with `S:` for the **shared space**. The uuid is the item's `spoor_id`, which is what repository files carry.
 
+**Project set up for Spoor**: A repository whose root holds `spoor.config.json`, the committed marker `spoor init` writes (a `.mcp.json` with a `spoor` server counts for older installs). The CLI and its hooks do nothing anywhere else, and the home directory is never one.
+
+**Local memory files**: Memory files a repository had before Spoor (`MEMORY.md`, `.memory/**` and the other `local_memory.paths`). The team chooses once, in `spoor init`: `sync` keeps them and syncs them with docs in Spoor both ways, `delete` imports them and removes them.
+
+**Prompt recall**: The optional UserPromptSubmit hook: for each prompt the server returns the few items whose similarity to it reaches the embedding model's floor, and the CLI adds them to the context, without what the session already saw. Off by default (`spoor init --recall on`).
+
 **Lifecycle**: The housekeeping axis of an item: `active`, **stale** or **archived**. It is separate from `status`, the domain axis (`active` or `superseded` for memories and docs, `proposed`, `accepted`, `superseded`, `deprecated` for decisions).
 
 **Supersede**: Replacing an item with a newer one: the new item gets a `supersedes` **edge** to the old, and the old item's status becomes `superseded`. For memories through `spoor_supersede`; for ADRs through `supersedes:` in the new ADR file; docs are edited instead. An item has at most one successor: a second supersede is refused with `revision_conflict` naming the existing one.

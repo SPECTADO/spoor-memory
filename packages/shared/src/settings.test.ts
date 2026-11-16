@@ -6,6 +6,7 @@ import {
   mergeSettings,
   projectSettings,
   projectSettingsPatch,
+  recallMinCos,
   refuseThreshold,
   relatedMinCos,
   resolveProjectSettings,
@@ -163,5 +164,15 @@ describe('dedupe.refuse_threshold', () => {
     expect(dedupeOrderIssue({ dedupe: { threshold: 0.9, refuse_threshold: null } })).toBeNull()
     expect(dedupeOrderIssue({ dedupe: { refuse_threshold: 0.8 } })).toBeNull()
     expect(dedupeOrderIssue(null)).toBeNull()
+  })
+})
+
+describe('recallMinCos', () => {
+  it('has a measured floor per model family, and none for other models', () => {
+    expect(recallMinCos('local:Xenova/multilingual-e5-small@q8/384')).toBe(0.86)
+    expect(recallMinCos('ollama:hf.co/org/EmbeddingGemma:300m/768')).toBe(0.45)
+    expect(recallMinCos('voyage:voyage-3/1024')).toBeNull()
+    expect(recallMinCos(null)).toBeNull()
+    expect(recallMinCos('nonsense')).toBeNull()
   })
 })

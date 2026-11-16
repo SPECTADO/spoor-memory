@@ -4,7 +4,15 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ConfigError, isLoopback, resolveConfig, type SpoorConfig } from './config.js'
+import {
+  ConfigError,
+  isHomeDir,
+  isLoopback,
+  PROJECT_MARKER,
+  projectInitialized,
+  resolveConfig,
+  type SpoorConfig,
+} from './config.js'
 import { logRun, oncePerDay, readJsonObject } from './fsutil.js'
 import { type Client, createClient, NetworkError, OfflineError, parseRetryAfter } from './http.js'
 import { loadRepoConfig, type RepoConfig } from './repo-config.js'
@@ -47,6 +55,10 @@ export interface Ctx {
   configError?: string
   /** No `.claude/settings.local.json` and no token in the environment (I45): hooks stay silent. */
   optedOut: boolean
+  /** The root is a project set up for Spoor (config.ts `projectInitialized`). Elsewhere nothing runs or is written. */
+  initialized: boolean
+  /** The root is the user's home directory: never a project, `login` and `init` refuse it. */
+  home: boolean
 }
 
 export function makeCtx(rt: Rt, flags: Flags = {}, cwd?: string): Ctx {
@@ -65,6 +77,8 @@ export function makeCtx(rt: Rt, flags: Flags = {}, cwd?: string): Ctx {
     root,
     repo,
     optedOut: !existsSync(join(root, '.claude', 'settings.local.json')) && !env.SPOOR_TOKEN && !flags.token,
+    initialized: projectInitialized(root, env),
+    home: isHomeDir(root, env),
   }
   if (repoError) ctx.repoError = repoError
   if (cfg) {
@@ -76,6 +90,13 @@ export function makeCtx(rt: Rt, flags: Flags = {}, cwd?: string): Ctx {
   }
   if (configError) ctx.configError = configError
   return ctx
+}
+
+/** Why a command cannot run here: the root is the home directory, or a project that was never set up for Spoor. */
+export function notInitialized(ctx: Ctx): string {
+  if (ctx.home)
+    return `spoor: ${ctx.root} is your home directory, not a project. Run spoor inside a project directory.`
+  return `spoor: ${ctx.root} is not set up for Spoor (no ${PROJECT_MARKER}). To set it up run: spoor login --server URL --project SLUG`
 }
 
 /** The one-line notice for missing values; it names only the ones that are missing (review-log-phase5 A6). */

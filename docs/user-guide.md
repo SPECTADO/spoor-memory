@@ -10,7 +10,7 @@ mode. Terms are defined in [GLOSSARY.md](../GLOSSARY.md). Agents have their own 
   email: the admin copies the link to you. An invite for an email that already has an account is refused; ask to be added to the
   project instead. A forgotten password is fixed by an instance admin creating a reset invite for you.
 - Sessions last 30 days and end after 14 idle days. Account (top right menu): your name, password and every API token you hold.
-- The bottom of the left menu shows the versions, for example `Web 0.7.1 · Server 0.7.1`. If they differ after an upgrade, the
+- The bottom of the left menu shows the versions, for example `Web 0.7.5 · Server 0.7.5`. If they differ after an upgrade, the
   line turns into a warning: press "Reload to update" to get the current web UI. An open page checks the server's version
   every 5 minutes. Each version links to its release on GitHub.
 - Instance admins also see "Update available: X.Y.Z" there, and on Status, when a newer Spoor release is out. The link opens the

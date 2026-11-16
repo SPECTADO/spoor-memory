@@ -115,8 +115,14 @@ describe('hook session-start', () => {
         DIGEST,
     )
     const req = srv.requests.find((q) => q.path === '/p/acme/api/context')
-    // working-tree changes first, then the last commit's files (AGENTS.md and CLAUDE.md came with it)
-    expect(req?.query.getAll('file')).toEqual(['src/a.ts', 'src/new.ts', 'AGENTS.md', 'CLAUDE.md'])
+    // working-tree changes first, then the last commit's files (AGENTS.md, CLAUDE.md and the marker came with it)
+    expect(req?.query.getAll('file')).toEqual([
+      'src/a.ts',
+      'src/new.ts',
+      'AGENTS.md',
+      'CLAUDE.md',
+      'spoor.config.json',
+    ])
     expect(req?.query.get('budget')).toBeNull()
     expect(req?.headers.authorization).toBe('Bearer spr_testtoken123')
     expect(req?.headers['user-agent']).toMatch(/^spoor-cli\//)
@@ -530,6 +536,7 @@ describe('hooks when the repo root is below the git top level', () => {
   async function monorepoSession() {
     const top = makeRepo({ git: true, files: { 'other/x.ts': 'x', 'pkg/src/a.ts': 'a' } })
     writeFile(top, 'pkg/.claude/settings.local.json', JSON.stringify({ env: localEnv(srv.url) }))
+    writeFile(top, 'pkg/spoor.config.json', '{}\n') // the project set up for Spoor is pkg, not the git top level
     gitCommitAll(top)
     const root = join(top, 'pkg')
     srv.on('GET /p/acme/api/context', { text: DIGEST })
@@ -551,7 +558,8 @@ describe('hooks when the repo root is below the git top level', () => {
     writeFile(top, 'other/x.ts', 'changed')
     await hook('session-start', root, { session_id: 'mono2', source: 'startup' })
     const reqs = srv.requests.filter((q) => q.path === '/p/acme/api/context')
-    expect(reqs.at(-1)?.query.getAll('file')).toEqual(['src/a.ts', 'src/new.ts'])
+    // spoor.config.json came with the last commit
+    expect(reqs.at(-1)?.query.getAll('file')).toEqual(['src/a.ts', 'src/new.ts', 'spoor.config.json'])
   })
 
   it('stop nags with root-relative changed files, from the work tree and from commits', async () => {
