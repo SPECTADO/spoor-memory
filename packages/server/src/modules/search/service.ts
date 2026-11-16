@@ -117,6 +117,11 @@ export interface SearchParams {
   includeInactive: boolean
   /** Digest tier 4: only digest-eligible items (active, not drafted into an accepted ADR, …). */
   digestEligible?: boolean
+  /**
+   * Prompt recall: keep only hits whose best vector cosine reaches the floor this returns for the scope's model
+   * tag (`null`: keep none). A hit found by full text alone has no cosine and is dropped.
+   */
+  minCos?: (modelTag: string) => number | null
 }
 
 export interface SearchHit {
@@ -138,6 +143,8 @@ export interface SearchHit {
   expiresAt: Date | null
   pinned: boolean
   score: number
+  /** Best cosine of the item's chunks among the vector branch's candidates; `null` when found by full text only. */
+  cos: number | null
   snippet: string
 }
 
@@ -164,6 +171,7 @@ type HitRow = {
   expires_at: Date | string | null
   pinned: boolean
   score: number
+  cos: number | null
   chunk_text: string
 }
 
@@ -372,6 +380,7 @@ export class SearchService implements SearchPort {
     const filtered = !!p.type || (p.tags?.length ?? 0) > 0 || !!p.digestEligible
     const branch = filtered ? Math.max(BRANCH_LIMIT, p.limit * 3) : BRANCH_LIMIT
     const emptyBranch = sql`SELECT NULL::uuid AS item_id, NULL::bigint AS chunk_id, NULL::bigint AS r WHERE false`
+    const emptyVec = sql`SELECT NULL::uuid AS item_id, NULL::bigint AS chunk_id, NULL::bigint AS r, NULL::float8 AS dist WHERE false`
 
     const fts =
       tsq === ''
@@ -382,11 +391,11 @@ export class SearchService implements SearchPort {
                     WHERE c.project_id = ${scope.id} AND c.model = ${tag} AND c.space IN ${inList(spaces)}
                       AND c.tsv @@ q
                     ORDER BY rank DESC, c.id LIMIT ${branch}) s`
-    let vec = emptyBranch
+    let vec = emptyVec
     if (vector && provider) {
       const vt = vectorType(provider.dims)
       const v = vectorLiteral(vector)
-      vec = sql`SELECT item_id, chunk_id, row_number() OVER (ORDER BY dist, chunk_id) AS r
+      vec = sql`SELECT item_id, chunk_id, row_number() OVER (ORDER BY dist, chunk_id) AS r, dist
                 FROM (SELECT c.item_id, c.id AS chunk_id, c.embedding::${vt} <=> ${v}::${vt} AS dist
                       FROM chunks c
                       WHERE c.project_id = ${scope.id} AND c.model = ${tag} AND c.space IN ${inList(spaces)}
@@ -410,14 +419,16 @@ export class SearchService implements SearchPort {
         WITH fts AS (${fts}), vec AS (${vec}),
         fused AS (
           SELECT COALESCE(f.item_id, v.item_id) AS item_id, COALESCE(f.chunk_id, v.chunk_id) AS chunk_id,
-                 COALESCE(1.0 / (60 + f.r), 0) + COALESCE(1.0 / (60 + v.r), 0) AS score
+                 COALESCE(1.0 / (60 + f.r), 0) + COALESCE(1.0 / (60 + v.r), 0) AS score,
+                 (1 - v.dist)::float8 AS cos
           FROM fts f FULL OUTER JOIN vec v ON f.chunk_id = v.chunk_id
         ), best AS (
-          SELECT DISTINCT ON (item_id) item_id, chunk_id, score FROM fused ORDER BY item_id, score DESC, chunk_id
+          SELECT DISTINCT ON (item_id) item_id, chunk_id, score, max(cos) OVER (PARTITION BY item_id) AS cos
+          FROM fused ORDER BY item_id, score DESC, chunk_id
         )
         SELECT i.id, i.project_id, i.space, i.number, i.adr_number, i.title, i.type, i.status, i.lifecycle,
                i.revision, i.provenance, i.confidence, i.decided_on::text AS decided_on, i.expires_at, i.pinned,
-               b.score::float8 AS score, ch.text AS chunk_text
+               b.score::float8 AS score, b.cos::float8 AS cos, ch.text AS chunk_text
         FROM best b JOIN items i ON i.id = b.item_id JOIN chunks ch ON ch.id = b.chunk_id
         WHERE ${sql.join(filters, sql` AND `)}
         ORDER BY b.score DESC, i.id
@@ -425,7 +436,12 @@ export class SearchService implements SearchPort {
       return res.rows
     })
     const tokens = queryTokens(normQuery)
-    return rows.map((r) => ({
+    const floor = p.minCos ? p.minCos(scope.model) : undefined
+    const kept =
+      floor === undefined
+        ? rows
+        : rows.filter((r) => floor !== null && r.cos !== null && Number(r.cos) >= floor)
+    return kept.map((r) => ({
       id: r.id,
       projectId: r.project_id,
       shared: sharedFromProject,
@@ -443,6 +459,7 @@ export class SearchService implements SearchPort {
       expiresAt: r.expires_at === null ? null : new Date(r.expires_at),
       pinned: r.pinned,
       score: Number(r.score),
+      cos: r.cos === null ? null : Number(r.cos),
       snippet: makeSnippet(r.chunk_text, tokens),
     }))
   }

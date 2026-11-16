@@ -11,7 +11,7 @@
           {
             "type": "command",
             "timeout": 15,
-            "command": "command -v spoor >/dev/null 2>&1 && exec spoor hook session-start || exec npx --yes --prefer-offline spoor-memory@0.1.0 hook session-start"
+            "command": "command -v spoor >/dev/null 2>&1 && exec spoor hook session-start || exec npx --yes --prefer-offline spoor-memory@0.7.1 hook session-start"
           }
         ]
       }

@@ -1,6 +1,6 @@
 /** `spoor whoami`, `spoor status`, `spoor context` (cli-and-hooks.md sections 4.5, 4.7, 4.10). */
 
-import { isNewerRelease, LATEST_VERSION_HEADER } from '@spoor/shared'
+import { isNewerRelease, isReleaseVersion, LATEST_VERSION_HEADER } from '@spoor/shared'
 import {
   api,
   authProblem,
@@ -10,6 +10,7 @@ import {
   failureNotice,
   mcpUrlMismatch,
   projectPath,
+  VERSION,
 } from '../ctx.js'
 import { gitAnchors } from '../git.js'
 import { offlineUntil } from '../http.js'
@@ -64,6 +65,7 @@ export async function cmdWhoami(ctx: Ctx, o: { json?: boolean }): Promise<number
 export async function cmdStatus(ctx: Ctx, o: { remote?: boolean }): Promise<number> {
   const out: string[] = []
   const cfg = ctx.cfg
+  out.push(`cli      spoor ${VERSION}`)
   out.push(`repo     ${ctx.root}`)
   out.push(`server   ${cfg?.server ? `${cfg.server.value} (${cfg.server.source})` : 'not set'}`)
   out.push(`project  ${cfg?.project ? `${cfg.project.value} (${cfg.project.source})` : 'not set'}`)
@@ -142,6 +144,14 @@ export async function cmdStatus(ctx: Ctx, o: { remote?: boolean }): Promise<numb
         const exp =
           typeof e === 'string' ? `expires ${e.slice(0, 10)}` : e === null ? 'no expiry' : 'expiry unknown'
         out.push('', `remote   ${whoamiLine(r.body)} · ${exp}`)
+        if (
+          isReleaseVersion(VERSION) &&
+          isReleaseVersion(r.body.server.version) &&
+          VERSION !== r.body.server.version
+        )
+          out.push(
+            `version  this CLI is ${VERSION}, the server is ${r.body.server.version}; run npm i -g spoor-memory@${r.body.server.version}`,
+          )
         const latest = latestLines(r.body.server.version, r.headers?.get(LATEST_VERSION_HEADER))[0]
         if (latest) out.push(`update   ${latest}`)
       } else {

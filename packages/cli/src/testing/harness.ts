@@ -94,6 +94,8 @@ export interface RepoOpts {
   /** env block of .claude/settings.local.json; omit for an opted-out teammate */
   local?: Record<string, string>
   config?: unknown
+  /** no `spoor.config.json`: a project that was never set up for Spoor */
+  bare?: true
   /** write the AGENTS.md block and the CLAUDE.md import `spoor init` would (`'shared'`: the non-exclusive block) */
   agents?: true | 'shared'
 }
@@ -115,7 +117,9 @@ export function makeRepo(o: RepoOpts = {}): string {
   }
   for (const [p, c] of Object.entries(o.files ?? {})) writeFile(dir, p, c)
   if (o.local) writeFile(dir, '.claude/settings.local.json', JSON.stringify({ env: o.local }, null, 2))
+  // spoor.config.json marks a project set up for Spoor (config.ts `projectInitialized`)
   if (o.config !== undefined) writeFile(dir, 'spoor.config.json', JSON.stringify(o.config))
+  else if (!o.bare) writeFile(dir, 'spoor.config.json', '{}\n')
   if (o.agents) for (const [p, c] of Object.entries(agentsFiles(o.agents === 'shared'))) writeFile(dir, p, c)
   return dir
 }

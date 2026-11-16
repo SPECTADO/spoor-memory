@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util'
 import { cmdAdrDraft } from './cmd/draft.js'
 import { cmdContext, cmdStatus, cmdWhoami } from './cmd/info.js'
+import { cmdMemorySync } from './cmd/memory.js'
 import { cmdAdrImport, cmdDocsImport, cmdPush } from './cmd/mirror.js'
 import {
   type HookInput,
@@ -12,10 +13,12 @@ import {
   sessionStart,
   statusLines,
   stop,
+  USER_PROMPT_SUBMIT_DEADLINE_MS,
+  userPromptSubmit,
 } from './cmd/session.js'
 import { cmdInit, cmdLogin } from './cmd/setup.js'
 import { type Command, commandHelp, findCommand, helpText } from './commands.js'
-import { type Ctx, makeCtx, VERSION } from './ctx.js'
+import { type Ctx, makeCtx, notInitialized, VERSION } from './ctx.js'
 import { logRun } from './fsutil.js'
 import { runHook } from './hook-guard.js'
 import { Deadline, type Io, runtimeOf } from './runtime.js'
@@ -36,8 +39,14 @@ const GLOBAL: Record<string, Opt> = {
 }
 
 const OPTIONS: Record<string, Record<string, Opt>> = {
-  login: { 'no-browser': { type: 'boolean' }, 'no-init': { type: 'boolean' }, untrack: { type: 'boolean' } },
-  init: { 'dry-run': { type: 'boolean' } },
+  login: {
+    'no-browser': { type: 'boolean' },
+    'no-init': { type: 'boolean' },
+    untrack: { type: 'boolean' },
+    'local-memory': { type: 'string' },
+  },
+  init: { 'dry-run': { type: 'boolean' }, 'local-memory': { type: 'string' }, recall: { type: 'string' } },
+  'memory sync': { 'take-server': { type: 'boolean' }, 'take-local': { type: 'boolean' } },
   whoami: { json: { type: 'boolean' } },
   status: { remote: { type: 'boolean' } },
   context: {
@@ -70,10 +79,16 @@ const HOOK_DEADLINES: Record<string, number> = {
   'session-start': SESSION_START_DEADLINE_MS,
   stop: STOP_DEADLINE_MS,
   'post-tool-use': POST_TOOL_USE_DEADLINE_MS,
+  'user-prompt-submit': USER_PROMPT_SUBMIT_DEADLINE_MS,
 }
 
 type HookFn = (ctx: Ctx, input: HookInput, d: Deadline) => Promise<string>
-const HOOKS: Record<string, HookFn> = { 'session-start': sessionStart, stop, 'post-tool-use': postToolUse }
+const HOOKS: Record<string, HookFn> = {
+  'session-start': sessionStart,
+  stop,
+  'post-tool-use': postToolUse,
+  'user-prompt-submit': userPromptSubmit,
+}
 
 /** Hook deadline in ms for `argv` (bin.ts arms a hard exit just after it), or undefined for other commands. */
 export function hookDeadlineMs(argv: string[]): number | undefined {
@@ -93,7 +108,7 @@ async function runHookCommand(argv: string[], io: Io): Promise<number> {
     else io.err(commandHelp(cmd))
     return 0
   }
-  let root = rt.cwd
+  let root: string | undefined
   return runHook(
     async () => {
       const deadlineMs = HOOK_DEADLINES[name] ?? 5000
@@ -101,6 +116,8 @@ async function runHookCommand(argv: string[], io: Io): Promise<number> {
       const input = parseHookInput(await rt.readStdin())
       const cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : rt.cwd
       const ctx = makeCtx(rt, {}, cwd)
+      // not a project set up for Spoor (or the home directory): do nothing, write nothing
+      if (!ctx.initialized) return
       root = ctx.root
       let timer: NodeJS.Timeout | undefined
       const guard = new Promise<typeof TIMED_OUT>((resolve) => {
@@ -121,7 +138,9 @@ async function runHookCommand(argv: string[], io: Io): Promise<number> {
       }
     },
     io.env,
-    (e) => logRun(root, `hook ${name}: ${e instanceof Error ? e.message : String(e)}`),
+    (e) => {
+      if (root) logRun(root, `hook ${name}: ${e instanceof Error ? e.message : String(e)}`)
+    },
   )
 }
 
@@ -189,6 +208,11 @@ async function runCommand(
   // `login --token` is the token to store, not a config override
   if (s('token') !== undefined && key !== 'login') flags.token = s('token') as string
   const ctx = makeCtx(rt, flags)
+  // only login and init run outside a project set up for Spoor: nothing else may create files there
+  if (!ctx.initialized && key !== 'login' && key !== 'init') {
+    io.err(`${notInitialized(ctx)}\n`)
+    return 1
+  }
   if (ctx.repoError && key !== 'status') {
     io.err(`spoor: ${ctx.repoError}\n`)
     if (!['context', 'adr push', 'docs push', 'adr draft'].includes(key) || b('strict')) return 1
@@ -207,10 +231,20 @@ async function runCommand(
       }
       const t = s('token')
       if (t !== undefined) o.token = t
+      const lm = s('local-memory')
+      if (lm !== undefined) o.localMemory = lm
       return cmdLogin(ctx, o)
     }
-    case 'init':
-      return cmdInit(ctx, { dryRun: b('dry-run') })
+    case 'init': {
+      const o: Parameters<typeof cmdInit>[1] = { dryRun: b('dry-run') }
+      const lm = s('local-memory')
+      if (lm !== undefined) o.localMemory = lm
+      const recall = s('recall')
+      if (recall !== undefined) o.recall = recall
+      return cmdInit(ctx, o)
+    }
+    case 'memory sync':
+      return cmdMemorySync(ctx, { takeServer: b('take-server'), takeLocal: b('take-local') })
     case 'whoami':
       return cmdWhoami(ctx, { json: b('json') })
     case 'status':

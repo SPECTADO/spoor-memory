@@ -39,6 +39,7 @@ import {
 import { gitAnchors, gitDiffNames, gitHead, gitStatusPaths, isNoisePath, mtimeMs } from '../git.js'
 import { offlineUntil } from '../http.js'
 import { importRunning, unfinishedImportPaths, unfinishedImports } from '../import-queue.js'
+import { fileList, localMemoryLines, pullLocalMemory } from '../local-memory.js'
 import {
   classify,
   orphans,
@@ -56,6 +57,7 @@ import { contextQuery, latestLines } from './info.js'
 export const SESSION_START_DEADLINE_MS = 7000
 export const STOP_DEADLINE_MS = 6000
 export const POST_TOOL_USE_DEADLINE_MS = 8000
+export const USER_PROMPT_SUBMIT_DEADLINE_MS = 3000
 export const OUTPUT_MAX = 9500
 const MARKER_MAX_AGE_MS = 14 * 24 * 3600 * 1000
 const NO_MARKER_WINDOW_MS = 6 * 3600 * 1000
@@ -80,6 +82,38 @@ export function sessionKey(id: string | undefined): string | undefined {
 }
 
 const sessionDir = (ctx: Ctx) => join(spoorDir(ctx.root), 'session')
+
+/** Handles at the start of digest and recall lines: `m12`, `d3~`, `L2`, `ADR-0007`, `S:m4`. */
+const HANDLE_LINE_RE = /^((?:S:)?(?:[mdL]\d+|ADR-\d+))~?(?= )/gm
+/** At most this many handles are remembered per session (and sent as `exclude`). */
+const SHOWN_MAX = 300
+
+/** Handles named by the lines of a digest or a recall answer. */
+export function handlesIn(text: string): string[] {
+  return [...text.matchAll(HANDLE_LINE_RE)].map((m) => m[1] as string)
+}
+
+const shownPath = (ctx: Ctx, key: string) => join(sessionDir(ctx), `${key}.shown`)
+
+/** Handles this session's context already holds (from the digest and earlier recalls). */
+function readShown(ctx: Ctx, key: string): string[] {
+  try {
+    const v: unknown = JSON.parse(readText(shownPath(ctx, key)) ?? '[]')
+    return Array.isArray(v) ? v.filter((h): h is string => typeof h === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function addShown(ctx: Ctx, key: string, handles: string[], reset = false): void {
+  try {
+    const all = [...new Set([...(reset ? [] : readShown(ctx, key)), ...handles])].slice(-SHOWN_MAX)
+    mkdirSync(sessionDir(ctx), { recursive: true })
+    writeAtomic(shownPath(ctx, key), JSON.stringify(all))
+  } catch {
+    // without the list a recall may repeat an item: harmless
+  }
+}
 
 interface Marker {
   started_at: string
@@ -262,6 +296,7 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
   let agents: string[] = []
   let version: string[] = []
   let update: string[] = []
+  const memory: string[] = []
   if (problem) {
     logRun(ctx.root, problem, ctx.rt.now())
     main = sessionNotice(ctx, 'not_configured')
@@ -284,12 +319,22 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
       if (update.length > 0 && !oncePerDay(ctx.root, 'update', ctx.rt.now())) update = []
       const text = typeof r.body === 'string' ? r.body : JSON.stringify(r.body)
       main = text.endsWith('\n') ? text.slice(0, -1) : text
+      // prompt recall leaves out what this digest already shows (a new digest after clear or compact starts over)
+      if (key && ctx.repo.recall.enabled) addShown(ctx, key, handlesIn(text), true)
       // 6. queue replay and mirror sweep in the time left (marked automatic: not the agent's own recording);
       // skipped while an import runs in this checkout, so the two never overlap on the server
       const auto = clientFor(ctx, { breaker: 'check', auto: true })
       try {
         if (!importRunning(ctx.root, ctx.rt.now())) {
           if (!deadline.expired(1000)) await replayPending(ctx, auto, deadline)
+          // local memory files kept in sync (ADR-0036): take what is newer in Spoor before the sweep pushes
+          if (!deadline.expired(1500)) {
+            const pulled = (await pullLocalMemory(ctx, auto, { deadline })).pulled
+            if (pulled.length > 0)
+              memory.push(
+                `Spoor: ${fileList(pulled)} ${pulled.length === 1 ? 'was' : 'were'} updated from Spoor (edited there since the last sync).`,
+              )
+          }
           if (!deadline.expired(1000)) await sweepMirror(ctx, auto, deadline)
         }
       } catch (e) {
@@ -301,6 +346,9 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
     if (!answered) logRun(ctx.root, main, ctx.rt.now())
   }
   const status = statusLines(ctx)
+  // 5b. memory files from before Spoor that nobody decided about (at most once a day)
+  const local = localMemoryLines(ctx)
+  if (local.length > 0 && oncePerDay(ctx.root, 'local-memory', ctx.rt.now())) memory.push(...local)
   const announced = newDrafts(ctx, readState(ctx.root)).map(([h]) => h)
   if (announced.length > 0)
     await updateState(ctx.root, (s) => {
@@ -309,8 +357,37 @@ export async function sessionStart(ctx: Ctx, input: HookInput, deadline: Deadlin
         if (d) d.announced = true
       }
     })
-  const out = [...status, ...agents, ...version, ...update, main].join('\n')
+  const out = [...status, ...memory, ...agents, ...version, ...update, main].join('\n')
   return cutOutput(`${out}\n`)
+}
+
+/**
+ * Section 5.4 (ADR-0037): prompt recall. For a prompt long enough to mean something, ask the server for the few
+ * items that clearly match it and print them (plain stdout becomes context). Silent on every failure, and it never
+ * trips the circuit breaker: a slow answer here must not switch the other hooks off.
+ */
+export async function userPromptSubmit(ctx: Ctx, input: HookInput, deadline: Deadline): Promise<string> {
+  const cfg = ctx.repo.recall
+  if (!cfg.enabled || ctx.optedOut || authProblem(ctx)) return ''
+  const prompt = (str(input.prompt) ?? '').trim()
+  // commands, shell escapes and short answers ("yes, go on") carry no topic
+  if (prompt.length < cfg.min_chars || /^[/!#]/.test(prompt) || prompt.split(/\s+/).length < 4) return ''
+  if (offlineUntil({ repoRoot: ctx.root, now: ctx.rt.now })) return ''
+  const key = sessionKey(str(input.session_id))
+  const params = new URLSearchParams({ query: prompt.slice(0, 500), limit: String(cfg.max_items) })
+  if (cfg.min_cos !== undefined) params.set('min_cos', String(cfg.min_cos))
+  const shown = key ? readShown(ctx, key) : []
+  if (shown.length > 0) params.set('exclude', shown.join(','))
+  const r = await api<unknown>(
+    clientFor(ctx, { breaker: 'off', auto: true }),
+    'GET',
+    projectPath(ctx, `/api/recall?${params.toString()}`),
+    { timeoutMs: deadline.cap(2000) },
+  )
+  if (r.kind !== 'ok' || typeof r.body !== 'string' || r.body.trim() === '') return ''
+  const text = cutOutput(r.body.endsWith('\n') ? r.body : `${r.body}\n`, 2000)
+  if (key) addShown(ctx, key, handlesIn(text))
+  return text
 }
 
 /** Files changed in this session (section 5.2 step 2.1): mirrored files and noise excluded. */

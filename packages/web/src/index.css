@@ -201,11 +201,25 @@
     overflow-x: auto;
     max-width: 100%;
   }
+  /*
+   * `.md` breaks anywhere, which makes a cell's minimum width one character: next to a long cell the automatic
+   * table layout then squeezed short columns to a letter or two. In a cell only an overlong word may break
+   * (`break-word` leaves the minimum width at the longest word), and no column goes below a few characters; a
+   * table that gets too wide scrolls sideways.
+   */
   .md th,
   .md td {
     border: 1px solid var(--c-border);
     padding: 0.35em 0.6em;
     text-align: left;
+    vertical-align: top;
+    overflow-wrap: break-word;
+    word-break: normal;
+    min-width: 4em;
+  }
+  .md td code,
+  .md th code {
+    overflow-wrap: break-word;
   }
   .md th {
     background: var(--c-surface);

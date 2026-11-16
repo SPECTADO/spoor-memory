@@ -1,0 +1,7 @@
+{
+  "server": "https://spoor.spectado.com",
+  "project": "spoor-memory",
+  "local_memory": {
+    "mode": "sync"
+  }
+}

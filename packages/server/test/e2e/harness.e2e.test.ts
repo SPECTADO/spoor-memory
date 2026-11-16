@@ -502,7 +502,7 @@ describe('DoD 2: admin sets up a project and a user; the user logs in from the r
     const again = await spoor(['init'])
     expect(again.code).toBe(0)
     expect(again.stdout).toBe(
-      'unchanged .mcp.json\nunchanged .claude/settings.json\nunchanged .gitignore\n' +
+      'unchanged spoor.config.json\nunchanged .mcp.json\nunchanged .claude/settings.json\nunchanged .gitignore\n' +
         'unchanged AGENTS.md\nunchanged CLAUDE.md\nunchanged .claude/settings.local.json\n',
     )
   }, 60_000)

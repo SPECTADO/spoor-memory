@@ -1,7 +1,8 @@
 /**
  * Repo mirror (cli-and-hooks.md sections 4.2 to 4.4, 5.1 step 6, 3.3): which files are mirrored, one push with its
  * result handling (write-back, renumber rename, bases, conflicts, queue), the import batches, the SessionStart
- * sweep by hash, the retry queue and orphan detection. Push-only (ADR 0009).
+ * sweep by hash, the retry queue and orphan detection. Push-only (ADR 0009), except the local memory files a team
+ * chose to keep in sync (ADR-0036): they are mirrored as docs and also pulled (local-memory.ts).
  */
 import { existsSync, readdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -75,9 +76,22 @@ export function isDocPath(ctx: Ctx, rel: string): boolean {
   return d.include.some((p) => patternMatches(p, rel)) && !d.exclude.some((p) => patternMatches(p, rel))
 }
 
+/**
+ * A memory file from before Spoor (`local_memory.paths`, Markdown only; ADR-0036). A file that is already an ADR or a
+ * mirrored doc is not one.
+ */
+export function isLocalMemoryPath(ctx: Ctx, rel: string): boolean {
+  if (!/\.md$/i.test(rel) || isAdrPath(ctx, rel) || isDocPath(ctx, rel)) return false
+  return ctx.repo.local_memory.paths.some((p) => patternMatches(p, rel))
+}
+
+/** Local memory files are mirrored (to the docs space, both ways) only when the team chose `sync`. */
+const syncsLocalMemory = (ctx: Ctx) => ctx.repo.local_memory.mode === 'sync'
+
 export function classify(ctx: Ctx, rel: string): MirrorKind | undefined {
   if (isAdrPath(ctx, rel)) return 'adr'
   if (isDocPath(ctx, rel)) return 'doc'
+  if (syncsLocalMemory(ctx) && isLocalMemoryPath(ctx, rel)) return 'doc'
   return undefined
 }
 
@@ -108,10 +122,17 @@ export function adrFiles(ctx: Ctx): { files: string[]; skipped: string[] } {
 }
 
 const WALK_SKIP = new Set(['node_modules', '.git', '.spoor', '.claude', 'dist', 'build', 'coverage'])
+/** Local memory lives in dot directories too (`.claude/memory`), so only the heavy ones are skipped. */
+const MEMORY_WALK_SKIP = new Set(['node_modules', '.git', '.spoor', 'dist', 'build', 'coverage'])
 const WALK_MAX = 5000
 
-/** Files matched by `docs.include` minus `docs.exclude`, sorted. */
-export function docFiles(ctx: Ctx): string[] {
+/** Existing files matched by `patterns` for which `keep` holds, sorted. Directories in `skip` are not entered. */
+function matchedFiles(
+  ctx: Ctx,
+  patterns: string[],
+  keep: (rel: string) => boolean,
+  skip: Set<string> = WALK_SKIP,
+): string[] {
   const out = new Set<string>()
   let budget = WALK_MAX
   const walk = (relDir: string, depth: number, visit: (rel: string) => void) => {
@@ -126,11 +147,11 @@ export function docFiles(ctx: Ctx): string[] {
       if (--budget <= 0) return
       const rel = relDir === '' ? e.name : `${relDir}/${e.name}`
       if (e.isDirectory()) {
-        if (!WALK_SKIP.has(e.name)) walk(rel, depth + 1, visit)
+        if (!skip.has(e.name)) walk(rel, depth + 1, visit)
       } else if (e.isFile()) visit(rel)
     }
   }
-  for (const pattern of ctx.repo.docs.include) {
+  for (const pattern of patterns) {
     const p = normalizePath(pattern)
     if (p === null) continue
     if (!isGlob(p)) {
@@ -138,10 +159,10 @@ export function docFiles(ctx: Ctx): string[] {
       try {
         const st = statSync(abs)
         if (st.isFile()) {
-          if (isDocPath(ctx, p)) out.add(p)
+          if (keep(p)) out.add(p)
         } else if (st.isDirectory()) {
           walk(p.replace(/\/$/, ''), 0, (rel) => {
-            if (isDocPath(ctx, rel)) out.add(rel)
+            if (keep(rel)) out.add(rel)
           })
         }
       } catch {
@@ -152,16 +173,32 @@ export function docFiles(ctx: Ctx): string[] {
     const prefix = staticPrefix(p)
     const baseDir = prefix.includes('/') ? prefix.slice(0, prefix.lastIndexOf('/')) : ''
     walk(baseDir, 0, (rel) => {
-      if (isDocPath(ctx, rel)) out.add(rel)
+      if (keep(rel)) out.add(rel)
     })
   }
   return [...out].sort()
+}
+
+/** Files matched by `docs.include` minus `docs.exclude`, sorted. */
+export function docFiles(ctx: Ctx): string[] {
+  return matchedFiles(ctx, ctx.repo.docs.include, (rel) => isDocPath(ctx, rel))
+}
+
+/** The repo's memory files from before Spoor (`local_memory.paths`), whatever the mode; sorted. */
+export function localMemoryFiles(ctx: Ctx): string[] {
+  return matchedFiles(
+    ctx,
+    ctx.repo.local_memory.paths,
+    (rel) => insideRoot(ctx.root, rel) && isLocalMemoryPath(ctx, rel),
+    MEMORY_WALK_SKIP,
+  )
 }
 
 export function mirroredFiles(ctx: Ctx): { kind: MirrorKind; path: string }[] {
   return [
     ...adrFiles(ctx).files.map((path) => ({ kind: 'adr' as const, path })),
     ...docFiles(ctx).map((path) => ({ kind: 'doc' as const, path })),
+    ...(syncsLocalMemory(ctx) ? localMemoryFiles(ctx) : []).map((path) => ({ kind: 'doc' as const, path })),
   ]
 }
 

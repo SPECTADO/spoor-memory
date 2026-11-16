@@ -79,6 +79,23 @@ export function embeddingModelKey(tag: string): string | null {
   return family === '' ? null : `${m[1]}:${family}`
 }
 
+/**
+ * Prompt recall (ADR-0037): the lowest query-to-item cosine at which an item is shown for a user's prompt, per
+ * `<provider>:<model family>`. Measured 2026-11-16 on the spoor-bench corpus (256 items, 110 queries) with 25 prompts
+ * that have nothing to do with it: their best item scored at most 0.849 on e5-small and 0.42 on embeddinggemma, so
+ * these floors showed nothing for any of them and still kept the item for 59 and 62 of the 110 queries.
+ */
+const RECALL_MIN_COS_BY_MODEL: Readonly<Record<string, number>> = {
+  'local:multilingual-e5-small': 0.86,
+  'ollama:embeddinggemma': 0.45,
+}
+
+/** The recall floor for a model tag, or `null` for a model nobody measured (recall then shows nothing by default). */
+export function recallMinCos(modelTag?: string | null): number | null {
+  const key = modelTag ? embeddingModelKey(modelTag) : null
+  return (key !== null ? RECALL_MIN_COS_BY_MODEL[key] : undefined) ?? null
+}
+
 /** The dedupe defaults for a project whose active embedding model has this tag. */
 export function dedupeDefaults(modelTag?: string | null): DedupeDefaults {
   const key = modelTag ? embeddingModelKey(modelTag) : null

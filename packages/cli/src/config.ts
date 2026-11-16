@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 export type ConfigSource = 'flag' | 'env' | 'settings.local.json' | 'spoor.config.json'
@@ -25,16 +26,58 @@ export interface ResolveInput {
 
 export class ConfigError extends Error {}
 
-/** Nearest ancestor of cwd containing .git or .claude; CLAUDE_PROJECT_DIR wins. */
+const real = (p: string): string => {
+  try {
+    return realpathSync(p)
+  } catch {
+    return resolve(p)
+  }
+}
+
+/** The user's home directory (`HOME` / `USERPROFILE` of `env`, else the OS answer). */
+export function homeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(env.HOME || env.USERPROFILE || homedir())
+}
+
+/**
+ * The home directory is never a project: `~/.claude` holds the user's global Claude Code settings, so a `spoor init`
+ * there would install the hooks for every project on the machine and put `AGENTS.md` outside any project.
+ */
+export function isHomeDir(dir: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return real(dir) === real(homeDir(env))
+}
+
+/**
+ * The project root: `CLAUDE_PROJECT_DIR`, else the nearest ancestor of cwd containing `.git` or `.claude`. The walk
+ * stops below the home directory (its `.claude` is the user's global configuration, not a project marker); with no
+ * marker on the way the root is cwd itself.
+ */
 export function findRepoRoot(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
   if (env.CLAUDE_PROJECT_DIR) return resolve(env.CLAUDE_PROJECT_DIR)
-  let dir = resolve(cwd)
+  const start = resolve(cwd)
+  let dir = start
   for (;;) {
+    if (isHomeDir(dir, env)) return start
     if (existsSync(join(dir, '.git')) || existsSync(join(dir, '.claude'))) return dir
     const parent = dirname(dir)
-    if (parent === dir) return resolve(cwd)
+    if (parent === dir) return start
     dir = parent
   }
+}
+
+/** The file whose presence marks a project as set up for Spoor; `spoor init` writes it and it is committed. */
+export const PROJECT_MARKER = 'spoor.config.json'
+
+/**
+ * Whether `root` is a project set up for Spoor: it holds `spoor.config.json`, or (set up by a CLI older than the
+ * marker) a `.mcp.json` with a `spoor` server. Never the home directory. Outside such a project hooks do nothing and
+ * write nothing, and only `spoor login` / `spoor init` run.
+ */
+export function projectInitialized(root: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (isHomeDir(root, env)) return false
+  if (existsSync(join(root, PROJECT_MARKER))) return true
+  const servers = readJson(join(root, '.mcp.json'))?.mcpServers
+  return !!servers && typeof servers === 'object' && 'spoor' in (servers as object)
 }
 
 function readJson(path: string): Record<string, unknown> | undefined {

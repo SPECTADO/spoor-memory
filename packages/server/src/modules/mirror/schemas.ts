@@ -3,6 +3,9 @@ import { z } from 'zod'
 
 export const activityQuery = z.strictObject({ since: z.iso.datetime({ offset: true }).optional() })
 
+/** `GET /pull`: the repo-relative path of the mirrored file. */
+export const pullQuery = z.strictObject({ source_path: z.string().min(1).max(256) })
+
 /** `POST /adr/push` and `POST /docs/push`: `POST /push` with the space taken from the path. */
 export const spacePushRequest = z.strictObject({
   source_path: z.string().min(1).max(256),

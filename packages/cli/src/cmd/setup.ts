@@ -11,10 +11,18 @@ import {
   mergeClaudeMd,
   settingsJsonBlock,
 } from '@spoor/shared'
-import { normalizeServer } from '../config.js'
-import { api, type Ctx, clientFor, USER_AGENT, VERSION } from '../ctx.js'
+import { normalizeServer, PROJECT_MARKER } from '../config.js'
+import { api, type Ctx, clientFor, makeCtx, notInitialized, USER_AGENT, VERSION } from '../ctx.js'
 import { InvalidJsonFile, readJsonObject, readText, repoFileTarget, writeAtomic } from '../fsutil.js'
 import { git, gitPrefix, gitTopLevel, isTracked } from '../git.js'
+import {
+  deleteLocalMemory,
+  fileList,
+  isLocalMemoryMode,
+  type LocalMemoryMode,
+  syncLocalMemory,
+} from '../local-memory.js'
+import { localMemoryFiles } from '../mirror.js'
 import {
   ignoreLinesAt,
   jsonOut,
@@ -96,8 +104,27 @@ function applyWrites(ctx: Ctx, writes: PlannedWrite[], dryRun: boolean | undefin
  * `spoor init`: fetch the public install.json and merge `.mcp.json`, `.claude/settings.json`, `.gitignore`, the
  * `AGENTS.md` block, the `CLAUDE.md` import and (logged-in users) `autoMemoryEnabled` in `settings.local.json`.
  * Every file is read and merged first; invalid JSON anywhere aborts with exit 1 before anything is written.
+ * It also writes `spoor.config.json`, the committed marker of a project set up for Spoor, and settles what happens to
+ * memory files from before Spoor (`localMemoryStep`).
  */
-export async function cmdInit(ctx: Ctx, o: { dryRun?: boolean }): Promise<number> {
+export async function cmdInit(
+  ctx: Ctx,
+  o: { dryRun?: boolean; localMemory?: string; recall?: string },
+): Promise<number> {
+  if (ctx.home) {
+    ctx.rt.err(`${notInitialized(ctx)}\n`)
+    return 1
+  }
+  if (o.localMemory !== undefined && !isLocalMemoryMode(o.localMemory)) {
+    ctx.rt.err('spoor: --local-memory must be sync or delete\n')
+    return 1
+  }
+  if (o.recall !== undefined && o.recall !== 'on' && o.recall !== 'off') {
+    ctx.rt.err('spoor: --recall must be on or off\n')
+    return 1
+  }
+  // prompt recall (ADR-0037): the flag, else what spoor.config.json says
+  const recall = o.recall === undefined ? ctx.repo.recall.enabled : o.recall === 'on'
   if (!ctx.server || !ctx.project) {
     ctx.rt.err(
       'spoor: SPOOR_URL and SPOOR_PROJECT are not set; run spoor login, or pass --server and --project\n',
@@ -137,6 +164,15 @@ export async function cmdInit(ctx: Ctx, o: { dryRun?: boolean }): Promise<number
   }
   const writes: PlannedWrite[] = []
   try {
+    // the marker first: with it the project counts as set up, and teammates' `spoor login` needs no flags
+    const markerPath = join(ctx.root, PROJECT_MARKER)
+    const markerBefore = readText(markerPath) ?? ''
+    writes.push({
+      path: markerPath,
+      rel: PROJECT_MARKER,
+      before: markerBefore,
+      after: markerAfter(markerPath, markerBefore, values, recall, ctx.repo.recall.enabled),
+    })
     const mcpPath = join(ctx.root, '.mcp.json')
     const mcpBefore = readText(mcpPath) ?? ''
     const mcpAfter = mergeMcpJson(readJsonObject(mcpPath), mcpJsonBlock(values))
@@ -144,7 +180,7 @@ export async function cmdInit(ctx: Ctx, o: { dryRun?: boolean }): Promise<number
 
     const setPath = join(ctx.root, '.claude', 'settings.json')
     const setBefore = readText(setPath) ?? ''
-    const setAfter = mergeSettingsJson(readJsonObject(setPath), settingsJsonBlock(values))
+    const setAfter = mergeSettingsJson(readJsonObject(setPath), settingsJsonBlock(values, { recall }))
     writes.push({
       path: setPath,
       rel: '.claude/settings.json',
@@ -172,7 +208,92 @@ export async function cmdInit(ctx: Ctx, o: { dryRun?: boolean }): Promise<number
   if (local === 'invalid') return 1
   if (local) writes.push(local)
   applyWrites(ctx, writes, o.dryRun)
-  return 0
+  return localMemoryStep(ctx, o)
+}
+
+/**
+ * `spoor.config.json` after init: created with server and project when missing, otherwise untouched, except for
+ * `recall.enabled` when `--recall` changed it. Throws InvalidJsonFile for a file that does not parse.
+ */
+function markerAfter(
+  path: string,
+  before: string,
+  values: InstallBlockValues,
+  recall: boolean,
+  stored: boolean,
+): string {
+  if (before === '')
+    return jsonOut({
+      server: values.server,
+      project: values.slug,
+      ...(recall ? { recall: { enabled: true } } : {}),
+    })
+  if (recall === stored) return before
+  const cfg = readJsonObject(path)
+  return jsonOut({ ...cfg, recall: { ...(isObj(cfg.recall) ? cfg.recall : {}), enabled: recall } })
+}
+
+/**
+ * Memory files from before Spoor (ADR-0036). The answer is the project's (`local_memory.mode` in the committed
+ * `spoor.config.json`): given by `--local-memory`, else stored, else asked on a terminal. Without an answer the files
+ * are only named. `sync` then syncs them both ways, `delete` imports them into Spoor and removes them.
+ */
+async function localMemoryStep(ctx: Ctx, o: { dryRun?: boolean; localMemory?: string }): Promise<number> {
+  const files = localMemoryFiles(ctx)
+  let mode: LocalMemoryMode | undefined = isLocalMemoryMode(o.localMemory)
+    ? o.localMemory
+    : ctx.repo.local_memory.mode
+  if (!mode && files.length === 0) return 0
+  const n = files.length
+  if (!mode) {
+    ctx.rt.out(`Found ${n} memory ${n === 1 ? 'file' : 'files'} from before Spoor: ${fileList(files, 8)}\n`)
+    if (o.dryRun || !ctx.rt.isTTY) {
+      ctx.rt.out(
+        'Choose what happens to them: spoor init --local-memory sync (keep them, synced with Spoor both ways) or --local-memory delete (import them into Spoor, then delete them)\n',
+      )
+      return 0
+    }
+    const answer = (
+      await ctx.rt.prompt(
+        '[s] keep them and sync them with Spoor, [d] import them into Spoor and delete them, [Enter] decide later: ',
+      )
+    )
+      .trim()
+      .toLowerCase()
+    mode =
+      answer === 's' || answer === 'sync'
+        ? 'sync'
+        : answer === 'd' || answer === 'delete'
+          ? 'delete'
+          : undefined
+    if (!mode) {
+      ctx.rt.out('Nothing was changed; spoor init asks again next time.\n')
+      return 0
+    }
+  }
+  if (o.dryRun) {
+    if (mode !== ctx.repo.local_memory.mode)
+      ctx.rt.out(`would set local_memory.mode to ${mode} in ${PROJECT_MARKER}\n`)
+    for (const f of files)
+      ctx.rt.out(mode === 'sync' ? `would sync ${f}\n` : `would import and delete ${f}\n`)
+    return 0
+  }
+  if (mode !== ctx.repo.local_memory.mode) {
+    const path = join(ctx.root, PROJECT_MARKER)
+    let cfg: Obj
+    try {
+      cfg = readJsonObject(path)
+    } catch (e) {
+      ctx.rt.err(`spoor: ${(e as Error).message}\n`)
+      return 1
+    }
+    const prev = isObj(cfg.local_memory) ? cfg.local_memory : {}
+    writeAtomic(path, jsonOut({ ...cfg, local_memory: { ...prev, mode } }))
+    ctx.rt.out(`updated ${PROJECT_MARKER} (local_memory.mode: ${mode}); commit it\n`)
+    ctx.repo = { ...ctx.repo, local_memory: { ...ctx.repo.local_memory, mode } }
+  }
+  if (n === 0) return 0
+  return mode === 'sync' ? syncLocalMemory(ctx) : deleteLocalMemory(ctx, files)
 }
 
 /**
@@ -266,11 +387,23 @@ export interface LoginOpts {
   noBrowser?: boolean
   noInit?: boolean
   untrack?: boolean
+  /** `--local-memory sync|delete`, handed to `spoor init`. */
+  localMemory?: string
 }
 
 /** `spoor login`: device flow (or a pasted token), then settings.local.json, .gitignore and `spoor init`. */
 export async function cmdLogin(ctx: Ctx, o: LoginOpts): Promise<number> {
   const rt = ctx.rt
+  if (ctx.home) {
+    rt.err(`${notInitialized(ctx)}\n`)
+    return 1
+  }
+  if (o.noInit && !ctx.initialized) {
+    rt.err(
+      `spoor: ${ctx.root} is not set up for Spoor yet (no ${PROJECT_MARKER}); run spoor login without --no-init\n`,
+    )
+    return 1
+  }
   // step 0: tracked-file guard, before any network
   const tracked: string[] = []
   if (await isTracked(ctx.root, '.claude/settings.local.json')) tracked.push('.claude/settings.local.json')
@@ -453,9 +586,11 @@ export async function cmdLogin(ctx: Ctx, o: LoginOpts): Promise<number> {
   // step 7: init
   let code = 0
   if (!o.noInit) {
-    ctx.server = server
-    ctx.project = project
-    code = await cmdInit(ctx, {})
+    // a fresh context: it reads the token, server and project this login just stored
+    const fresh = makeCtx(rt, {}, ctx.root)
+    fresh.server = server
+    fresh.project = project
+    code = await cmdInit(fresh, o.localMemory !== undefined ? { localMemory: o.localMemory } : {})
   }
   // step 8
   const exp = expiresAt

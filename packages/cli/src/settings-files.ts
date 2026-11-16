@@ -62,7 +62,9 @@ export function mergeSettingsJson(existing: Obj, rendered: Obj): Obj {
       }
       if (insertAt < 0) insertAt = kept.length
       kept.splice(insertAt, 0, ...newGroups)
-      hooks[event] = kept
+      // an event rendered with no entry only removes Spoor's own: no empty array is left behind or created
+      if (kept.length > 0) hooks[event] = kept
+      else delete hooks[event]
     }
     out.hooks = hooks
   }

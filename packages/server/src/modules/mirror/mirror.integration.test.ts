@@ -429,3 +429,43 @@ describe('GET /p/:slug/api/decisions/undrafted', () => {
     expect((await json<Body>(foreign)).error).toBe('token_project_mismatch')
   })
 })
+
+describe('GET /p/:slug/api/pull', () => {
+  const pull = (path: string, secret: string | null = s.tok.secret) =>
+    s.call('GET', `/pull?source_path=${encodeURIComponent(path)}`, undefined, secret)
+
+  it('returns the body and revision of the item a file is mirrored to', async () => {
+    const pushed = await s.call('POST', '/docs/push', {
+      source_path: '.memory/PROJECT_MEMORY.md',
+      content: '---\ntags: [memory]\n---\n# Memory\n\n- a fact\n',
+    })
+    expect(pushed.status).toBe(200)
+    const p = await json<Body>(pushed)
+    const r = await pull('.memory/PROJECT_MEMORY.md')
+    expect(r.status).toBe(200)
+    expect(r.headers.get('cache-control')).toBe('no-store')
+    const b = await json<Body>(r)
+    expect(b).toMatchObject({
+      source_path: '.memory/PROJECT_MEMORY.md',
+      spoor_id: p.spoor_id,
+      space: 'docs',
+      revision: p.revision,
+      status: 'active',
+    })
+    expect(b.body).toContain('- a fact')
+    expect(b.body).not.toContain('tags:')
+    // a viewer token may read
+    expect((await pull('.memory/PROJECT_MEMORY.md', s.roTok.secret)).status).toBe(200)
+  })
+
+  it('answers 404 for an unknown path, 400 for a bad one, and refuses other projects', async () => {
+    const none = await pull('MEMORY.md')
+    expect(none.status).toBe(404)
+    expect((await json<Body>(none)).error).toBe('not_found')
+    expect((await pull('../outside.md')).status).toBe(400)
+    expect((await s.call('GET', '/pull')).status).toBe(400)
+    expect((await pull('MEMORY.md', null)).status).toBe(401)
+    const foreign = await pull('MEMORY.md', s.otherTok.secret)
+    expect((await json<Body>(foreign)).error).toBe('token_project_mismatch')
+  })
+})

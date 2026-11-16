@@ -95,6 +95,10 @@ read-only tokens get the three read tools.
   model on your machine. If the session changed files and recorded nothing, the agent is asked once to record its
   decisions.
 
+An optional fourth hook, **prompt recall** (`spoor init --recall on`), looks at each prompt you send and adds the few
+memory items that clearly match it, so the agent sees them without having to search. It is off by default and adds
+nothing for prompts that match nothing.
+
 Hooks never block a session: if the server is down they print one notice and exit.
 
 ### Other clients
@@ -201,7 +205,7 @@ services:
       retries: 20
 
   app:
-    image: ghcr.io/spectado/spoor-memory:latest # pin a version such as :0.7.1 in production
+    image: ghcr.io/spectado/spoor-memory:latest # pin a version such as :0.7.5 in production
     restart: unless-stopped
     init: true
     stop_grace_period: 40s
@@ -259,7 +263,7 @@ HTTPS. To use it, or to build the image yourself:
 
 ```sh
 git clone https://github.com/SPECTADO/spoor-memory.git && cd spoor-memory
-cp .env.example .env             # fill it in; set SPOOR_IMAGE=ghcr.io/spectado/spoor-memory:0.7.1 to pull
+cp .env.example .env             # fill it in; set SPOOR_IMAGE=ghcr.io/spectado/spoor-memory:0.7.5 to pull
 docker compose pull && docker compose up -d
 # or build from the checkout: leave SPOOR_IMAGE at its default and run
 docker compose up -d --build
@@ -269,7 +273,7 @@ docker compose up -d --build
 
 | tag | what it is |
 |---|---|
-| `x.y.z`, `x.y` (e.g. `0.7.1`, `0.7`) | a release. Use this in production |
+| `x.y.z`, `x.y` (e.g. `0.7.5`, `0.7`) | a release. Use this in production |
 | `latest` | the highest release |
 | `develop` | the newest commit on `main` that passed CI |
 | `sha-<short>` | one specific `main` build, for pinning or rolling back |
@@ -303,7 +307,7 @@ For nginx, Traefik or a load balancer of your own, see [docs/operations.md](docs
 The `spoor` CLI connects a repository to a project. Every developer installs it once (Node 22 or later):
 
 ```sh
-npm i -g spoor-memory@0.7.1        # use the version of your server
+npm i -g spoor-memory@0.7.5        # use the version of your server
 ```
 
 Then, in the root of the repository:
@@ -315,9 +319,13 @@ spoor login --server https://spoor.example.com --project acme
 `spoor login` prints a URL and an 8-letter code. Open the URL, log in and approve the code. The command then:
 
 - stores the token in `.claude/settings.local.json` (mode 0600, added to `.gitignore`);
+- writes `spoor.config.json` (server and project), which marks the repository as set up for Spoor: the CLI and its
+  hooks do nothing in any other directory, and never in your home directory;
 - writes `.mcp.json` and the Claude Code hooks in `.claude/settings.json`, with no secret in either;
 - adds a Spoor block to `AGENTS.md` and an `@AGENTS.md` import to `CLAUDE.md`;
-- turns Claude Code's own auto-memory off for this repo, so Spoor is the one memory (a project setting).
+- turns Claude Code's own auto-memory off for this repo, so Spoor is the one memory (a project setting);
+- if the repository still has memory files from before Spoor (`MEMORY.md`, `.memory/`, `memory-bank/` and the like),
+  asks once whether to keep them in sync with Spoor (both ways) or to import them and delete them.
 
 Restart Claude Code and approve the `spoor` MCP server. Then bring in what the repository already has:
 
@@ -328,7 +336,7 @@ spoor status --remote  # project, role, token expiry
 spoor context --git    # the digest an agent will get
 ```
 
-Commit `.mcp.json`, `.claude/settings.json`, `AGENTS.md` and the ADR files. A teammate on a repository that is already
+Commit `spoor.config.json`, `.mcp.json`, `.claude/settings.json`, `AGENTS.md`, `CLAUDE.md` and the ADR files. A teammate on a repository that is already
 set up only installs the CLI and runs `spoor login`.
 
 **Or let the agent do it.** Tell Claude Code in the repository:

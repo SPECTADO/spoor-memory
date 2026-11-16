@@ -19,6 +19,15 @@ export const DEFAULT_DRAFT_COMMAND = [
   'json',
 ]
 
+/** Where memory files of other tools usually live in a repo (ADR-0036); `local_memory.paths` replaces the list. */
+export const LOCAL_MEMORY_DEFAULT_PATHS = [
+  'MEMORY.md',
+  '.memory/**',
+  'memory-bank/**',
+  '.claude/memory/**',
+  '.cursor/memory/**',
+]
+
 const repoConfigSchema = z.strictObject({
   $schema: z.string().optional(),
   server: z.string().optional(),
@@ -45,6 +54,30 @@ const repoConfigSchema = z.strictObject({
     .strictObject({
       max_tokens: z.number().int().min(200).max(8000).default(2500),
       max_files: z.number().int().min(1).max(200).default(80),
+    })
+    .prefault({}),
+  /**
+   * Prompt recall (ADR-0037): the UserPromptSubmit hook shows the few memory items that clearly match what the user
+   * just asked. Off by default; `spoor init --recall on` turns it on and installs the hook. `min_cos` overrides the
+   * server's floor for the project's embedding model; `min_chars` skips short prompts.
+   */
+  recall: z
+    .strictObject({
+      enabled: z.boolean().default(false),
+      max_items: z.number().int().min(1).max(5).default(3),
+      min_chars: z.number().int().min(1).max(500).default(24),
+      min_cos: z.number().min(0).max(1).optional(),
+    })
+    .prefault({}),
+  /**
+   * Memory files that were in the repo before Spoor (ADR-0036). `mode` is the team's answer to `spoor init`'s
+   * question: `sync` keeps them and syncs them with Spoor both ways, `delete` imports them and removes them; unset
+   * means nobody answered yet.
+   */
+  local_memory: z
+    .strictObject({
+      mode: z.enum(['sync', 'delete']).optional(),
+      paths: z.array(z.string().min(1)).default(LOCAL_MEMORY_DEFAULT_PATHS),
     })
     .prefault({}),
 })

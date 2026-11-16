@@ -1,7 +1,7 @@
 /**
  * Search and digest routes (docs/design/api.md sections 4.1, 6 and 7.1):
  * - cookie (`/api/v1`): `GET /projects/:slug/search`, `GET /projects/:slug/context` (admin preview);
- * - bearer (`/p/:slug/api`): `GET /context` for the SessionStart hook.
+ * - bearer (`/p/:slug/api`): `GET /context` for the SessionStart hook, `GET /recall` for the UserPromptSubmit hook.
  * None of them bumps `last_used_at`.
  */
 import { ANCHOR_MAX_LENGTH, MEMORY_MODE_HEADER, SERVER_VERSION_HEADER, spaces } from '@spoor/shared'
@@ -18,6 +18,7 @@ import { requireBearer, requireUser } from '../auth/index.js'
 import { loadProjectAccess } from '../projects/index.js'
 import { BUDGET_MAX, BUDGET_MIN, type ContextService } from './context.js'
 import { loadItemSummaries } from './format.js'
+import { RECALL_LIMIT_MAX, type RecallService } from './recall.js'
 import type { SearchService } from './service.js'
 
 const bool = (def: boolean) =>
@@ -37,6 +38,15 @@ export const contextQuery = z.strictObject({
   format: z.enum(['text', 'json']).default('text'),
 })
 
+/** `GET /recall`: `exclude` is a comma-separated list of handles the session already saw. */
+export const recallQuery = z.strictObject({
+  query: z.string().trim().min(1).max(500),
+  limit: z.coerce.number().int().min(1).max(RECALL_LIMIT_MAX).optional(),
+  min_cos: z.coerce.number().min(0).max(1).optional(),
+  exclude: z.string().max(4000).optional(),
+  include_shared: bool(true),
+})
+
 export const searchQuery = z.strictObject({
   q: z.string().trim().min(1).max(500),
   space: z.enum(spaces).optional(),
@@ -50,6 +60,7 @@ export const searchQuery = z.strictObject({
 export interface SearchRouteServices {
   search: SearchService
   context: ContextService
+  recall: RecallService
 }
 
 async function contextResponse(c: Context<AppEnv>, services: SearchRouteServices, projectId: string) {
@@ -128,10 +139,31 @@ export function searchRoutes(deps: ServerDeps, services: SearchRouteServices) {
 
 /** Bearer routes, mounted on `/p/:slug/api` after the bearer guards (any role). */
 export function searchBearerRoutes(deps: ServerDeps, services: SearchRouteServices) {
-  return new Hono<AppEnv>().get('/context', async (c) => {
-    const auth = requireBearer(c)
-    // a newer Spoor release, for the digest's advisory line (cli-and-hooks.md section 5.1 step 9)
-    setLatestVersionHeader(c, deps.ports.updates)
-    return contextResponse(c, services, auth.project.id)
-  })
+  return new Hono<AppEnv>()
+    .get('/context', async (c) => {
+      const auth = requireBearer(c)
+      // a newer Spoor release, for the digest's advisory line (cli-and-hooks.md section 5.1 step 9)
+      setLatestVersionHeader(c, deps.ports.updates)
+      return contextResponse(c, services, auth.project.id)
+    })
+    .get('/recall', async (c) => {
+      const auth = requireBearer(c)
+      const q = readQuery(c, recallQuery)
+      const res = await services.recall.recall({
+        projectId: auth.project.id,
+        query: q.query,
+        limit: q.limit,
+        minCos: q.min_cos,
+        exclude: q.exclude ? q.exclude.split(',').filter((h) => h !== '') : [],
+        includeShared: q.include_shared,
+      })
+      const note = c.get('requestNote')
+      if (note) {
+        note.query = q.query
+        note.handles = res.items
+      }
+      c.header('Cache-Control', 'no-store')
+      c.header('Content-Type', 'text/plain; charset=utf-8')
+      return c.body(res.text, 200)
+    })
 }

@@ -16,6 +16,7 @@ import type { ServerDeps } from '../../lib/deps.js'
 import type { SearchJobs } from '../../ports.js'
 import { ContextService } from './context.js'
 import { consistencySweep, embedPending, type JobContext, reembed, syncEmbeddingTargets } from './jobs.js'
+import { RecallService } from './recall.js'
 import { searchBearerRoutes, searchRoutes } from './routes.js'
 import { SearchService } from './service.js'
 
@@ -61,14 +62,17 @@ export { differentValues, factValues } from './values.js'
 export function createSearchModule(deps: ServerDeps) {
   const search = new SearchService(deps)
   const context = new ContextService(deps, search)
+  const recall = new RecallService(search)
   return {
     name: 'search',
     /** Implements SearchPort; also `search.search()` for spoor_search. */
     search,
     /** `context.build()` for spoor_context and the REST digest. */
     context,
-    routes: searchRoutes(deps, { search, context }),
-    bearerRoutes: searchBearerRoutes(deps, { search, context }),
+    /** `recall.recall()` for the UserPromptSubmit hook's `GET recall` (ADR-0037). */
+    recall,
+    routes: searchRoutes(deps, { search, context, recall }),
+    bearerRoutes: searchBearerRoutes(deps, { search, context, recall }),
     /** `SearchJobs` of src/ports.ts (src/runtime.ts registers it with the scheduler as is), plus startup's sync. */
     jobs: {
       embedPending: (ctx?: JobContext) => embedPending(deps, ctx),

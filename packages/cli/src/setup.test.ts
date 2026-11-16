@@ -57,7 +57,7 @@ describe('spoor init', () => {
     const r = await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
     expect(r.code).toBe(0)
     expect(r.out).toBe(
-      'updated .mcp.json\nupdated .claude/settings.json\nupdated .gitignore\ncreated AGENTS.md\ncreated CLAUDE.md\n',
+      'unchanged spoor.config.json\nupdated .mcp.json\nupdated .claude/settings.json\nupdated .gitignore\ncreated AGENTS.md\ncreated CLAUDE.md\n',
     )
     expect(srv.requests[0]?.headers.authorization).toBeUndefined()
     const mcp = readJson(join(repo, '.mcp.json'))
@@ -78,7 +78,7 @@ describe('spoor init', () => {
     const snapshot = files.map((f) => readFileSync(join(repo, f), 'utf8'))
     const again = await run(['init', '--server', srv.url, '--project', 'acme'], { cwd: repo })
     expect(again.out).toBe(
-      'unchanged .mcp.json\nunchanged .claude/settings.json\nunchanged .gitignore\nunchanged AGENTS.md\nunchanged CLAUDE.md\n',
+      'unchanged spoor.config.json\nunchanged .mcp.json\nunchanged .claude/settings.json\nunchanged .gitignore\nunchanged AGENTS.md\nunchanged CLAUDE.md\n',
     )
     expect(files.map((f) => readFileSync(join(repo, f), 'utf8'))).toEqual(snapshot)
   })
