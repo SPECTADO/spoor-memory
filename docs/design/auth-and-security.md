@@ -240,11 +240,20 @@ LE member with the `library_editor` flag · U any logged-in user · ST service t
 | export / import shared space | IA | — | — |
 | job status, re-embed progress | IA (all), PA (own project) | — | — |
 | agent request log (ADR-0018; never `_shared`) | IA, PA | — | — |
+| backups: status, schedule, back up now, pin, verify, delete; full restore; projects from a backup (restore as copy or overwrite, Markdown zip) (`backups.manage`, 0.8, ADR-0038 to ADR-0041) | IA | — | — |
+| Markdown zip export tasks of a live project: create, list (`project.transfer`, ADR-0041) | PA, IA (`_shared`: IA) | — | — |
+| one export task: read, cancel, download | the requester while they still have `project.transfer` (a backup source: IA only), IA (anyone else: 404; the runner re-checks the requester before it reads) | — | — |
 
 Implementation: `can(principal, action, target)` in `packages/server/src/modules/auth/permissions.ts` is this table and
 nothing else; `permissions.test.ts` checks every row for every caller (IA, PA, E, V, SE, U; user tokens by effective
 role, service tokens) on every surface. Refusals are 403 `forbidden` on the web, and 403 `forbidden_role` (or
 `read_only_space` for a shared write) on bearer surfaces. Visibility comes first: a project the caller cannot see is 404.
+
+Backup rules (0.8): the `/api/v1/backups*` routes are cookie only, so a token never reaches them, and MCP has no backup
+tools. A full restore and a project overwrite also need the acting admin's password and a typed confirmation (the
+phrase or the slug); a mismatch is 403 `confirmation_failed`. `database.dump` (password, session and token hashes) has
+no download route. Bundles are written 0700/0600 by the image's `node` user. The pg client tools get the connection only
+through PG* environment variables and data only through pipes, never argv (ADR-0038).
 
 Library rules (ADR-0014):
 - `library.write` is `ia || pa || libraryEditor` on a project and the shared-writer rule on `_shared`. Bearer callers never hold it

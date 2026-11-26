@@ -80,8 +80,10 @@ describe('startup', () => {
     expect(shared.rows).toEqual([{ embedding_model: provider.tag }])
     const locks = await db().execute<{ name: string }>(sql`SELECT name FROM job_locks ORDER BY name`)
     expect(locks.rows.map((r) => r.name)).toEqual([
+      'backup',
       'cleanup',
       'embed-pending',
+      'exports',
       'purge-ephemeral',
       'reembed',
       'resource-sample',

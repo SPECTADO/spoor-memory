@@ -9,6 +9,7 @@
  *                               reserved `l<n>` slug backfill
  *   0005_request_log.sql        generated: the agent request log (ADR-0018)
  *   0008_duplicate_pairs.sql    generated: possible duplicates for the review queue
+ *   0010_backups.sql            generated: instance_settings, export_tasks, projects.restored_from (0.8)
  * Enum-like columns are `text` + CHECK (as in the design), not Postgres enum types, so adding a value
  * is a one-line migration. The value lists are exported for the services and for zod schemas.
  */
@@ -62,6 +63,9 @@ export const EDGE_KINDS = [
 export const JOB_STATUSES = ['running', 'ok', 'error'] as const
 export const REQUEST_KINDS = ['read', 'write'] as const
 export const REQUEST_SURFACES = ['mcp', 'cli'] as const
+/** Mirror `EXPORT_FORMATS` / `EXPORT_TASK_STATUSES` of @spoor/shared (ADR-0041). */
+export const EXPORT_FORMATS = ['markdown'] as const
+export const EXPORT_TASK_STATUSES = ['queued', 'running', 'ready', 'failed', 'expired'] as const
 
 // ---- custom column types -------------------------------------------------------------------------
 
@@ -129,6 +133,9 @@ export const sessions = pgTable(
 
 export type InviteGrant = { project_id: string; role: (typeof ROLES)[number] }
 
+/** `projects.restored_from` (mirrors `RestoredFromJson` of @spoor/shared). */
+export type RestoredFrom = { backup_id: string; source_slug: string; restored_at: string }
+
 export const invites = pgTable(
   'invites',
   {
@@ -171,6 +178,8 @@ export const projects = pgTable(
     embeddingTarget: text(), // non-null while a re-embed is running
     createdBy: uuid().references(() => users.id, { onDelete: 'set null' }),
     createdAt: tstz().notNull().defaultNow(),
+    /** Set on a project restored from a backup as a copy (ADR-0038); drives the "Restored copy" banner. */
+    restoredFrom: jsonb().$type<RestoredFrom>(),
   },
   (t) => [
     uniqueIndex('projects_single_shared').on(t.kind).where(sql`kind = 'shared'`),
@@ -622,6 +631,53 @@ export const resourceSamples = pgTable(
   (t) => [index('resource_samples_at_idx').on(t.at)],
 )
 
+// ---- 0.8 backups (ADR-0038 to ADR-0041) -------------------------------------------------------------
+
+/**
+ * Instance-wide settings, one row per key (ADR-0040). Key `backup` holds the zod `BackupSettings` of
+ * @spoor/shared. A full restore writes the live `backup` value back afterwards, so the schedule survives it.
+ */
+export const instanceSettings = pgTable('instance_settings', {
+  key: text().primaryKey(),
+  value: jsonb().$type<Record<string, unknown>>().notNull(),
+  updatedAt: tstz().notNull().defaultNow(),
+  updatedBy: uuid().references(() => users.id, { onDelete: 'set null' }),
+})
+
+/**
+ * Async export tasks (ADR-0041): a Markdown zip of a live project (`project_id`) or of a project archive inside
+ * a backup (`backup_id` + `source_project_id`). Files live in `<SPOOR_BACKUP_DIR>/exports/<id>.zip`.
+ */
+export const exportTasks = pgTable(
+  'export_tasks',
+  {
+    id: id(),
+    projectId: uuid().references(() => projects.id, { onDelete: 'set null' }),
+    backupId: text(),
+    sourceProjectId: uuid(),
+    format: text({ enum: EXPORT_FORMATS }).notNull(),
+    requestedBy: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text({ enum: EXPORT_TASK_STATUSES }).notNull().default('queued'),
+    fileName: text(),
+    sizeBytes: bigint({ mode: 'number' }),
+    sha256: text(),
+    error: text(),
+    heartbeatAt: tstz(),
+    createdAt: tstz().notNull().defaultNow(),
+    finishedAt: tstz(),
+    expiresAt: tstz(),
+  },
+  (t) => [
+    index('export_tasks_status_idx').on(t.status, t.createdAt),
+    index('export_tasks_requested_by_idx').on(t.requestedBy, t.createdAt.desc()),
+    index('export_tasks_project_idx').on(t.projectId, t.createdAt.desc()),
+    check('export_tasks_format_check', inList('format', EXPORT_FORMATS)),
+    check('export_tasks_status_check', inList('status', EXPORT_TASK_STATUSES)),
+  ],
+)
+
 export const TABLES = {
   users,
   sessions,
@@ -640,4 +696,6 @@ export const TABLES = {
   jobRuns,
   requestLog,
   resourceSamples,
+  instanceSettings,
+  exportTasks,
 } as const

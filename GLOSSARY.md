@@ -125,7 +125,19 @@ treated as untrusted data either way; provenance helps the reader weigh it. Impo
 
 **Export / import**: A project (or the **shared space**) as one zip: `manifest.json`, one Markdown file per **item**, its **revisions** and its audit log, with labels instead of user ids. Importing it is lossless (ids, numbers, history kept, or remapped) into a new or empty project; a plain folder of Markdown files can be imported too. **Chunks** are not exported; they are rebuilt after the import.
 
-**Job**: Background work the server runs itself on a schedule, one holder at a time across containers (a database lease): `cleanup` (stale, archive, expire, plus a chunk consistency sweep), `embed-pending`, `reembed`, `purge-ephemeral`, `resource-sample` (one **resource sample** every 5 minutes). A write can ask for a job to run soon; an **instance admin** can start one.
+**Backup** (bundle): A directory `<SPOOR_BACKUP_DIR>/backups/<id>/` with `database.dump` (`pg_dump -Fc` of schemas `public` and `drizzle`, without session, device code, request log and resource sample data), `projects/<slug>.zip` (one **export** per project, shared space included) and `backup.json` (files with sha256, projects, migration count, PG versions, `pinned`, `verified_at`). Its id is `<YYYYMMDDTHHMMSSZ>-<kind>` with kind `auto` (the schedule), `manual` ("Back up now") or `pre-restore` (made just before a full restore). The directory is the catalog: there is no table, so a database restore cannot rewind the list. Made, scheduled, pinned, verified, deleted and restored by **instance admins** on `/admin/backups`; the raw dump is not downloadable from the web UI (ADR-0038).
+
+**Backup schedule** (**retention tiers**): The `backup` key of the `instance_settings` table: `enabled` (off by default), `time_utc`, one to three tiers (`every` `24h`, `48h` or `7d`, `keep` 1 to 90) and `project_archives`. After each good scheduled backup, the newest `auto` bundle of each of the `keep` most recent day, two-day or ISO-week buckets is kept per tier; manual and pinned backups, the newest verified one and a `pre-restore` younger than 14 days are always kept. A failed run never prunes (ADR-0040).
+
+**Full restore**: Replacing the whole database with one backup's `database.dump`, by an instance admin with their password and a typed phrase. The app makes a `pre-restore` backup, puts the instance behind the **maintenance gate**, runs one transaction and ends every session. A failure rolls back and leaves the database as it was (ADR-0039).
+
+**Maintenance gate**: While a full restore runs every route except `/healthz` and `GET /api/v1/backups/restore-status` answers 503 `maintenance`.
+
+**Restored copy**: A project made from a backup with "Restore as copy" (`projects.restored_from` set, slug `<slug>-r<YYYYMMDD>`); the web UI shows a "delete when done" banner. The other single-project mode, **overwrite**, replaces the items of the live project with the same id and keeps its members, tokens and settings; it first writes a **safety archive** (kept 14 days).
+
+**Export task**: A queued background job that builds a project's **Markdown zip** (a flat, re-importable zip with a root `README.md` index) from the live project or from a backup. Rows live in `export_tasks`; the file is kept 24 hours (ADR-0041).
+
+**Job**: Background work the server runs itself on a schedule, one holder at a time across containers (a database lease): `cleanup` (stale, archive, expire, plus a chunk consistency sweep), `embed-pending`, `reembed`, `purge-ephemeral`, `resource-sample` (one **resource sample** every 5 minutes), `backup` (scheduled **backups**, every 15 minutes it checks whether one is due) and `exports` (cleans up **export tasks**). A write can ask for a job to run soon; an **instance admin** can start one.
 
 **Install doc**: The public, secret-free page `/p/<slug>/install.md` (and its machine form `install.json`) that tells an agent how to set up one repository: install the CLI, `spoor login`, `spoor init`. It carries only the server URL, slug, version, the project's digest budget and its memory mode (ADR-0015).
 

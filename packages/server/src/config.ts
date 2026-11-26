@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { parseTrustProxy, type TrustedProxies } from './lib/client-ip.js'
 
@@ -56,6 +57,12 @@ export const DEFAULT_UPDATE_URL =
 
 const int = (min: number, max: number) => z.coerce.number().int().min(min).max(max)
 const pgUrl = z.string().regex(/^postgres(ql)?:\/\//, 'must be a postgres:// URL')
+const absPath = z
+  .string()
+  .max(1000)
+  .refine((p) => isAbsolute(p), 'must be an absolute path')
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is refused
+  .refine((p) => !/[\u0000-\u001f]/.test(p), 'must not contain control characters')
 
 const schema = z
   .object({
@@ -120,6 +127,13 @@ const schema = z
       'embeddinggemma',
     ),
     SPOOR_OLLAMA_EMBED_DIMS: withDefault(int(1, 2000), 768),
+    /**
+     * Backups (ADR-0038): the directory that holds `backups/`, `exports/` and `.tmp/`. Unset = backups are
+     * unavailable (the app still runs). Absolute path; the image uses /var/lib/spoor/backups.
+     */
+    SPOOR_BACKUP_DIR: optional(absPath),
+    /** Where pg_dump, pg_restore and psql live; unset = looked up on PATH. The image sets the PG 17 bin dir. */
+    SPOOR_PG_BIN_DIR: optional(absPath),
   })
   .superRefine((c, ctx) => {
     const need = (ok: boolean, path: string, message: string) => {

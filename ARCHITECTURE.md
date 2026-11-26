@@ -1,6 +1,6 @@
 # Architecture
 
-Status: implemented, 0.7.5 (2026-11-16). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) the near-duplicate rework (0.5), optional Ollama embeddings and resumable imports (0.6), and the instance status and usage pages (0.7). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
+Status: implemented, 0.8.0 (2026-11-26). Written as the phase 1 design, then updated for the server (phase 2), the MCP endpoint, device login, install doc, repo mirror, CLI and hooks (phase 3), the web UI (phase 4), release documentation (phase 5), the library space (0.2), the agent request log (0.3), the map and link suggestions (0.4) the near-duplicate rework (0.5), optional Ollama embeddings and resumable imports (0.6), the instance status and usage pages (0.7), and backups, restore and Markdown zips (0.8). The contract is [BRIEF.md](BRIEF.md); the detailed designs are in
 [docs/design/](docs/design/); terms are defined in [GLOSSARY.md](GLOSSARY.md). Where this file and a design file
 disagree, the design file wins and this file gets fixed. Open questions for the owner: [docs/design/deviations.md](docs/design/deviations.md).
 
@@ -38,11 +38,15 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │    │            hybrid FTS+vector RRF, dedupe, related items (related.ts),         │
  │    │            digest (6 tiers), anchor matcher                                   │
  │    ├─ jobs ── scheduler (in process, DB leases): cleanup, embed-pending, reembed,  │
- │    │          purge-ephemeral, resource-sample; review queue (+ "Not a duplicate"),│
+ │    │          purge-ephemeral, resource-sample, backup, exports; review queue (+ "Not a duplicate"),│
  │    │          dashboard,                                                           │
  │    │          undrafted, job status                                                │
  │    ├─ requests ── agent request log (MCP tool calls, bearer REST), 14 days        │
- │    ├─ transfer ── export / import (zip, lossless or Markdown folder)               │
+ │    ├─ transfer ── export / import (zip, lossless or Markdown folder); Markdown zip │
+ │    │              (markdownZip) and async export tasks + runner (0.8, ADR-0041)    │
+ │    ├─ backup ── bundles (pg_dump + per-project zips) in SPOOR_BACKUP_DIR, schedule  │
+ │    │            and tiered retention (job backup), full restore behind a           │
+ │    │            maintenance gate, single project from a backup (0.8, ADR-0038-40)  │
  │    ├─ status ── IA status page: version, embedding, record counts, DB size, runtime; │
  │    │            IA usage page: request-log aggregates, host resource samples      │
  │    │            (the resource-sample job's sampler, every 5 min, kept 14 days);   │
@@ -54,7 +58,8 @@ projects and one org-wide **shared** space. Each deployment is single tenant, so
  │                check); startup steps 3-8, graceful shutdown                        │
  └───────────────────────────────────────┬────────────────────────────────────────────┘
                                          ▼
-                      Postgres 17 + pgvector 0.8.7 (+ unaccent)  ──  named volume
+             Postgres 17 + pgvector 0.8.7 (+ unaccent)  ──  named volume spoor-pgdata
+             app container ──  backup directory (SPOOR_BACKUP_DIR, volume spoor-backups)
 ```
 
 How the server modules depend on each other (arrows = "calls through"; nothing imports another module's
@@ -68,6 +73,8 @@ internals, only its `index.ts` or a port):
  transfer ──▶ items (field cleaners, snapshot, ItemSummary)    review, search ──▶ items summaryJson (one ItemSummary)
  mcp ──▶ items (ItemService, incl. graph walk and related items) + search (SearchService, ContextService)    mirror ──▶ items (PushService)
  device ──▶ tokens (mintToken)    install ──▶ projects (default digest budget)
+ backup ──▶ transfer (buildExport, parseArchive, importArchive, takeTransferLock, ExportTaskService source loader)
+ backup ──pg client tools (pg_dump, pg_restore, psql: PG* env + pipes only)──▶ Postgres;  backup ──▶ runtime (startupStepsAfterRestore via RestoreHost)
  status ──StatusSources (callbacks wired in app.ts)──▶ mcp (open session count), jobs (scheduler on/off)
  app.ts registers status's resource-sample job on the jobs scheduler (resourceSampleJob)
  status, search (bearer context), tokens (whoami) ──UpdatePort──▶ the update check (cached; the only outbound call the server makes on its own)
@@ -80,9 +87,10 @@ internals, only its `index.ts` or a port):
 | REST API | everything the SPA, CLI and hooks need | [api.md](docs/design/api.md) |
 | MCP server | the nine agent tools, per-session client name, role-aware tool list | [mcp.md](docs/design/mcp.md) |
 | Auth | scrypt passwords, DB sessions, per-user and service tokens, device login, origin check, shared-space rules | [auth-and-security.md](docs/design/auth-and-security.md) |
-| Data model | 17 tables, handles, frontmatter, ADR numbering, export format | [data-model.md](docs/design/data-model.md) |
+| Data model | 19 tables, handles, frontmatter, ADR numbering, export format | [data-model.md](docs/design/data-model.md) |
 | Search and digest | chunking, providers, RRF, dedupe, related items, token estimator, `spoor_context`, anchors | [search-and-digest.md](docs/design/search-and-digest.md) |
 | Export and import | zip export, lossless and Markdown-folder import, zip hardening | [data-model.md](docs/design/data-model.md) §8, [api.md](docs/design/api.md) §9 |
+| Backups and restore | bundle layout, schedule and retention, full restore, one project from a backup, Markdown zips | [api.md](docs/design/api.md) §13, [cleanup-and-jobs.md](docs/design/cleanup-and-jobs.md) §4, ADR-0038 to ADR-0041 |
 | Cleanup and jobs | lifecycle (stale, archived), observation expiry, review queue, scheduler | [cleanup-and-jobs.md](docs/design/cleanup-and-jobs.md) |
 | CLI and hooks | `spoor` commands, three hooks, ADR drafting, install doc | [cli-and-hooks.md](docs/design/cli-and-hooks.md) |
 | Web UI | pages, editor, diff, review queue, admin, map of the links | [web-ui.md](docs/design/web-ui.md) |
@@ -90,7 +98,7 @@ internals, only its `index.ts` or a port):
 | Guides | what users and agents see | [user-guide.md](docs/user-guide.md), [agent-guide.md](docs/agent-guide.md) |
 
 Boundaries worth remembering:
-- **Postgres is the only state.** The app is stateless except for the embedding model baked into its image and in-memory MCP sessions (lost on restart, clients re-initialise).
+- **Postgres is the only state of the knowledge.** The app is stateless except for the embedding model baked into its image and in-memory MCP sessions (lost on restart, clients re-initialise). Since 0.8 there is one more thing on disk, the **backup directory** (`SPOOR_BACKUP_DIR`: `backups/<id>/` bundles, `exports/` Markdown zips and safety archives, `restore-state.json`). It is derived and operational state, not a second source of truth: a bundle is a copy of the database, the directory is the catalog (no table, so a database restore cannot rewind the list), and without it the app runs as before with backups reported `unavailable` (ADR-0038, which reconciles this with ADR-0002 and ADR-0020).
 - **Three auth surfaces, never mixed**: cookies on `/api/v1`, bearer tokens on `/p/:slug/mcp` and `/p/:slug/api`, public device and install endpoints.
 - **No server-side LLM calls.** ADR drafting runs on the developer's machine through the user's own `claude` login; link suggestions are nearest neighbours over the stored embeddings, computed per request and never stored (ADR-0022).
 - **Spoor never writes to the repo from the server.** The CLI pushes repo files to Spoor; nothing is pulled back.
@@ -187,8 +195,8 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 1. `src/index.ts` reads env (exit 1 on any error), builds the runtime (`src/runtime.ts`: provider registry, scheduler, search module, ports) and the app, and listens at once; every route but `/healthz` answers 503 `starting`.
 2. `startup()` runs deployment.md §4 steps 3 to 8: `SELECT 1` (`db: ok`), extensions and migrations (`migrations: ok`), the `_shared` row on the default provider and the `job_locks` seed, the bootstrap admin, the
    default provider's `ready()` (`embedding: ok`, or `failed` and a retry), the embedding-target sync (projects on another tag get `embedding_target` and `reembed` is nudged), then the scheduler starts and the
-   server turns ready. A failed step is retried every 2 s, at most 30 times; a missing extension or bootstrap env exits at once.
-3. On SIGTERM the MCP sessions are closed (and their sweep stopped), then the HTTP server closes and the scheduler stops together (running jobs are aborted and get up to 25 s, unfinished ones release their lease), the pool ends; a hard exit
+   server turns ready. At the next start `restore-state.json` and the `instance.restore` nonce row decide whether an interrupted full restore finished. A failed step is retried every 2 s, at most 30 times; a missing extension or bootstrap env exits at once.
+3. On SIGTERM the MCP sessions are closed (and their sweep stopped), then the HTTP server closes and the scheduler stops together (running jobs are aborted and get up to 25 s, unfinished ones release their lease; a running Markdown-zip task goes back to the queue), the pool ends; a hard exit
    follows after 35 s (compose allows 40 s).
 
 ### 3.9 Export and import
@@ -197,6 +205,16 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
    path, entry and total caps, verifies every file's hash, and writes everything in one transaction (ids, numbers, revisions, edges and counters kept, or remapped; history marked `via='import'`).
 3. The same transaction writes every imported item's chunk rows with NULL embeddings (through `SearchPort`), so full-text search finds them at once; after the commit `embed-pending` is nudged and fills the
    embeddings. A folder import also claims the target project's existing wikilinks to the new items.
+
+### 3.9a Markdown zip (0.8, ADR-0041)
+1. `POST /api/v1/projects/:slug/exports` (project admin or instance admin) inserts an `export_tasks` row (`queued`, at most 3 open per user) and answers 202. From a backup, an instance admin does the same with `POST /api/v1/backups/:id/projects/:projectId/exports`.
+2. The in-process runner (one task at a time per process) claims the row with `FOR UPDATE SKIP LOCKED`, reads the project (live: `buildExport` without history, holding the one-at-a-time transfer flag only while it reads; backup: `projects/<slug>.zip`, sha256 checked), and `markdownZip` writes the flat zip (root `README.md` index, `memories/`, `decisions/`, `docs/`, `library/`) to `<SPOOR_BACKUP_DIR>/exports/<id>.zip` through a `.partial` file and a rename.
+3. The SPA polls the task every 5 s and shows a plain download link when it is `ready`. The `exports` job (every minute) restarts leftovers after a restart, fails tasks whose heartbeat stopped, deletes files after 24 h and old safety archives. The zip re-imports as a folder of Markdown files (the importer skips the root `README.md`).
+
+### 3.9b Backup and full restore (0.8, ADR-0038, ADR-0039, ADR-0040)
+1. The `backup` job (every 15 min) or "Back up now" takes the one heavy-operation lock (in-process flag plus a Postgres advisory lock), checks free space, and writes `<dir>/.tmp/<id>/`: `database.dump` (`pg_dump -Fc`, run with the runtime role; pipes and `PG*` env only), one export zip per project, `backup.json` with sha256 of every file. It verifies (`pg_restore` reads the whole dump, hashes are re-checked), fsyncs and renames the directory into `backups/`. Scheduled runs then prune by the tiers (the pure function in `retention.ts`); a failed run never prunes. Scheduled backups are off until an instance admin enables them.
+2. A full restore: `restore/prepare` (checks, warnings, phrase, 5-minute token), then `restore` with token, password and phrase. The app makes a `pre-restore` backup, writes `restore-state.json`, turns the maintenance gate on (503 `maintenance` for everything but `/healthz` and `restore-status`), stops the scheduler, export runner and MCP sessions, waits up to 30 s for requests, and feeds `psql` one transaction (prelude that drops what the runtime role owns, the `pg_restore` script, an epilogue that ends sessions and writes the `instance.restore` row with the nonce, then COMMIT). It then reruns the startup steps (migrations forward), writes the live backup settings back and opens the gate. The nonce row is the commit proof that `done` versus `interrupted` is decided on at the next start.
+3. One project from a backup reads only `projects/<slug>.zip` (never the dump) and uses the import code: as a new copy (`restored_from` marks it) or over the live project in one transaction after a safety archive.
 
 ### 3.10 Map and link suggestions (ADR-0021, ADR-0022)
 1. The SPA's Map page (`/projects/:slug/graph`, `pages/graph/`, its own lazy chunk) calls `GET …/graph` with only the non-default filters. `modules/items/graph.ts` selects the visible edges in SQL (the per-item edges rules; the filter predicate as a SQL expression), walks the neighbourhood breadth-first when `focus` is set, then counts degrees, applies `unlinked` and the 1,500-node cap and orders the result in process.
@@ -210,7 +228,7 @@ Flows 3.1, 3.2 (over MCP), 3.4 and 3.5 are walked end to end, with the built CLI
 spoor-memory/
   packages/
     shared/    types, zod schemas (settings, project/auth API, CLI config), slugify, token estimator, error codes, the anchor normaliser/validator/matcher (anchors.ts), frontmatter split/serialize (markdown.ts), the known-key table and ITEM_LIMITS (frontmatter.ts), the wikilink grammar and resolution order (wikilinks.ts), ItemSummary and the graph and related-item shapes (api/items.ts), the settings schema with `relatedMinCos` (settings.ts), the repo integration blocks of install.json and `spoor init` (install.ts), the review and undrafted-decision shapes (api/review.ts); the item request schemas still live in the server (deviations.md G5)
-    server/    Hono app, Drizzle schema + migrations (src/db/migrations, copied to drizzle/ by `pnpm build` for the image), modules auth, projects, tokens, audit, requests, items (incl. graph.ts, the project graph), search (incl. related.ts, related items), jobs, transfer, device, install, mirror, mcp, scripts/fetch-model.mjs
+    server/    Hono app, Drizzle schema + migrations (src/db/migrations, copied to drizzle/ by `pnpm build` for the image), modules auth, projects, tokens, audit, requests, items (incl. graph.ts, the project graph), search (incl. related.ts, related items), jobs, transfer (incl. markdown.ts and the export task runner tasks.ts), backup (pgtools, bundle, catalog, retention, restore, project-restore, maintenance), device, install, mirror, mcp, scripts/fetch-model.mjs
       src/{config.ts, index.ts, app.ts, runtime.ts, ports.ts, db/, lib/, modules/<name>/{service,routes,index}.ts}   test/ (integration harness, e2e/ walk of DoD 2 and 3)
     web/       React SPA (src/{api,ui,components,pages,lib}; conventions in packages/web/README.md; the map in pages/graph/ with its layout in lib/graphLayout.ts), builds to dist/ served by the server
     cli/       npm package `spoor-memory`, bin `spoor`: src/{bin,cli,commands,ctx,config,http,state,mirror,writeback,settings-files,git}.ts, cmd/{setup,info,mirror,draft,session}.ts; published as one esbuild bundle dist/bin.js with `shared` compiled in (scripts/build.mjs, ADR 0013; layout in packages/cli/README.md)
@@ -219,7 +237,7 @@ spoor-memory/
   BRIEF.md  ARCHITECTURE.md  GLOSSARY.md  README.md  CHANGELOG.md  LICENSE
 ```
 Dependencies point one way: `web`, `server` and `cli` depend on `shared`; `server` never imports `web` or `cli`; the CLI talks to the server only over HTTP.
-Inside the server, domain modules (`src/modules/auth`, `projects`, `tokens`, `audit`, `requests`, `items`, `search`, `jobs`, `transfer`, `device`, `install`, `mirror`, `mcp`) code against the interfaces in `src/ports.ts`
+Inside the server, domain modules (`src/modules/auth`, `projects`, `tokens`, `audit`, `requests`, `items`, `search`, `jobs`, `transfer`, `backup`, `device`, `install`, `mirror`, `mcp`) code against the interfaces in `src/ports.ts`
 (`EmbeddingProvider`, `SearchPort`, `JobsPort`, `SearchJobs` with its `BatchContext`) and the helpers in `src/lib/` (errors, transactions, `AuthContext`, audit), never against
 each other's internals; the convention and the test harness are described in [packages/server/README.md](packages/server/README.md) and
 [ADR-0011](docs/adr/0011-server-modules-and-ports.md).
@@ -265,6 +283,10 @@ Design files (the *what*): [docs/design/](docs/design/). Research the choices re
 | 27 | [`0027-imports-are-a-resumable-client-queue-…md`](docs/adr/0027-imports-are-a-resumable-client-queue-the-server-defers-embeddings-for-imports-and-limits-concurrent-pushes.md) | Imports are a resumable client queue; the server defers embeddings for imports and limits concurrent pushes (proposed) | `import-queue.ts`, `backoff.ts`, `items/admission.ts`, `Spoor-Defer-Embedding`, `SPOOR_PUSH_CONCURRENCY` | cli-and-hooks, api, data-model, search-and-digest |
 | 36 | [`0036-the-cli-works-only-in-projects-set-up-for-spoor-…md`](docs/adr/0036-the-cli-works-only-in-projects-set-up-for-spoor-local-memory-files-are-synced-or-deleted.md) | The CLI works only in projects set up for Spoor; local memory files are synced both ways or imported and deleted | project root never the home directory, `spoor.config.json` marker, hooks silent elsewhere, `local_memory.mode`, `GET …/api/pull` | cli-and-hooks §2, §4.11 |
 | 37 | [`0037-prompt-recall-…md`](docs/adr/0037-prompt-recall-an-opt-in-userpromptsubmit-hook-shows-items-above-a-per-model-cosine-floor.md) | Prompt recall: an opt-in UserPromptSubmit hook shows the items above a per-model cosine floor | `GET …/api/recall`, `recallMinCos`, session `.shown` list, never trips the breaker | cli-and-hooks §5.4, api §7.2 |
+| 38 | [`0038-v0-8-backups-hybrid-bundle-…md`](docs/adr/0038-v0-8-backups-hybrid-bundle-pg-dump-per-project-export-zips-full-and-per-project.md) | v0.8 backups: hybrid bundle, pg client in the image, the backup directory as state outside Postgres (proposed) | bundle layout, `backup.json`, `modules/backup/pgtools.ts` (PG* env and pipes only), `SPOOR_BACKUP_DIR`, `SPOOR_PG_BIN_DIR`, the `spoor-backups` volume | api §13, deployment |
+| 39 | [`0039-full-restore-…md`](docs/adr/0039-full-restore-runs-in-process-as-one-psql-transaction-behind-a-maintenance-gate.md) | A full restore runs in the app process as one psql transaction behind a maintenance gate (proposed) | prepare / confirm, `application_name` `spoor:<host>:<pid>`, 503 `maintenance`, `restore-state.json`, the nonce audit row | api §13 |
+| 40 | [`0040-instance-settings-…md`](docs/adr/0040-instance-settings-table-and-tiered-backup-retention.md) | `instance_settings` table; tiered backup retention, off by default (proposed) | `BackupSettings`, job `backup`, pruning rules | api §13, cleanup-and-jobs §4, data-model |
+| 41 | [`0041-markdown-zips-…md`](docs/adr/0041-markdown-zips-are-async-export-tasks.md) | Markdown zips are async export tasks (proposed) | `export_tasks`, job `exports`, the flat re-importable zip | api §13, cleanup-and-jobs §4, data-model |
 
 [deviations.md](docs/design/deviations.md) §D lists nine slightly different topics (for example "session-managed MCP transport" and "in-process scheduler" as their own ADRs); the list above
 folds those into ADRs 6 and 7. Every ADR records the owner's decision (Ladislav Soukup) and the date of the decision, per house rule. ADRs 0001 to 0020 and 0024 are decided (0017 is superseded by 0019);

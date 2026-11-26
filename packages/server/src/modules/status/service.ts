@@ -14,6 +14,21 @@ export interface StatusSources {
   mcpSessions: () => number
   /** The scheduler runs jobs on this instance (`SPOOR_JOBS=on`). */
   jobsEnabled: () => boolean
+  /**
+   * The backup module's line (0.8, ADR-0040): schedule on, available, newest good backup, overdue (on and the
+   * newest good backup older than twice the cadence, which the page shows as a warning). Absent = null.
+   */
+  backups?: () => Promise<BackupStatusLine>
+}
+
+/** `StatusJson.backups` (the backup module's `BackupStatusSummary`). */
+export interface BackupStatusLine {
+  enabled: boolean
+  available: boolean
+  reason: string | null
+  last_good_at: string | null
+  next_due_at: string | null
+  overdue: boolean
 }
 
 /** `pg.Pool` counters, when the drizzle handle exposes its pool. */
@@ -34,7 +49,10 @@ export class StatusService {
 
   async get() {
     const { db, config, ports } = this.deps
-    const [counts, items, chunks, models, pg, exts, tables] = await Promise.all([
+    const backupsLine = this.sources.backups
+      ? this.sources.backups().catch(() => null)
+      : Promise.resolve(null)
+    const [counts, items, chunks, models, pg, exts, tables, backups] = await Promise.all([
       db.execute<Record<string, string | number>>(sql`SELECT
         (SELECT count(*) FROM projects WHERE kind = 'project') AS projects,
         (SELECT count(*) FROM users) AS users,
@@ -73,6 +91,7 @@ export class StatusService {
           WHERE c.relkind IN ('r', 'p') AND ns.nspname = current_schema()
           ORDER BY 2 DESC`,
       ),
+      backupsLine,
     ])
 
     const c = counts.rows[0] ?? {}
@@ -149,6 +168,8 @@ export class StatusService {
       },
       // the newest release, from the update check's cache (null while off or unknown); never waits on the network
       update: ports.updates.current(),
+      // scheduled backups: `overdue` is the page's warning (null when the backup module is not wired)
+      backups,
       runtime: {
         rss_bytes: mem.rss,
         heap_used_bytes: mem.heapUsed,

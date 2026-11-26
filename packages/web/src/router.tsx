@@ -83,6 +83,7 @@ export function createRoutes(qc: QueryClient): RouteObject[] {
                     { path: '/admin/status', element: ia(<P.AdminStatusPage />) },
                     { path: '/admin/usage', element: ia(<P.AdminUsagePage />) },
                     { path: '/admin/jobs', element: ia(<P.AdminJobsPage />) },
+                    { path: '/admin/backups', element: ia(<P.AdminBackupsPage />) },
                     { path: '/admin/audit', element: ia(<P.AdminAuditPage />) },
                     { path: '*', element: <P.NotFoundPage /> },
                   ],

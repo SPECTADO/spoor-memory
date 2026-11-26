@@ -134,6 +134,22 @@ export class Scheduler implements JobsPort {
     this.#log.info({ instance: this.instanceId, jobs: [...this.#jobs.keys()] }, 'scheduler started')
   }
 
+  /** Started and not stopped: the scheduler ticks. */
+  get active(): boolean {
+    return this.#started && !this.#stopped
+  }
+
+  /**
+   * Start again after `stop()` (a full restore stops the scheduler while it replaces the database, ADR-0039).
+   * No-op when the scheduler is not stopped or jobs are off.
+   */
+  async resume(): Promise<void> {
+    if (!this.#stopped) return
+    this.#stopped = false
+    this.#started = false
+    await this.start()
+  }
+
   /** `JobsPort`: ask for a run soon. A nudge, not a queue. */
   enqueue(name: JobName, opts: { projectId?: string } = {}): void {
     if (!this.enabled || this.#stopped || !this.#jobs.has(name)) return

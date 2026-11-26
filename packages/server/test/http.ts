@@ -6,7 +6,9 @@ import { pino } from 'pino'
 import { createApp, createAppModules } from '../src/app.js'
 import { type Config, loadConfig } from '../src/config.js'
 import type { Db } from '../src/lib/db.js'
+import type { BackupServiceOptions } from '../src/modules/backup/index.js'
 import type { DeviceServiceOptions } from '../src/modules/device/index.js'
+import type { ExportTaskOptions } from '../src/modules/transfer/index.js'
 import type { Ports } from '../src/ports.js'
 import { newReadyState } from '../src/types.js'
 import { testDb } from './db.js'
@@ -35,6 +37,10 @@ export interface TestAppOptions {
   version?: string
   /** The app's database handle (default: the test file's pool); the factories keep using `testDb()`. */
   db?: Db
+  /** Backup module overrides (the pg tools of test/pg-tools.ts, a clock, short retries). */
+  backup?: BackupServiceOptions
+  /** Export task overrides (an exports dir, short heartbeats and retries, `autoRun: false`). */
+  exports?: ExportTaskOptions
 }
 
 export function testApp(opts: TestAppOptions = {}) {
@@ -45,7 +51,7 @@ export function testApp(opts: TestAppOptions = {}) {
   const logger = pino({ level: 'silent' })
   const modules = createAppModules(
     { config, logger, db: opts.db ?? testDb(), ports },
-    { device: opts.device, installVersion: opts.version },
+    { device: opts.device, installVersion: opts.version, backup: opts.backup, exports: opts.exports },
   )
   const app = createApp({ config, logger, state, ports, modules })
   return { app, config, ports, modules }

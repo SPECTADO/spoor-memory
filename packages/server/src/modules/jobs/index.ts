@@ -31,7 +31,14 @@ import { PgJobStore } from './store.js'
 export { cleanupProject, pArchive, pExpired, pStale, runCleanup } from './cleanup.js'
 export { type Clock, FakeClock, systemClock, systemTimers, type Timers } from './clock.js'
 export { DASHBOARD_RECENT, DashboardService } from './dashboard.js'
-export { JOB_SCHEDULE, jobDefinitions, resourceSampleJob } from './definitions.js'
+export {
+  backupJob,
+  exportsJob,
+  JOB_SCHEDULE,
+  jobDefinitions,
+  noopJobHandler,
+  resourceSampleJob,
+} from './definitions.js'
 export * as lifecycle from './lifecycle.js'
 export { runPurgeEphemeral } from './purge.js'
 export { REVIEW_SECTIONS, ReviewService } from './review.js'

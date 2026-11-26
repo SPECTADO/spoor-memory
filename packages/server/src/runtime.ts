@@ -79,18 +79,13 @@ export interface StartupOptions {
  * (index.ts retries, then exits non-zero); `state.embedding` is `failed` when the provider was the cause.
  */
 export async function startup(rt: Runtime, state: ReadyState, opts: StartupOptions): Promise<void> {
-  const { db, logger, config } = rt.deps
+  const { db, logger } = rt.deps
   await db.execute(sql`SELECT 1`) // step 3
   state.db = 'ok'
   await opts.migrate() // step 4
   state.migrations = 'ok'
-  // step 5: the `_shared` project row with the default provider's tag, and the job_locks rows
-  const shared = await ensureSharedProject(db, rt.ports.embeddings.defaultProvider)
-  if (shared.created) logger.info('shared project created')
-  await rt.scheduler.seed()
-  // step 6: StartupError (missing SPOOR_ADMIN_*) is not retried by index.ts
-  const boot = await bootstrapAdmin(db, config)
-  if (boot.created) logger.info({ email: boot.email }, 'bootstrap instance admin created')
+  const parts = startupParts(rt)
+  await seedBaseRows(parts)
   // step 7: the default provider is the readiness gate; projects on another tag get an embedding_target
   state.embedding = 'loading'
   const provider = rt.ports.embeddings.defaultProvider
@@ -102,17 +97,61 @@ export async function startup(rt: Runtime, state: ReadyState, opts: StartupOptio
   }
   state.embedding = 'ok'
   logger.info({ provider: provider.tag }, 'default embedding provider ready')
-  const retargeted = await rt.search.jobs.syncEmbeddingTargets()
-  if (retargeted.length > 0) {
-    logger.info({ projects: retargeted.length }, 'projects set to re-embed for a new model')
-    rt.scheduler.enqueue('reembed')
-  }
+  await syncTargets(parts)
   // step 8
   await rt.scheduler.start()
   state.ready = true
   logger.info('ready')
   // the first update check runs in the background, so /admin/status has an answer soon (no-op when off)
   rt.ports.updates.current()
+}
+
+/** What the startup steps 5 to 7 need; src/app.ts builds the same from the modules for a full restore. */
+export interface StartupParts {
+  db: Db
+  logger: Logger
+  config: Config
+  embeddings: EmbeddingRegistry
+  scheduler: Scheduler
+  syncEmbeddingTargets: () => Promise<readonly unknown[]>
+}
+
+const startupParts = (rt: Runtime): StartupParts => ({
+  ...rt.deps,
+  embeddings: rt.ports.embeddings,
+  scheduler: rt.scheduler,
+  syncEmbeddingTargets: () => rt.search.jobs.syncEmbeddingTargets(),
+})
+
+/** Steps 5 and 6: the `_shared` row, the job_locks rows, the bootstrap admin. */
+async function seedBaseRows(p: StartupParts): Promise<void> {
+  // step 5: the `_shared` project row with the default provider's tag, and the job_locks rows
+  const shared = await ensureSharedProject(p.db, p.embeddings.defaultProvider)
+  if (shared.created) p.logger.info('shared project created')
+  await p.scheduler.seed()
+  // step 6: StartupError (missing SPOOR_ADMIN_*) is not retried by index.ts
+  const boot = await bootstrapAdmin(p.db, p.config)
+  if (boot.created) p.logger.info({ email: boot.email }, 'bootstrap instance admin created')
+}
+
+/** Step 7's second half: projects on another tag get an embedding_target, and the re-embed job a nudge. */
+async function syncTargets(p: StartupParts): Promise<void> {
+  const retargeted = await p.syncEmbeddingTargets()
+  if (retargeted.length > 0) {
+    p.logger.info({ projects: retargeted.length }, 'projects set to re-embed for a new model')
+    p.scheduler.enqueue('reembed')
+  }
+}
+
+/**
+ * The startup steps again after a full restore replaced the database (ADR-0039): migrations forward (a dump of
+ * an older schema), `_shared`, the job_locks rows, the bootstrap admin, embedding targets. The provider is
+ * ready already, `state` stays ready, and the caller starts the scheduler again.
+ */
+export async function startupStepsAfterRestore(p: StartupParts, migrate: () => Promise<void>): Promise<void> {
+  await migrate()
+  await seedBaseRows(p)
+  await syncTargets(p)
 }
 
 export interface ShutdownOptions {

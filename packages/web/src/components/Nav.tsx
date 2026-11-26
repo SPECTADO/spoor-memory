@@ -9,6 +9,7 @@ import {
   Briefcase,
   ChartColumn,
   ClipboardCheck,
+  DatabaseBackup,
   FileText,
   Gauge,
   History,
@@ -116,6 +117,7 @@ export function AdminNav() {
         { to: '/admin/users', label: 'Users', icon: Users },
         { to: '/admin/invites', label: 'Invites', icon: Mail },
         { to: '/admin/jobs', label: 'Jobs', icon: Timer },
+        { to: '/admin/backups', label: 'Backups', icon: DatabaseBackup },
         { to: '/admin/audit', label: 'Instance audit', icon: FileText },
       ]}
     />

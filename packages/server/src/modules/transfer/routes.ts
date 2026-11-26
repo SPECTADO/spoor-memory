@@ -1,14 +1,19 @@
-/** Export and import routes, mounted at /api/v1 (api.md section 9). Parsing and status codes only. */
-import { nameSchema, projectSlugSchema } from '@spoor/shared'
-import { Hono } from 'hono'
+/**
+ * Export and import routes (api.md section 9) and the export task routes (section 13.4), mounted at /api/v1 on
+ * the cookie surface (an Authorization header never gets here). Parsing and status codes only.
+ */
+import { Readable } from 'node:stream'
+import { exportTaskCreateRequest, nameSchema, projectSlugSchema } from '@spoor/shared'
+import { type Context, Hono } from 'hono'
 import { z } from 'zod'
 import type { ServerDeps } from '../../lib/deps.js'
 import { ApiError, invalidInput } from '../../lib/errors.js'
-import { readQuery } from '../../lib/validate.js'
+import { readJson, readQuery, uuidOr404 } from '../../lib/validate.js'
 import type { AppEnv } from '../../types.js'
 import { requireInstanceAdmin, requireUser } from '../auth/index.js'
 import { loadProjectAccess } from '../projects/index.js'
 import type { TransferService } from './service.js'
+import type { ExportTaskService } from './tasks.js'
 
 /** api.md section 0.1: uploads are capped at 50 MB (the body, multipart framing included, gets a little slack). */
 export const UPLOAD_MAX_BYTES = 50 * 1024 * 1024
@@ -105,5 +110,57 @@ export function transferRoutes(deps: ServerDeps, service: TransferService) {
       const { file, fields } = await readUpload(c.req.raw)
       const f = parseFields(intoFields, fields)
       return c.json(await service.importInto(access, { file, remapIds: f.remap_ids === 'true' }))
+    })
+}
+
+function noStore(c: Context<AppEnv>): void {
+  c.header('Cache-Control', 'no-store')
+}
+
+/**
+ * Async Markdown zips (api.md section 13.4, ADR-0041). Live tasks: `project.transfer` (PA, IA; `_shared`: IA).
+ * One task, its download and its deletion: the requester or an instance admin, 404 for anyone else.
+ */
+export function exportTaskRoutes(deps: ServerDeps, tasks: ExportTaskService) {
+  return new Hono<AppEnv>()
+    .post('/projects/:slug/exports', async (c) => {
+      const access = await loadProjectAccess(deps.db, requireUser(c), c.req.param('slug'))
+      access.assert('project.transfer')
+      noStore(c)
+      await readJson(c, exportTaskCreateRequest)
+      const res = await tasks.create(access.ctx, {
+        kind: 'live',
+        project: { id: access.project.id, slug: access.project.slug },
+      })
+      return c.json(res, 202)
+    })
+    .get('/projects/:slug/exports', async (c) => {
+      const access = await loadProjectAccess(deps.db, requireUser(c), c.req.param('slug'))
+      access.assert('project.transfer')
+      noStore(c)
+      return c.json(await tasks.listForProject(access))
+    })
+    .get('/exports/:id', async (c) => {
+      const ctx = requireUser(c)
+      noStore(c)
+      return c.json(await tasks.get(ctx, uuidOr404(c.req.param('id'))))
+    })
+    .delete('/exports/:id', async (c) => {
+      const ctx = requireUser(c)
+      await tasks.remove(ctx, uuidOr404(c.req.param('id')))
+      return c.body(null, 204)
+    })
+    .get('/exports/:id/download', async (c) => {
+      const ctx = requireUser(c)
+      const file = await tasks.download(ctx, uuidOr404(c.req.param('id')))
+      // the handle download() opened (O_NOFOLLOW, checked to be a file); the stream closes it
+      const stream = Readable.toWeb(file.handle.createReadStream()) as ReadableStream<Uint8Array>
+      return c.body(stream, 200, {
+        'Content-Type': 'application/zip',
+        'Content-Length': String(file.sizeBytes),
+        // file names are `spoor-<slug>-markdown-<YYYYMMDD>.zip`: [a-z0-9_-] only, safe to quote
+        'Content-Disposition': `attachment; filename="${file.fileName.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+        'Cache-Control': 'no-store',
+      })
     })
 }

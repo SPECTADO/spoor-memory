@@ -6,15 +6,23 @@ import { type Context, Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import type { Logger } from 'pino'
 import type { Config } from './config.js'
+import { runMigrations } from './db/migrate.js'
 import { isDbUnavailable } from './lib/db.js'
 import type { ServerDeps } from './lib/deps.js'
 import { ApiError, apiErrorResponse, errorResponse, loggableError } from './lib/errors.js'
 import { createAuditModule } from './modules/audit/index.js'
 import { createAuthModule, securityHeaders } from './modules/auth/index.js'
+import { type BackupServiceOptions, createBackupModule } from './modules/backup/index.js'
 import { createDeviceModule, type DeviceServiceOptions } from './modules/device/index.js'
 import { createInstallModule } from './modules/install/index.js'
 import { createItemsModule } from './modules/items/index.js'
-import { createJobsModule, resourceSampleJob, type Scheduler } from './modules/jobs/index.js'
+import {
+  backupJob,
+  createJobsModule,
+  exportsJob,
+  resourceSampleJob,
+  type Scheduler,
+} from './modules/jobs/index.js'
 import { createMcpModule } from './modules/mcp/index.js'
 import { createMirrorModule } from './modules/mirror/index.js'
 import { createProjectsModule } from './modules/projects/index.js'
@@ -22,8 +30,9 @@ import { createRequestsModule } from './modules/requests/index.js'
 import { createSearchModule, type SearchModule } from './modules/search/index.js'
 import { createStatusModule } from './modules/status/index.js'
 import { createTokensModule } from './modules/tokens/index.js'
-import { createTransferModule } from './modules/transfer/index.js'
+import { createTransferModule, type ExportTaskOptions } from './modules/transfer/index.js'
 import type { Ports } from './ports.js'
+import { startupStepsAfterRestore } from './runtime.js'
 import type { AppEnv, ReadyState } from './types.js'
 import { VERSION } from './version.js'
 
@@ -77,6 +86,10 @@ export function createAppModules(
     /** Test overrides: device row cap / miss limiter, the version the install templates print. */
     device?: DeviceServiceOptions
     installVersion?: string
+    /** Backup module overrides (tests: the pg tools of test/pg-tools.ts, a clock, short retries). */
+    backup?: BackupServiceOptions
+    /** Export task overrides (tests: an exports dir, short heartbeats and retries, no auto-run). */
+    exports?: ExportTaskOptions
   } = {},
 ) {
   const items = createItemsModule(deps)
@@ -89,12 +102,51 @@ export function createAppModules(
     context: search.context,
     requests: requests.log,
   })
+  const transfer = createTransferModule(deps, { exports: shared.exports })
+  // the backup module reads per-project archives through the transfer module (api.md section 13.3)
+  const backup = createBackupModule(deps, shared.backup, { transfer })
   const status = createStatusModule(deps, {
     mcpSessions: () => mcp.sessions.size,
     jobsEnabled: () => jobs.scheduler.enabled,
+    backups: () => backup.service.statusSummary(),
   })
   // the sampler needs the MCP session count, so the job is registered here, before startup seeds the locks
   jobs.scheduler.register(resourceSampleJob(() => status.sampler.sample()))
+  // 0.8 jobs: scheduled backups and pruning (ADR-0040); `exports` tidies the async export
+  // tasks of the transfer module (ADR-0041)
+  jobs.scheduler.register(backupJob(backup.jobHandler))
+  jobs.scheduler.register(exportsJob(transfer.exportsJobHandler))
+  // full restore (ADR-0039): what it stops while it replaces the database, and the startup steps it runs again
+  // (the same migration call as src/index.ts; the readiness state stays ready, /healthz stays green)
+  const { config, logger } = deps
+  let schedulerWasActive = false
+  backup.restore.setHost({
+    stopBackground: async () => {
+      schedulerWasActive = jobs.scheduler.active
+      await Promise.all([schedulerWasActive ? jobs.scheduler.stop() : null, transfer.exportTasks.stop()])
+    },
+    closeSessions: () => mcp.sessions.closeAll(),
+    startupSteps: () =>
+      startupStepsAfterRestore(
+        {
+          ...deps,
+          embeddings: deps.ports.embeddings,
+          scheduler: jobs.scheduler,
+          syncEmbeddingTargets: () => search.jobs.syncEmbeddingTargets(),
+        },
+        () =>
+          runMigrations({
+            databaseUrl: config.DATABASE_URL,
+            migrateUrl: config.DATABASE_MIGRATE_URL,
+            migrationsDir: config.SPOOR_MIGRATIONS_DIR,
+            log: (msg) => logger.info(msg),
+          }),
+      ),
+    startBackground: async () => {
+      if (schedulerWasActive) await jobs.scheduler.resume()
+      transfer.exportTasks.resume()
+    },
+  })
   return {
     auth: createAuthModule(deps),
     projects: createProjectsModule(deps),
@@ -104,12 +156,13 @@ export function createAppModules(
     search,
     requests,
     jobs,
-    transfer: createTransferModule(deps),
+    transfer,
     device: createDeviceModule(deps, shared.device),
     install: createInstallModule(deps, { version: shared.installVersion }),
     mirror: createMirrorModule(deps, items),
     mcp,
     status,
+    backup,
   }
 }
 
@@ -174,6 +227,10 @@ export function createApp({ config, logger, state, ports, pingDb, modules: m }: 
     return c.json({ status: 'ok', version: VERSION, checks })
   })
 
+  // a full restore's maintenance gate: every route below (all but /healthz) answers 503 `maintenance`, except
+  // GET /api/v1/backups/restore-status; requests in flight are counted for the restore's drain (ADR-0039)
+  app.use('*', m.backup.maintenance)
+
   // every other route answers 503 `starting` until ready (JSON on API routes, text elsewhere)
   app.use('*', async (c, next) => {
     if (state.ready) return next()
@@ -211,6 +268,7 @@ export function createApp({ config, logger, state, ports, pingDb, modules: m }: 
   api.route('/', m.transfer.routes)
   api.route('/', m.device.routes)
   api.route('/', m.status.routes)
+  api.route('/', m.backup.routes)
   // every api.md section 12 route is built (deviations.md G16); anything else falls through to the JSON 404
   app.route('/api/v1', api)
 

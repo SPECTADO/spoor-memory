@@ -6,8 +6,8 @@ For whoever deploys and runs a Spoor instance. The design behind it is [design/d
 
 Two containers from `docker-compose.yml`: `db` (`pgvector/pgvector:0.8.7-pg17`, pinned by digest, volume `spoor-pgdata`) and `app`
 (the Spoor image: Node 22, the API, the MCP endpoint and the web UI on port 3000). An optional third, `caddy`, terminates TLS.
-Postgres is the only state; the app keeps nothing on disk (the embedding model is baked into the image) except in-memory MCP
-sessions, which clients re-create after a restart.
+Postgres is the only state of the knowledge; the app keeps nothing else on disk that matters (the embedding model is baked into the image) except in-memory MCP
+sessions, which clients re-create after a restart, and, since 0.8, the backup directory `SPOOR_BACKUP_DIR` (volume `spoor-backups`, section 5). Losing that directory loses backups and pending Markdown zips, not data.
 
 Two database roles exist on purpose. `spoor` (superuser) is used once at startup for `CREATE EXTENSION`; `spoor_app`
 (`NOSUPERUSER`, created by `deploy/initdb/01-app-role.sh` when the volume is first initialised) owns every table and serves all
@@ -73,6 +73,8 @@ secret value) and exits 1.
 | `SPOOR_TRUST_PROXY` | unset | see section 5 |
 | `SPOOR_UPDATE_CHECK` | `on` | `off` stops the update check, the only outbound call the server makes on its own. See "Update check" in section 7 |
 | `SPOOR_UPDATE_URL` | `https://raw.githubusercontent.com/SPECTADO/spoor-memory/main/deploy/latest-release.json` | where the update check reads the latest release (http or https). Point it at a mirror of that file if the server cannot reach GitHub |
+| `SPOOR_BACKUP_DIR` | compose: `/var/lib/spoor/backups` (named volume `spoor-backups`) | the backup directory (ADR-0038): `backups/<id>/` bundles, `exports/` (Markdown zips, safety archives), `.tmp/`. Unset = backups unavailable; the app still runs. A bind mount must be writable by uid 1000 (the image's `node` user). Scheduled backups stay off until an instance admin enables them on `/admin/backups` |
+| `SPOOR_PG_BIN_DIR` | `/usr/lib/postgresql/17/bin` in the image | pg_dump, pg_restore and psql (major 17); unset = PATH. Tools older than the database server make backups unavailable |
 | `SPOOR_WEB_DIR`, `SPOOR_MIGRATIONS_DIR` | set by the image | only for runs outside the image |
 | `NODE_ENV` | `production` in the image | do not change |
 
@@ -114,25 +116,97 @@ port 3000 directly can forge the address the approval page shows. Never list a p
 
 ## 5. Backups
 
-Two complementary kinds. Do both.
+Spoor 0.8 makes, schedules, verifies and restores backups itself (instance admins, **Admin, Backups**, `/admin/backups`). Plan
+for two layers: the built-in bundles, and a copy of them off the machine, which is your job (below).
 
-**1. `pg_dump` of the whole database (disaster recovery).** It contains users (password hashes), sessions, token hashes, embeddings,
-history and audit log; treat the file as a secret.
+**What a backup is.** A directory `backups/<id>/` in `SPOOR_BACKUP_DIR` (compose: the named volume `spoor-backups`, mounted at
+`/var/lib/spoor/backups`), with an id such as `20261126T030000Z-auto`:
+
+- `database.dump`: `pg_dump -Fc` of schemas `public` and `drizzle`, run by the app with the runtime role and the `postgresql-client-17`
+  tools in the image (`SPOOR_PG_BIN_DIR`). It holds users (password hashes), token hashes, embeddings, history and the audit log;
+  it leaves out the contents of sessions, device codes, the request log and resource samples. Treat it as a secret. The web UI
+  has **no download** for it.
+- `projects/<slug>.zip`: one project export (with history) per project, the shared space included. These make a single project
+  restorable without touching the rest, and they are plain zips you can import elsewhere.
+- `backup.json`: the manifest (files with size and sha256, projects, migration count, Postgres and Spoor versions, `pinned`,
+  `verified_at`).
+
+A bundle is written to `.tmp/`, verified (sha256 and `pg_restore` reading the dump) and only then renamed into place; `.tmp/`
+older than 24 hours is swept. The directory is the catalog (no database table), so restoring the database never changes the list.
+Kinds: `auto` (the schedule), `manual` ("Back up now") and `pre-restore` (made before every full restore).
+
+**Schedule and retention.** Scheduled backups are **off** until an instance admin enables them on the page; the form is
+prefilled with three daily and two weekly backups at 03:00 UTC. Each tier (`24h`, `48h` or `7d`, keep 1 to 90) keeps the newest
+scheduled backup of each of its last N days, two-day periods or ISO weeks. Pruning runs only after a new scheduled backup was
+made and verified; a failed run never deletes anything. Never deleted automatically: manual backups, pinned ones, the newest
+verified one, and a `pre-restore` younger than 14 days. The status card and the Status page warn when backups are on and the
+last good one is older than twice the cadence. Every action is in the instance audit log (`backup.create`, `backup.prune`,
+`backup.delete`, `backup.pin`, `backup.settings`). Disk use is up to roughly (backups kept) times (database size, compressed, plus
+the project zips); the page shows free space, and a backup is refused when the disk looks too small.
+
+**The directory.**
+
+- With compose it is the named volume `spoor-backups`. A bind mount (`./backups:/var/lib/spoor/backups`) must be **writable by
+  uid 1000** (the image's `node` user): `sudo chown -R 1000:1000 ./backups`. Bundles are written with mode 0700/0600.
+- `SPOOR_BACKUP_DIR` unset, not writable, or `pg_dump` missing or older than the database server: the page shows backups as
+  unavailable with the reason, and the app runs as before.
+- Bundles sit on the same host as the database. **Copying them off the host is up to you** (rsync, restic, a cron job, a
+  snapshot of the volume, S3 sync): `docker run --rm -v spoor_spoor-backups:/b -v "$PWD":/out alpine tar czf /out/spoor-backups.tgz -C /b backups`
+  (the volume name has your compose project as prefix; `docker volume ls`). Copy only directories that contain a `backup.json`;
+  never copy `.tmp/` while a backup runs.
+- Several app containers on one database: a backup or restore runs once at a time (a Postgres advisory lock), but each
+  container has its own `SPOOR_BACKUP_DIR`, so give them one shared directory, or turn backups on in one container only. Markdown
+  zips (`exports/`) are stored in the container that built them; without `SPOOR_BACKUP_DIR` they fall back to
+  `os.tmpdir()/spoor-exports-<hash of the database>`, which is for a single container only (and must belong to the app's
+  user with mode 0700, or Markdown zips fail). Queued Markdown zips are picked up at every start; stale ones are failed by
+  the `exports` job, so keep `SPOOR_JOBS` on in at least one container for the 24-hour expiry of ready files.
+
+**Fallback: a manual `pg_dump`.** The built-in backup needs a working app. Keep this runbook for when it does not start, or if
+you want a dump that never leaves your own tooling:
 
 ```sh
 docker compose exec -T db pg_dump -U spoor -Fc spoor > spoor-$(date +%F).dump
 ```
 
-Run it from cron or a systemd timer and keep copies off the machine. A file copy of the volume is consistent only with `db` stopped.
+Run it from cron or a systemd timer and keep copies off the machine. A file copy of the volume is consistent only with `db`
+stopped. This dump is a whole-database file in the same format as `database.dump` and restores with the commands in section 6.
 
-**2. Project export (portable).** In the web UI: project Settings, Export. A zip with `manifest.json`, one Markdown file per item
+**Project export (portable).** In the web UI: project Settings, Export. A zip with `manifest.json`, one Markdown file per item
 (frontmatter included), per-item revision history and the project audit log. It holds no users, memberships, tokens, sessions or
 embeddings (embeddings are rebuilt after import), so it moves a project to another instance but does not restore an instance. The
 shared space exports from `/shared/settings` (instance admin). Exports and imports run one at a time.
 
+**Markdown zip.** Project Settings, Data, "Prepare Markdown zip" builds in the background a zip with a root `README.md` index and
+one Markdown file per item (`memories/`, `decisions/`, `docs/`, `library/`), without history; it reads well in any editor and
+imports again as a folder of Markdown files. The file is kept 24 hours; each user may have three open tasks. An instance admin
+can make the same zip from a project inside a backup (Backups, Projects...).
+
 ## 6. Restore
 
-From a dump, into an empty database, with the app stopped:
+**From a backup in `SPOOR_BACKUP_DIR` (0.8, web UI).** Admin, Backups, "Restore…" on a backup: the dialog checks the dump,
+shows what will be lost, and asks for the phrase it shows (`RESTORE <date> <time>`) and your password. Spoor first writes a
+`pre-restore` backup of the database as it is (kept at least 14 days), then answers 503 `maintenance` to everything but
+`/healthz` (which stays green, so the orchestrator does not restart the container) while it replaces the database in one
+transaction, migrates an older backup forward and starts again. Everyone logs in again afterwards. Stop every other Spoor
+container on the same database first (the restore refuses with `other_instances`: every app process keeps one named
+connection open, so an idle container is seen too). Credentials are not rewound: tokens revoked since the backup stay
+revoked, users disabled since stay disabled, newer passwords are kept, used or revoked invites stay unusable; for a backup
+of the same instance, tokens deleted since come back revoked and users deleted since come back disabled (re-enable or
+delete them under Admin, Users). The live backup schedule is kept, also when the app dies after the commit (the next start
+writes it back). If the restore fails, the transaction
+rolls back and the database is as it was; if the process dies in the middle, `restore-state.json` in `SPOOR_BACKUP_DIR` and
+the next start tell whether it finished (`done`) or not (`interrupted`, nothing changed). A failure after the commit (a
+startup step) keeps the maintenance gate on until you restart the app. The restore needs no superuser: it drops and
+recreates what `spoor_app` owns in schemas `public` and `drizzle`; an object of another role that depends on those tables
+stops it (nothing changes).
+
+**One project from a backup (instance admin).** Backups, Projects...: **Restore as copy** makes a new project (`<slug>-r<date>`,
+new ids, you are its only member, with a "delete when done" banner) to look at or copy from; **Overwrite** replaces the items of the
+live project of the same id with the backup's (password and typed slug; members, tokens, settings and audit stay; a safety
+archive of the project as it was is kept 14 days in `exports/`, not downloadable from the UI; the shared space cannot be
+overwritten). A project skipped at backup time (too large, busy) is "not restorable per project": use the full restore.
+
+**From a dump** (a manual `pg_dump`, or a `database.dump` copied out of a bundle when the app does not start), into an empty database, with the app stopped:
 
 ```sh
 docker compose stop app
@@ -151,7 +225,7 @@ large project without history (`history=0`) if its zip will not re-import. A pla
 
 ## 7. Upgrades
 
-1. Back up (section 5).
+1. Back up (section 5): press "Back up now" and wait for it to show as verified, or take the manual dump.
 2. `docker compose pull && docker compose up -d` (or `git pull && docker compose up -d --build`).
 3. Watch `docker compose logs -f app` until `/healthz` is `ok`.
 
@@ -159,6 +233,13 @@ Migrations are forward-only. To roll back, restore the dump taken in step 1 and 
 that matches the server (`npm i -g spoor-memory@<server version>`, as install.md says); the pinned `npx` fallback in the hooks follows
 the server after `spoor init` is rerun and the changed `.claude/settings.json` is committed. Users do not have to watch for
 releases: after the upgrade, every session start whose CLI differs from the server says so in the digest and names both commands.
+
+**Upgrading to 0.8 (Backups).** Migration 0010 adds `instance_settings`, `export_tasks` and `projects.restored_from`; nothing to
+do apart from the usual backup. The image now carries `postgresql-client-17` (the image is larger). With the repository's
+`docker-compose.yml` the new volume `spoor-backups` and `SPOOR_BACKUP_DIR` come with it; with your own compose file add
+`SPOOR_BACKUP_DIR: /var/lib/spoor/backups` and `volumes: - spoor-backups:/var/lib/spoor/backups` (a bind mount must be writable
+by uid 1000) to the app service, or backups stay unavailable. Scheduled backups are off until an instance admin enables them on
+Admin, Backups. Rolling back to 0.7.x: restore the dump taken in step 1 (the 0.7 app does not know migration 0010; a 0.7.x image started on a 0.8 database is not supported).
 
 **Upgrading from 0.1.0 to the Library release.** Migrations 0003 and 0004 run at startup under the advisory lock, before any
 library page can exist; no action is needed apart from the backup. 0003 adds the `library` space, the `memberships.library_editor`
@@ -251,6 +332,10 @@ responses (`request_id`) and in the UI's error panels, so a user report maps to 
 | app exits at once, log says `invalid configuration` | read the listed variables; common: admin password under 12 characters, `SPOOR_EMBEDDING_DEFAULT=openai` without a key, both `X` and `X_FILE` set |
 | app exits: extension `vector` missing | external Postgres without pgvector, or `DATABASE_MIGRATE_URL` unset and the extensions not created by hand |
 | `permission denied for database` / schema `drizzle` | the runtime role lacks `CREATE` on the database; set `DATABASE_MIGRATE_URL` or `GRANT CREATE ON DATABASE spoor TO spoor_app` |
+| Admin, Backups says "unavailable" | the reason is on the status card: `no_backup_dir` (set `SPOOR_BACKUP_DIR`), `dir_not_writable` (a bind mount must be writable by uid 1000), `pg_tools_missing` (`SPOOR_PG_BIN_DIR` wrong or an image without `postgresql-client-17`) or `pg_version_mismatch` (the client tools are older than the Postgres server: use a client of the server's major version) |
+| backup or restore answers 503 `busy` | another backup, verify or restore (possibly in another container) holds the lock, or an import or export is running; retry in a minute |
+| restore refused: `other_instances` | another Spoor app container is connected to the database (its `application_name` starts with `spoor:`); stop it, then prepare again. `backup_too_new` means the backup has migrations this image does not know: run the newer image first |
+| every page answers 503 `maintenance` | a full restore is running (`/healthz` stays 200); the web UI shows its progress. If it stays after a failure (the dialog says "Spoor could not finish the restore": the failure came after the commit), restart the app container; `restore-state.json` in `SPOOR_BACKUP_DIR` and the `instance.restore` audit row tell what happened |
 | login works in `curl` but the browser shows 403 `forbidden_origin` | `SPOOR_PUBLIC_URL` differs from the URL in the address bar (scheme, host or port), or a proxy rewrites `Origin` |
 | cannot log in over plain http after setting an https `SPOOR_PUBLIC_URL` | cookies are `Secure` for https origins; use the https URL |
 | device approval page shows the proxy's address | set `SPOOR_TRUST_PROXY` (section 4) |
@@ -278,7 +363,7 @@ responses (`request_id`) and in the UI's error panels, so a user report maps to 
   is set for HNSW index builds during a re-embed. Disk grows with history and the audit log, which are never pruned automatically.
 - Network: the app needs no outbound access with the local provider. Image build and first pull need Docker Hub and GHCR; the model
   weights are fetched at image build time, not at runtime.
-- Scaling out is not a goal: one container per client is the intended shape.
+- Scaling out is not a goal: one container per client is the intended shape. Backups add disk use in `SPOOR_BACKUP_DIR` and a short CPU and I/O burst while `pg_dump` runs (it takes a consistent snapshot without blocking writers); the job runs at the configured UTC time.
 - Watch them on `/admin/usage` (instance admins). The `resource-sample` job records process CPU, load average, RSS, heap,
   event-loop delay, database size and connections, app pool use, open MCP sessions and pending embeddings every 5 minutes into
   `resource_samples`; `purge-ephemeral` deletes rows older than 14 days (about 4,000 small rows at most). The page draws them

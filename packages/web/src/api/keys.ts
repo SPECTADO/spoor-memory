@@ -74,6 +74,13 @@ export const qk = {
   adminStatus: () => ['admin-status'] as const,
   adminUsage: (range: string) => ['admin-usage', range] as const,
   adminUpdate: () => ['admin-update'] as const,
+  /** The backups page: status, settings and the list; prefix of everything below. */
+  backups: () => ['backups'] as const,
+  backupProjects: (id: string) => ['backups', 'projects', id] as const,
+  restoreStatus: () => ['backups', 'restore-status'] as const,
+  /** A project's live Markdown-zip tasks. */
+  exportTask: (id: string) => ['export-task', id] as const,
+  exportTasks: (slug: string) => ['export-tasks', slug] as const,
   instanceAudit: (filters?: Omit<AuditFilters, 'cursor' | 'item'>) =>
     filters ? (['instance-audit', filters] as const) : (['instance-audit'] as const),
 }

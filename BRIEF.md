@@ -258,3 +258,49 @@ recommended answer each time and picked all four linking improvements). Supersed
 
 Recorded in ADR-0021 (graph view) and ADR-0022 (link suggestions), refined by ADR-0023 (the related-item floor
 setting) and ADR-0024 (the tools/list budget of 4,000 estimated tokens).
+
+## Amendment (2026-11-26): v0.8 Backups
+
+Agreed 2026-11-26 between the owner (Ladislav Soukup) and Claude after a grilling session. Owner decisions: a hybrid
+mechanism (pg_dump plus per-project export zips); every feature below ships in 0.8.0; the raw `database.dump` is not
+downloadable through the web UI; the Markdown zip is flat, re-importable and has a root `README.md` index; scheduled
+backups are off until an instance admin enables them (the form is prefilled with 3 × 24 h and 2 × 7 d). Amends
+"Postgres is the only state" for operators: the backup directory is state outside Postgres, on purpose (ADR-0038;
+ADR-0020 stands, no attachment storage).
+
+- **Backup bundle**: `<SPOOR_BACKUP_DIR>/backups/<id>/`, id `YYYYMMDDTHHMMSSZ-auto|manual|pre-restore` (checked on
+  every route). It holds `database.dump` (pg_dump custom format of schemas `public` and `drizzle`, without the data of
+  sessions, device codes, the request log and resource samples), one `projects/<slug>.zip` per project including
+  `_shared` (the existing `spoor-export/1` archive, history kept unless over the cap; a busy project is retried and then
+  recorded as skipped), and `backup.json` (`spoor-backup/1`: versions, migrations, files with sha256, projects,
+  pinned, verified_at). Written under `.tmp/`, checked for free space, verified (pg_restore reads the dump, sha256),
+  fsynced, then renamed into place. The directory is the catalog (no table), so a database restore cannot rewind the
+  list. The pg client tools run with the connection in PG* environment variables only and data through pipes only.
+- **Image**: `postgresql-client-17` from the PGDG apt repo, `/var/lib/spoor/backups` owned by `node`; compose mounts
+  the named volume `spoor-backups` there. New env: `SPOOR_BACKUP_DIR` (unset = backups unavailable),
+  `SPOOR_PG_BIN_DIR`. Missing tools or a server newer than the tools make backups "unavailable"; the app still runs.
+- **Schedule and retention**: table `instance_settings` (key `backup`): enabled, time (UTC), 1 to 3 tiers
+  (`24h | 48h | 7d`, keep 1 to 90), per-project archives on or off. Job `backup` looks every 15 minutes whether a slot
+  is due. Pruning runs only after a new backup is verified: per tier, the newest auto backup of each bucket until
+  `keep` buckets are filled; manual backups, pinned ones, the newest good one and pre-restore backups younger than
+  14 days are always kept. A failed run never prunes.
+- **Full restore from the web UI** (instance admin, cookie only): prepare (checks, warnings, a 5-minute token and a
+  phrase such as `RESTORE 2026-11-20 03:00`), then confirm with the phrase and the admin's password. A pre-restore
+  backup is made first; a maintenance gate answers 503 `maintenance` everywhere except `/healthz` and the restore
+  status; the restore is one `psql -1` transaction (prelude drops the app's objects, epilogue clears sessions and
+  re-applies token revocations, and an audit row proves the commit); startup steps run again; everyone logs in again.
+  Refused when another app instance is connected or the backup is newer than the server.
+- **Single project from a backup** (instance admin): from `projects/<slug>.zip`, never the dump. As a copy (new ids,
+  slug `<slug>-r<YYYYMMDD>`, a "Restored copy" banner from `projects.restored_from`) or by overwrite (password and the
+  typed slug, a safety archive first, then delete and re-import in one transaction; members, tokens and settings stay;
+  not for `_shared` in 0.8).
+- **Async Markdown zip** (live project or from a backup): table `export_tasks`, an in-process runner, job `exports`
+  for leftovers and expiry (24 h), at most 3 open tasks per user. The zip is flat and re-importable: root
+  `README.md` index, then `memories/`, `decisions/`, `docs/`, `library/` with the export frontmatter.
+- **Web**: `/admin/backups` (status, schedule form with a "keeps up to N backups" preview, list, restore dialog,
+  projects-in-backup dialog), a "Prepare Markdown zip" section in project settings, the restored-copy banner.
+- **Not in 0.8**: downloading `database.dump` from the web UI, overwriting `_shared` from a backup.
+
+Recorded in ADR-0038 (bundle, pg client in the image, backup directory as state), ADR-0039 (atomic in-process
+restore with a maintenance gate), ADR-0040 (`instance_settings` and tiered retention) and ADR-0041 (async export
+tasks). Routes: [api.md](docs/design/api.md) §13.

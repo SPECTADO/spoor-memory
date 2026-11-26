@@ -10,7 +10,7 @@ mode. Terms are defined in [GLOSSARY.md](../GLOSSARY.md). Agents have their own 
   email: the admin copies the link to you. An invite for an email that already has an account is refused; ask to be added to the
   project instead. A forgotten password is fixed by an instance admin creating a reset invite for you.
 - Sessions last 30 days and end after 14 idle days. Account (top right menu): your name, password and every API token you hold.
-- The bottom of the left menu shows the versions, for example `Web 0.7.5 · Server 0.7.5`. If they differ after an upgrade, the
+- The bottom of the left menu shows the versions, for example `Web 0.8.0 · Server 0.8.0`. If they differ after an upgrade, the
   line turns into a warning: press "Reload to update" to get the current web UI. An open page checks the server's version
   every 5 minutes. Each version links to its release on GitHub.
 - Instance admins also see "Update available: X.Y.Z" there, and on Status, when a newer Spoor release is out. The link opens the
@@ -251,9 +251,10 @@ expire after 90 days. The page does not accept a code from a link, on purpose.
   load, memory, event-loop delay, database size and connections, app pool, MCP sessions, pending embeddings) for the last
   24 hours or 14 days, with the current, lowest and highest value. A sample is taken every 5 minutes; with `SPOOR_JOBS=off`
   there are none. The page refreshes every minute.
-- **Jobs**: the scheduler's jobs (`cleanup`, `embed-pending`, `reembed`, `purge-ephemeral`, `resource-sample`) with last run,
+- **Jobs**: the scheduler's jobs (`cleanup`, `embed-pending`, `reembed`, `purge-ephemeral`, `resource-sample`, `backup`, `exports`) with last run,
   status, last error, and **Run now**.
-- **Instance audit**: user, invite, project and job events.
+- **Backups**: make, schedule and restore backups of the whole instance (see below).
+- **Instance audit**: user, invite, project, job, backup and restore events.
 
 Project admins also have **Members** (add by email, change role, remove; the last project admin cannot be demoted), **Settings**
 (name, cleanup days, digest budget and decision window, duplicate threshold 0.60 to 0.99, default 0.87, **Related items minimum similarity**
@@ -261,9 +262,45 @@ Project admins also have **Members** (add by email, change role, remove; the las
 with threshold 0.85 a saved 0.90 acts as 0.84), **Refuse near-copies from** 0.80 to 1.0 or empty (off; on at 0.90 by default only
 with embeddinggemma; agents then cannot save a reworded copy at or above it whose values agree, and it can not be lower than a
 duplicate threshold you set), embedding provider with a progress bar
-during a re-embed, export, import (a full Spoor export into an empty project; a zip of Markdown files into any project), and for
+during a re-embed, export and **Prepare Markdown zip** (below), import (a full Spoor export into an empty project; a zip of Markdown files into any project), and for
 instance admins delete) and the project **Audit log** (who or which
 agent changed what, via which channel, filterable).
+
+### Backups and restore (instance admins)
+
+**Admin, Backups** (`/admin/backups`) shows the backup directory, free space, the last good backup and when the next
+scheduled one is due. If backups are unavailable it says why (no directory set, directory not writable, pg tools missing
+or older than the database); ask whoever runs the server.
+
+- **Back up now** starts a manual backup; it appears in the table when it is written and verified. Scheduled backups are
+  **off** until you switch them on in the schedule form: a time of day in UTC and one to three tiers (every 24 h, 48 h or
+  7 days, and how many to keep), prefilled with 3 daily and 2 weekly; the form shows how many backups it keeps in total.
+  Manual backups, pinned ones, the newest verified one and the backup made before a restore (14 days) are never deleted
+  automatically.
+- The table lists date, kind (auto, manual, pre-restore), size, whether it was verified and whether it is pinned. **Pin** keeps
+  one forever, **Verify** re-checks its files, **Delete** removes it. There is no download for the database file (it holds
+  password hashes); ask the operator to copy the backup directory off the server.
+- **Restore...** replaces the whole instance with that backup. Step 1 shows what the backup holds and the warnings (everything
+  made since is lost, everyone is logged out; API tokens revoked or deleted since stay revoked, users disabled or deleted since
+  stay or come back disabled, and newer passwords are kept); step 2 asks you to type the phrase
+  shown (`RESTORE 2026-11-20 03:00`) and your password; step 3 shows progress while the instance is in maintenance
+  (every page says so) and sends you to the sign-in page when it is done. Spoor first makes a `pre-restore` backup, so a
+  wrong restore can be undone by restoring that. It refuses when other Spoor containers use the database or when the backup is
+  from a newer version.
+- **Projects...** opens the projects stored in a backup. **Download Markdown** prepares a Markdown zip of the project as it was.
+  **Restore as copy** makes a new project (`<slug>-r<date>`, marked "Restored copy, delete when done", you are its only
+  member) to look at or copy from. **Overwrite** replaces the items of the live project with the backup's: type its slug and
+  your password; members, tokens and settings stay, and a safety copy of the project as it is now is kept for 14 days by the
+  server. The shared space cannot be overwritten, and a project the backup could not archive says "not restorable per
+  project; use full restore".
+
+### Markdown zip
+
+Project admins (and instance admins) find **Prepare Markdown zip** on project Settings, Data. It builds in the background
+(the list refreshes every 5 seconds; at most three at a time) a zip `spoor-<slug>-markdown-<date>.zip` with a `README.md`
+index (tables by space and type, inactive items listed separately) and one Markdown file per item in `memories/`,
+`decisions/`, `docs/` and `library/`, without history. Download it when it says Ready; it is deleted after 24 hours.
+Import it into any project like a folder of Markdown files.
 
 ## 10. Shared space
 

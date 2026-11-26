@@ -1,0 +1,9 @@
+#!/bin/sh
+# Test shim (packages/server/test/pg-tools.ts): runs the container's psql on the dev machine, which has no pg
+# client. The PG* connection variables of the caller are forwarded; inside the container the test database is
+# localhost:5432. Data flows only through stdin / stdout, like for the real binary (pgtools.ts HARD RULE).
+exec docker exec -i \
+  -e PGHOST=localhost -e PGPORT=5432 \
+  -e PGUSER -e PGPASSWORD -e PGDATABASE -e PGSSLMODE -e PGAPPNAME -e PGCONNECT_TIMEOUT \
+  -e LC_ALL=C -e TZ=UTC \
+  "${SPOOR_PG_SHIM_CONTAINER:-spoor-test-db}" psql "$@"

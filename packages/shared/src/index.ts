@@ -1,6 +1,7 @@
 export * from './agents-md.js'
 export * from './anchors.js'
 export * from './api/auth.js'
+export * from './api/backups.js'
 export * from './api/device.js'
 export * from './api/items.js'
 export * from './api/projects.js'

@@ -6,6 +6,7 @@ import { NotFound } from '../ui'
 
 export {
   AdminAuditPage,
+  AdminBackupsPage,
   AdminInvitesPage,
   AdminJobsPage,
   AdminProjectsPage,

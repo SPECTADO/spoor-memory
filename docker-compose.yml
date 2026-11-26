@@ -51,6 +51,12 @@ services:
       SPOOR_PUSH_CONCURRENCY: ${SPOOR_PUSH_CONCURRENCY:-}
       SPOOR_UPDATE_CHECK: ${SPOOR_UPDATE_CHECK:-}
       SPOOR_UPDATE_URL: ${SPOOR_UPDATE_URL:-}
+      # backups (ADR-0038): bundles, Markdown zips and safety archives live here; off until an admin enables them
+      SPOOR_BACKUP_DIR: ${SPOOR_BACKUP_DIR:-/var/lib/spoor/backups}
+      SPOOR_PG_BIN_DIR: ${SPOOR_PG_BIN_DIR:-/usr/lib/postgresql/17/bin}
+    volumes:
+      # a named volume; a bind mount (./backups:/var/lib/spoor/backups) works too if uid 1000 can write it
+      - spoor-backups:/var/lib/spoor/backups
     healthcheck: # same probe as the image HEALTHCHECK, repeated so `up --wait` works with any image
       test:
         - CMD
@@ -82,5 +88,6 @@ services:
 
 volumes:
   spoor-pgdata:
+  spoor-backups:
   caddy-data:
   caddy-config:

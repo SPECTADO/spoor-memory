@@ -4,7 +4,8 @@
  * time is on `/admin/usage` (UsagePage).
  */
 import type { ReactNode } from 'react'
-import { useInstanceStatus } from '../../api/hooks'
+import { Link } from 'react-router'
+import { useBackups, useInstanceStatus } from '../../api/hooks'
 import type { InstanceStatusJson } from '../../api/types'
 import { bytes, dateTime, duration } from '../../lib/format'
 import { versionUrl } from '../../lib/version'
@@ -92,6 +93,27 @@ function ItemsTable({ items }: { items: InstanceStatusJson['records']['items'] }
   )
 }
 
+/** Scheduled backups are on but the last good one is older than twice the interval, or they cannot run. */
+function BackupsWarning() {
+  const b = useBackups().data
+  if (!b?.settings.enabled) return null
+  const problem = !b.status.available
+    ? 'Scheduled backups are on, but backups are not available on this instance.'
+    : b.status.overdue
+      ? `Scheduled backups are on, but the last good backup is ${b.status.last_good_at ? `from ${dateTime(b.status.last_good_at)}` : 'missing'}, older than twice the interval.`
+      : null
+  if (!problem) return null
+  return (
+    <Alert tone="warning" title="Backups need attention" className="mb-4">
+      {problem}{' '}
+      <Link className="text-accent underline" to="/admin/backups">
+        Open Backups
+      </Link>
+      .
+    </Alert>
+  )
+}
+
 export function StatusPage() {
   const q = useInstanceStatus()
   return (
@@ -108,6 +130,7 @@ export function StatusPage() {
           </>
         }
       />
+      <BackupsWarning />
       {q.isPending ? (
         <SkeletonRows rows={6} />
       ) : q.isError ? (

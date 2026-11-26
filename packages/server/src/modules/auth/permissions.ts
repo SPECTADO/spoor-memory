@@ -52,6 +52,11 @@ export const ACTIONS = [
   'jobs.read',
   /** The agent request log of a project (ADR-0018). Never on `_shared`: tokens never target it. */
   'requests.read',
+  /**
+   * Backups: status, schedule, run, pin, verify, delete, full restore, projects from a backup and their
+   * Markdown zips (ADR-0038 to ADR-0041). Instance admins in the web UI only, never a token.
+   */
+  'backups.manage',
 ] as const
 export type Action = (typeof ACTIONS)[number]
 
@@ -119,6 +124,7 @@ function canWeb(p: WebPrincipal, action: Action, t: Target): boolean {
     case 'project.create':
     case 'users.manage':
     case 'invite.instance':
+    case 'backups.manage':
       return ia
   }
 }

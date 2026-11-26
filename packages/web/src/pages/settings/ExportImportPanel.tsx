@@ -10,6 +10,7 @@ import { exportUrl } from '../../api/endpoints'
 import { useDashboard, useImportIntoProject } from '../../api/hooks'
 import type { ImportResult } from '../../api/types'
 import { Alert, Button, buttonClass, Checkbox, Input, Skeleton } from '../../ui'
+import { MarkdownZipSection } from './MarkdownZipSection'
 
 export function ExportImportPanel({ slug }: { slug: string }) {
   const [withoutHistory, setWithoutHistory] = useState(false)
@@ -32,6 +33,7 @@ export function ExportImportPanel({ slug }: { slug: string }) {
           </a>
         </div>
       </section>
+      <MarkdownZipSection slug={slug} />
       <ImportForm slug={slug} />
     </div>
   )

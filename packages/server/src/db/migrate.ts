@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { migrate } from 'drizzle-orm/node-postgres/migrator'
 import pg from 'pg'
+import { appApplicationName } from './client.js'
 
 /** Extensions the schema needs (data-model.md section 1). */
 export const REQUIRED_EXTENSIONS = ['vector', 'unaccent'] as const
@@ -34,7 +35,7 @@ export async function connectWithRetry(
   log?: (m: string) => void,
 ) {
   for (let i = 1; ; i++) {
-    const client = new pg.Client({ connectionString: url })
+    const client = new pg.Client({ connectionString: url, application_name: appApplicationName() })
     try {
       await client.connect()
       return client

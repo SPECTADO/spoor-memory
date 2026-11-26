@@ -29,8 +29,26 @@ RUN mkdir -p "$SPOOR_MODEL_DIR" && cd /out && node scripts/fetch-model.mjs
 
 # ---- runtime ---------------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS runtime
+# Backups (ADR-0038): pg_dump / pg_restore / psql of the database's major version (17) from the PGDG apt repo.
+# The signing key is pinned by checksum and used only for that repo (signed-by); the major is pinned, the
+# minor follows PGDG's security updates. /var/lib/spoor/backups is the default SPOOR_BACKUP_DIR (a volume).
+ADD --chmod=644 --checksum=sha256:0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76 \
+    https://www.postgresql.org/media/keys/ACCC4CF8.asc /usr/share/keyrings/pgdg.asc
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && . /etc/os-release \
+ && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-17 \
+ && rm -rf /var/lib/apt/lists/* \
+ && /usr/lib/postgresql/17/bin/pg_dump --version \
+ && mkdir -p /var/lib/spoor/backups \
+ && chown node:node /var/lib/spoor/backups \
+ && chmod 700 /var/lib/spoor/backups
 ENV NODE_ENV=production SPOOR_PORT=3000 SPOOR_WEB_DIR=/app/web \
-    SPOOR_MIGRATIONS_DIR=/app/drizzle SPOOR_MODEL_DIR=/opt/spoor/models
+    SPOOR_MIGRATIONS_DIR=/app/drizzle SPOOR_MODEL_DIR=/opt/spoor/models \
+    SPOOR_PG_BIN_DIR=/usr/lib/postgresql/17/bin
 WORKDIR /app
 COPY --from=build --chown=node:node /out /app
 COPY --from=build --chown=node:node /repo/packages/web/dist /app/web

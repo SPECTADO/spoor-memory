@@ -4,6 +4,50 @@ All notable changes. Format after Keep a Changelog; versions follow semver.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-26
+
+### Added
+
+- **Backups from the web UI** (instance admins, `/admin/backups`, api.md §13.1, ADR-0038, ADR-0040): "Back up now" and an
+  optional schedule (off until enabled; time of day in UTC and one to three retention tiers of `24h`, `48h` or `7d`, the
+  form prefilled with 3 daily and 2 weekly) write a bundle to `SPOOR_BACKUP_DIR/backups/<id>/`: `database.dump` (`pg_dump -Fc`,
+  run by the app with the image's `postgresql-client-17`), one export zip per project and `backup.json`. A bundle is verified
+  (sha256, `pg_restore` reads the dump) before it is renamed into place; scheduled runs then prune by the tiers and never
+  delete manual or pinned backups, the newest verified one or a `pre-restore` younger than 14 days. Backups can be pinned,
+  verified again and deleted; the raw dump has no download route. The Status page warns when backups are on and the last good
+  one is older than twice the cadence. Audit: `backup.create`, `backup.prune`, `backup.delete`, `backup.pin`, `backup.settings`.
+  Docs: operations.md §5, §6, §7 (upgrade note: migration 0010 and the new `spoor-backups` volume; copying bundles off the
+  host is the operator's job).
+- **Admin UI** (web-ui.md §8): Backups page (status card, schedule form with a "keeps up to N backups" preview, backup table,
+  stepped restore dialog, "Projects in this backup" dialog), the "Prepare Markdown zip" section on project Settings, the
+  "Restored copy, delete when done" banner, a backups warning on the Status page, and `backup` and `exports` on the Jobs page.
+
+- Foundation for backups (BRIEF.md amendment of 2026-11-26, ADR-0038 to ADR-0041): migration 0010
+  (`instance_settings`, `export_tasks`, `projects.restored_from`), env `SPOOR_BACKUP_DIR` and `SPOOR_PG_BIN_DIR`, the
+  `postgresql-client-17` tools in the image and the `spoor-backups` volume in compose, the jobs `backup` and `exports`,
+  error codes `maintenance`, `backup_too_new`, `other_instances`, `backups_unavailable` and `confirmation_failed`, and
+  the API contract of api.md §13. Every app connection now sets `application_name = 'spoor:<host>:<pid>:<random>'`,
+  and the runtime pool keeps one connection open so a full restore elsewhere sees this instance.
+- **Markdown zip** of a project (api.md §13.4, ADR-0041): `POST /api/v1/projects/:slug/exports` queues an async
+  export task; the file `spoor-<slug>-markdown-<YYYYMMDD>.zip` holds a `README.md` index and one Markdown file per item,
+  and re-imports as a folder of Markdown files (the importer now skips a root `README.md`). Tasks are listed, fetched,
+  downloaded and deleted through `/api/v1/projects/:slug/exports` and `/api/v1/exports/:id[/download]`; the `exports`
+  job cleans up after them.
+- **One project from a backup** (api.md §13.3, instance admins): `POST /api/v1/backups/:id/projects/:projectId/restore`
+  restores a project's archive as a new copy (new ids, `<slug>-r<YYYYMMDD>`, marked by `projects.restored_from`, the
+  restoring admin its only member) or, with the admin's password and the typed slug, over the live project with the
+  original ids (a safety archive of the project as it was is kept 14 days; members, tokens, settings and audit stay).
+  `POST /api/v1/backups/:id/projects/:projectId/exports` makes a Markdown zip of the archive in the backup.
+- **Full restore from the web UI** (api.md §13.2, ADR-0039, instance admins): `POST /api/v1/backups/:id/restore/prepare`
+  checks the dump and returns the phrase and a 5-minute token; `POST /api/v1/backups/:id/restore` (phrase + password)
+  makes a pre-restore backup, puts the instance behind a maintenance gate (503 `maintenance` everywhere but `/healthz`
+  and `GET /api/v1/backups/restore-status`), replaces the database in one transaction (a failure leaves it as it was),
+  migrates an older dump forward and ends every session. Refused while other Spoor instances use the database
+  (409 `other_instances`) and for a backup newer than the server (409 `backup_too_new`). Credentials are not rewound:
+  revoked or deleted tokens stay revoked, disabled or deleted users stay or come back disabled, newer passwords and
+  used or revoked invites are kept (prepare warning `security`); the live backup schedule survives a crash after the
+  commit; a failure after the commit tells the admin to restart Spoor.
+
 ## [0.7.5] - 2026-11-16
 
 ### Added
