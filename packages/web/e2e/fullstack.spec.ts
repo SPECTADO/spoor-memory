@@ -550,3 +550,51 @@ test('demoting a second admin to editor removes New for that user', async ({ bro
   await expect(admin2.getByRole('link', { name: 'New page' })).toHaveCount(0)
   await admin2Context.close()
 })
+
+// ---------------------------------------------------------------- 0.8 backups (ADR-0038, ADR-0041) ----
+
+test('a Markdown zip is prepared in the background on the data tab and downloads', async () => {
+  await admin.goto(`/projects/${SLUG}/settings?tab=data`)
+  await admin.getByRole('button', { name: 'Prepare Markdown zip' }).click()
+  const table = admin.getByRole('table', { name: 'Markdown zips of this project' })
+  // the list polls every 5 s while the task is queued or running
+  const link = table.getByRole('link', { name: new RegExp(`Download spoor-${SLUG}-markdown-\\d{8}\\.zip`) })
+  await expect(link).toBeVisible({ timeout: 30_000 })
+  const [download] = await Promise.all([admin.waitForEvent('download'), link.click()])
+  expect(download.suggestedFilename()).toMatch(new RegExp(`^spoor-${SLUG}-markdown-\\d{8}\\.zip$`))
+  const zip = readFileSync(await download.path())
+  expect(zip.subarray(0, 2).toString()).toBe('PK')
+  expect(zip.includes(Buffer.from('README.md'))).toBe(true)
+})
+
+test('the backups page shows the status; with pg tools a manual backup restores a project as a copy', async () => {
+  await admin.goto('/admin/backups')
+  await expect(admin.getByRole('heading', { level: 1, name: 'Backups' })).toBeVisible()
+  await expect(admin.getByText('Directory', { exact: true })).toBeVisible()
+  const res = await admin.request.get('/api/v1/backups')
+  expect(res.status()).toBe(200)
+  const { status } = (await res.json()) as { status: { available: boolean; reason: string | null } }
+  if (!status.available) {
+    // no usable pg client here (CI installs postgresql-client-17; locally use
+    // SPOOR_PG_BIN_DIR=<repo>/packages/server/test/pg-shim with `pnpm test:db:up`)
+    expect(status.reason).toMatch(/^(pg_tools_missing|pg_version_mismatch)$/)
+    await expect(admin.getByText('Backups are not available', { exact: true })).toBeVisible()
+    await expect(admin.getByRole('button', { name: 'Back up now' })).toBeDisabled()
+    test.info().annotations.push({ type: 'skip-rest', description: `backups unavailable: ${status.reason}` })
+    return
+  }
+  await admin.getByRole('button', { name: 'Back up now' }).click()
+  const projectsButton = admin.getByRole('button', { name: /^Projects in backup \d{8}T\d{6}Z-manual$/ })
+  await expect(projectsButton).toBeVisible({ timeout: 90_000 })
+  await projectsButton.click()
+  const dialog = admin.getByRole('dialog', { name: 'Projects in this backup' })
+  await dialog.getByRole('button', { name: 'Restore Acme as copy' }).click()
+  const form = dialog.getByRole('form', { name: 'Restore Acme as copy form' })
+  await expect(form.getByLabel('Slug of the copy')).toHaveValue(/^acme-r\d{8}$/)
+  await form.getByRole('button', { name: 'Restore as copy' }).click()
+  await expect(dialog.getByText('Restored as a new project')).toBeVisible({ timeout: 30_000 })
+  await dialog.getByRole('link', { name: /^Acme \(restored / }).click()
+  await expect(admin.getByText(/Restored copy/).first()).toBeVisible()
+  await admin.goto(`${new URL(admin.url()).pathname}/memories`)
+  await expect(admin.getByRole('link', { name: new RegExp(WORD, 'i') }).first()).toBeVisible()
+})

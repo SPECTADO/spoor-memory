@@ -11,8 +11,8 @@ secrets: [auth-and-security.md](auth-and-security.md) §12.
 browser / agents ──HTTP──▶ [caddy]? ──▶ app (Node 22, Hono, SPA, MCP, jobs, local embeddings) ──▶ db (pgvector pg17)
                           profile "caddy"                 :3000                                      :5432, volume
 ```
-- Single tenant per deployment (BRIEF). The app container is stateless except the embedding model it carries, so it can be
-  replaced freely; all state is in Postgres.
+- Single tenant per deployment (BRIEF). The app container is stateless except the embedding model it carries and, since 0.8, the
+  backup directory (the `spoor-backups` volume, `SPOOR_BACKUP_DIR`); it can be replaced freely as long as that volume is kept, and all knowledge is in Postgres.
 - Plain HTTP on one port by default. The `caddy` profile adds automatic HTTPS.
 - Only `app` (or `caddy`) publishes a port. `db` is reachable on the compose network only.
 
@@ -53,8 +53,24 @@ RUN mkdir -p "$SPOOR_MODEL_DIR" && cd /out && node scripts/fetch-model.mjs
 
 # ---- runtime ---------------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS runtime
+# Backups (ADR-0038): pg_dump / pg_restore / psql of the database's major version (17) from the PGDG apt repo.
+ADD --chmod=644 --checksum=sha256:0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76 \
+    https://www.postgresql.org/media/keys/ACCC4CF8.asc /usr/share/keyrings/pgdg.asc
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && . /etc/os-release \
+ && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-17 \
+ && rm -rf /var/lib/apt/lists/* \
+ && /usr/lib/postgresql/17/bin/pg_dump --version \
+ && mkdir -p /var/lib/spoor/backups \
+ && chown node:node /var/lib/spoor/backups \
+ && chmod 700 /var/lib/spoor/backups
 ENV NODE_ENV=production SPOOR_PORT=3000 SPOOR_WEB_DIR=/app/web \
-    SPOOR_MIGRATIONS_DIR=/app/drizzle SPOOR_MODEL_DIR=/opt/spoor/models
+    SPOOR_MIGRATIONS_DIR=/app/drizzle SPOOR_MODEL_DIR=/opt/spoor/models \
+    SPOOR_PG_BIN_DIR=/usr/lib/postgresql/17/bin
 WORKDIR /app
 COPY --from=build --chown=node:node /out /app
 COPY --from=build --chown=node:node /repo/packages/web/dist /app/web
@@ -142,6 +158,10 @@ services:
       SPOOR_OLLAMA_EMBED_MODEL: ${SPOOR_OLLAMA_EMBED_MODEL:-}
       SPOOR_OLLAMA_EMBED_DIMS: ${SPOOR_OLLAMA_EMBED_DIMS:-}
       SPOOR_TRUST_PROXY: ${SPOOR_TRUST_PROXY:-}
+      SPOOR_BACKUP_DIR: ${SPOOR_BACKUP_DIR:-/var/lib/spoor/backups}   # backups (ADR-0038)
+      SPOOR_PG_BIN_DIR: ${SPOOR_PG_BIN_DIR:-/usr/lib/postgresql/17/bin}
+    volumes:
+      - spoor-backups:/var/lib/spoor/backups   # or a bind mount writable by uid 1000
     ports:
       - "${SPOOR_HTTP_BIND:-0.0.0.0}:${SPOOR_HTTP_PORT:-3000}:3000"
 
@@ -163,6 +183,7 @@ services:
 
 volumes:
   spoor-pgdata:
+  spoor-backups:
   caddy-data:
   caddy-config:
 ```
@@ -276,6 +297,8 @@ with placeholders and comments; `.env` is gitignored.
 | `SPOOR_UPDATE_CHECK` | `on` | The update check: the only outbound call the server makes on its own (a plain GET of `SPOOR_UPDATE_URL`, no identifying data, 3 s timeout, cached 6 h, 1 h after a failure). `off` = no call and no notice. [operations.md](../operations.md) "Update check" |
 | `SPOOR_UPDATE_URL` | `https://raw.githubusercontent.com/SPECTADO/spoor-memory/main/deploy/latest-release.json` | The release file the check reads (http or https); a mirror for hosts that cannot reach GitHub |
 | `SPOOR_TRUST_PROXY` | unset (off) | Reverse proxies whose `X-Forwarded-For` is believed, for the requester IP the device approval page shows (the only use). Comma-separated keywords `loopback` (127.0.0.0/8, ::1) and `private` (10/8, 172.16/12, 192.168/16, fc00::/7), addresses and CIDR ranges, e.g. `private` for the compose `caddy` profile. When the TCP peer is trusted, the address is the right-most `X-Forwarded-For` hop that is not a trusted proxy (hops a client prepends do not count). Off, `off` or `false`: the TCP peer, forwarded headers ignored. Only list proxies that set or append `X-Forwarded-For` themselves; an invalid entry stops startup |
+| `SPOOR_BACKUP_DIR` | unset; compose: `/var/lib/spoor/backups` (named volume `spoor-backups`) | Backup directory (ADR-0038): `backups/<id>/`, `exports/`, `.tmp/`. Unset = backups unavailable (the app still runs). Absolute path; a bind mount must be writable by uid 1000 |
+| `SPOOR_PG_BIN_DIR` | unset (PATH); image: `/usr/lib/postgresql/17/bin` | Directory of pg_dump, pg_restore and psql. Missing tools, or tools older (major) than the server, make backups unavailable |
 | `NODE_ENV` | `production` in the image | Set by the image; do not change |
 
 Compose-only (read by `docker-compose.yml`, not by the app):
@@ -307,7 +330,7 @@ import `@spoor/shared` from its `dist/`, so jobs that type-check or test build i
 |---|---|---|---|
 | `lint` | | | `pnpm lint` (Biome 2.5.15), build shared, `pnpm typecheck` |
 | `unit` | | | build shared, `pnpm -r run test:unit` (shared, server unit project, web, cli); CLI package smoke test: `pnpm --filter "spoor-memory..." build && pnpm --filter spoor-memory test:pack` (ADR 0013) |
-| `integration` | | pgvector | build shared, `pnpm --filter @spoor/server test:integration` with `SPOOR_JOBS=off` (REST + MCP tools, fake EmbeddingProvider) |
+| `integration` | | pgvector | installs `postgresql-client-17` from PGDG (`SPOOR_PG_BIN_DIR=/usr/lib/postgresql/17/bin`, for the backup tests), build shared, `pnpm --filter @spoor/server test:integration` with `SPOOR_JOBS=off` (REST + MCP tools, fake EmbeddingProvider). Locally the backup tests use real tools on PATH, else a `docker exec` shim into `spoor-test-db` (`packages/server/test/pg-shim`), else they are skipped |
 | `e2e-server` | lint, unit, integration | pgvector | `pnpm build`, `pnpm --filter @spoor/server test:e2e` (real server in process, the built CLI; database `<name>_e2e_test`) |
 | `e2e-web` | lint, unit, integration | pgvector | `pnpm --filter @spoor/web exec playwright install --with-deps chromium`, then `pnpm e2e` (builds shared, server and web; Playwright starts the built server with the fake embedding model on database `<name>_web_e2e_test` and a random port, serving the built SPA); `actions/upload-artifact` uploads `packages/web/playwright-report` and `test-results` on failure |
 | `compose-smoke` | lint, unit, integration | | BRIEF DoD 1 as an operator runs it (deviations H13, review-log-phase5 D1): `.env` from `.env.example` with generated passwords and an admin, `docker compose up -d --build --wait --wait-timeout 600`, `curl /healthz`, the bootstrap admin logs in (`POST /api/v1/auth/login`), logs on failure, `docker compose down -v`. Runs also when `release.yml` calls the workflow |
@@ -379,6 +402,13 @@ docker compose exec -T db pg_restore -U spoor -d spoor --clean --if-exists --no-
    Schedule it from the host (cron or systemd timer) and keep copies off the machine. A file-level copy of the volume is consistent only with the database stopped.
 2. **Portable per-project export**: the zip from the web UI ([api.md](api.md) §9, [data-model.md](data-model.md) §8): Markdown files, per-item revision history and the project audit log. It
    contains no users, memberships, tokens, sessions or embeddings (embeddings are rebuilt on import), so it moves a project to another instance but does not restore an instance.
+
+3. **Backups from the web UI (0.8, ADR-0038 to ADR-0041)**: an instance admin makes, schedules (off by default) and
+   restores backup bundles on `/admin/backups`: `database.dump` (pg_dump custom format, run by the app with the image's
+   `postgresql-client-17`), one export zip per project and `backup.json`, in `SPOOR_BACKUP_DIR` (compose: the
+   `spoor-backups` volume). Full restore and single-project restore run from the UI ([api.md](api.md) §13). The bundles
+   sit next to the database on the same host: copy `backups/` off the machine like any dump. `database.dump` is not
+   downloadable from the web UI.
 
 Test a restore at least once before relying on it; the compose file makes it a five-minute exercise on a scratch machine.
 

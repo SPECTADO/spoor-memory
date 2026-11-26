@@ -226,6 +226,7 @@ export class ProjectService {
       can_edit_library: access.can('library.write'),
       embedding: { model: p.embeddingModel, target: p.embeddingTarget, remaining },
       created_at: p.createdAt.toISOString(),
+      restored_from: p.restoredFrom ?? null,
     }
   }
 

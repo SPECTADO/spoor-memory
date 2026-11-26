@@ -73,6 +73,17 @@ e2e/           Playwright specs; support/ has the server launcher (server.mjs), 
 - `MarkdownEditor value onChange label="Editor"`: CodeMirror 6 with Markdown, loaded lazily; Tab is not captured.
 - `DiffView oldText newText` (`oldText = null` for the first revision): folded line diff with a word-level toggle.
 
+## Backups, restore and export tasks (0.8)
+
+- `/admin/backups` (`pages/admin/BackupsPage.tsx`, with `BackupScheduleForm`, `RestoreDialog`, `ProjectsInBackupDialog`) is
+  instance-admin and cookie only; the endpoints are `getBackups` … `createBackupProjectExport` in `api/endpoints.ts`,
+  the hooks `useBackups`, `useRestoreStatus`, `useProjectExports`, … in `api/hooks.ts`, keys under `['backups']` and
+  `['export-tasks', slug]`. There is no download of `database.dump` anywhere; a Markdown zip is a plain `<a download>`
+  link to the task's `download_url`.
+- `useRestoreStatus(enabled, intervalMs)` polls `restore-status` through 503 `maintenance` and network errors (no retry of
+  its own, `data` stays). Tests pass `pollMs` to `RestoreDialog` to poll fast and `onDone` instead of the real page load.
+- Task lists poll every 5 s only while a task is queued or running (`refetchInterval` as a function of the data).
+
 ## Shell, routes and roles
 
 - Build links with `lib/paths.ts`: `projectPath(slug, rest)`, `itemPath`, `wikiPath` (the shared space is `/shared/…`,
@@ -98,7 +109,11 @@ e2e/           Playwright specs; support/ has the server launcher (server.mjs), 
   wired like `src/index.ts`, with the deterministic fake embedding model) on a random port (`SPOOR_E2E_PORT` pins it) and a
   database of its own, `<test db>_web_e2e_test`, dropped and created per run on the server of `pnpm test:db:up` (or
   `DATABASE_URL`); the bootstrap admin is `admin@example.com` / `admin-password-e2e`. Needs the test database up and
-  Chromium installed once: `pnpm exec playwright install chromium`.
+  Chromium installed once: `pnpm exec playwright install chromium`. The server gets a fresh `SPOOR_BACKUP_DIR`
+  (`<tmpdir>/spoor-web-e2e-<port>`) and passes `SPOOR_PG_BIN_DIR` on from the environment. Without pg client tools the
+  backups step only checks the "not available" state. CI installs postgresql-client-17. Locally,
+  `SPOOR_PG_BIN_DIR=$PWD/packages/server/test/pg-shim pnpm e2e` runs the tools inside the `spoor-test-db` container, so
+  the walk takes a real backup and restores a project from it as a copy.
   - `fullstack.spec.ts` walks the real stack with two browser contexts (admin and an invited user), serially. Reach for
     `sql()` from `e2e/support/db.ts` only for state the UI cannot make quickly (old timestamps), and for API calls from a
     page use `page.request` with an `origin` header (the server checks it on unsafe methods).

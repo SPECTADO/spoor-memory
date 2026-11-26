@@ -7,6 +7,13 @@ import type {
   AdminUserJson,
   AuditFilters,
   AuditRowJson,
+  BackupItemJson,
+  BackupListResponse,
+  BackupProjectsResponse,
+  BackupSettings,
+  BackupSettingsResponse,
+  BackupStartedResponse,
+  BackupVerifyResponse,
   ContextParams,
   ContextPreview,
   DashboardJson,
@@ -15,6 +22,8 @@ import type {
   DuplicateDismissResult,
   EdgeJson,
   EdgesResponse,
+  ExportTaskListResponse,
+  ExportTaskResponse,
   GraphParams,
   GraphResponse,
   ImportResult,
@@ -46,12 +55,17 @@ import type {
   ProjectJson,
   ProjectListItem,
   ProjectPatchRequest,
+  ProjectRestoreRequest,
+  ProjectRestoreResponse,
   ProjectRole,
   RelatedResponse,
   RelationKind,
   RequestFilters,
   RequestRowJson,
   RestoreBody,
+  RestorePrepareResponse,
+  RestoreStartedResponse,
+  RestoreStatusJson,
   ReviewBulkBody,
   ReviewBulkResult,
   ReviewCounts,
@@ -280,6 +294,36 @@ export const getInstanceUsage = (range: UsageRange, o: Sig = {}) =>
   api<UsageJson>('/status/usage', { query: { range }, ...o })
 export const getUpdateInfo = (o: Sig = {}) => api<{ update: UpdateInfoJson | null }>('/status/update', o)
 export const runJob = (name: string) => api<RunJobResult>(`/jobs/${seg(name)}/run`, { method: 'POST' })
+
+// ---- 13. backups, restore, export tasks (IA, cookie only) ---------------------------------------------
+
+const B = (id: string) => `/backups/${seg(id)}`
+export const getBackups = (o: Sig = {}) => api<BackupListResponse>('/backups', o)
+export const putBackupSettings = (body: BackupSettings) =>
+  api<BackupSettingsResponse>('/backups/settings', { method: 'PUT', body })
+export const startBackup = () => api<BackupStartedResponse>('/backups', { method: 'POST' })
+export const patchBackup = (id: string, body: { pinned: boolean }) =>
+  api<BackupItemJson>(B(id), { method: 'PATCH', body })
+export const deleteBackup = (id: string) => api<void>(B(id), { method: 'DELETE' })
+export const verifyBackup = (id: string) => api<BackupVerifyResponse>(`${B(id)}/verify`, { method: 'POST' })
+export const prepareRestore = (id: string) =>
+  api<RestorePrepareResponse>(`${B(id)}/restore/prepare`, { method: 'POST' })
+export const startRestore = (id: string, body: { token: string; password: string; phrase: string }) =>
+  api<RestoreStartedResponse>(`${B(id)}/restore`, { body })
+/** Answers during maintenance too (503 `maintenance` on every other route). */
+export const getRestoreStatus = (o: Sig = {}) => api<RestoreStatusJson>('/backups/restore-status', o)
+export const listBackupProjects = (id: string, o: Sig = {}) =>
+  api<BackupProjectsResponse>(`${B(id)}/projects`, o)
+export const restoreBackupProject = (id: string, projectId: string, body: ProjectRestoreRequest) =>
+  api<ProjectRestoreResponse>(`${B(id)}/projects/${seg(projectId)}/restore`, { body })
+export const createBackupProjectExport = (id: string, projectId: string) =>
+  api<ExportTaskResponse>(`${B(id)}/projects/${seg(projectId)}/exports`, { body: { format: 'markdown' } })
+export const createProjectExport = (slug: string) =>
+  api<ExportTaskResponse>(`${P(slug)}/exports`, { body: { format: 'markdown' } })
+export const listProjectExports = (slug: string, o: Sig = {}) =>
+  api<ExportTaskListResponse>(`${P(slug)}/exports`, o)
+export const getExportTask = (id: string, o: Sig = {}) => api<ExportTaskResponse>(`/exports/${seg(id)}`, o)
+export const deleteExportTask = (id: string) => api<void>(`/exports/${seg(id)}`, { method: 'DELETE' })
 
 /** Public install doc of a project (served by the server, not under /api). */
 export const installDocUrl = (slug: string) => `/p/${seg(slug)}/install.md`

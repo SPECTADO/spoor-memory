@@ -52,7 +52,7 @@ export function toFilters(d: Draft): Omit<AuditFilters, 'cursor'> {
   }
 }
 
-const INSTANCE_ACTION_PREFIXES = ['user.', 'invite.', 'project.', 'job.']
+const INSTANCE_ACTION_PREFIXES = ['user.', 'invite.', 'project.', 'job.', 'backup.', 'instance.']
 
 /** The project audit log of `slug`. */
 export function AuditPanel({ slug }: { slug: string }) {

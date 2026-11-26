@@ -59,11 +59,18 @@ jobs:
           --health-cmd "pg_isready -U spoor -d spoor_test" --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       SPOOR_JOBS: "off"
+      # the backup tests run the real pg client tools of the database's major (ADR-0038; test/pg-tools.ts)
+      SPOOR_PG_BIN_DIR: /usr/lib/postgresql/17/bin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
+      - name: Install postgresql-client-17 (PGDG apt repo)
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @spoor/shared build
       - run: pnpm --filter @spoor/server test:integration # REST + MCP tools against the real Postgres
@@ -97,11 +104,19 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U spoor -d spoor_test" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      # the fullstack walk takes a real backup and restores a project from it (playwright.config.ts passes it on)
+      SPOOR_PG_BIN_DIR: /usr/lib/postgresql/17/bin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc, cache: pnpm }
+      - name: Install postgresql-client-17 (PGDG apt repo)
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
       - run: pnpm install --frozen-lockfile
       # Playwright is a dependency of packages/web only, so `pnpm exec` runs there
       - run: pnpm --filter @spoor/web exec playwright install --with-deps chromium

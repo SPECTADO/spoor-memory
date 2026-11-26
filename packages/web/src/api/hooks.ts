@@ -20,7 +20,10 @@ import * as E from './endpoints'
 import { qk } from './keys'
 import type {
   AuditFilters,
+  BackupListResponse,
+  BackupSettings,
   ContextParams,
+  ExportTaskJson,
   GraphParams,
   InviteCreateBody,
   InviteFilters,
@@ -36,6 +39,7 @@ import type {
   ProjectCreateRequest,
   ProjectJson,
   ProjectPatchRequest,
+  ProjectRestoreRequest,
   ProjectRole,
   RelationKind,
   RequestFilters,
@@ -861,3 +865,140 @@ export function useRunJob() {
     onSettled: () => qc.invalidateQueries({ queryKey: qk.adminJobs() }),
   })
 }
+
+// ---- backups, restore, export tasks (IA, cookie only; api.md §13) ----------------------------------------
+
+/**
+ * The backups page: status, settings and list. Refreshed every 30 s, every 3 s while a backup, verify or
+ * restore runs (`status.running`) or `fast` is set (a manual backup was just started).
+ */
+export const useBackups = (fast = false) =>
+  useQuery({
+    queryKey: qk.backups(),
+    queryFn: ({ signal }) => E.getBackups({ signal }),
+    refetchInterval: (q) => (fast || q.state.data?.status.running ? 3_000 : 30_000),
+  })
+
+export function usePutBackupSettings() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: BackupSettings) => E.putBackupSettings(body),
+    onSuccess: ({ settings, next_due_at }) => {
+      qc.setQueryData<BackupListResponse>(qk.backups(), (old) =>
+        old ? { ...old, settings, status: { ...old.status, next_due_at } } : old,
+      )
+      void qc.invalidateQueries({ queryKey: qk.backups() })
+    },
+  })
+}
+
+const refreshBackups = (qc: QueryClient) => qc.invalidateQueries({ queryKey: qk.backups() })
+
+export function useStartBackup() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: () => E.startBackup(), onSettled: () => refreshBackups(qc) })
+}
+export function usePinBackup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) => E.patchBackup(id, { pinned }),
+    onSettled: () => refreshBackups(qc),
+  })
+}
+export function useDeleteBackup() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (id: string) => E.deleteBackup(id), onSettled: () => refreshBackups(qc) })
+}
+export function useVerifyBackup() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (id: string) => E.verifyBackup(id), onSettled: () => refreshBackups(qc) })
+}
+
+/** Step 1 of a full restore: checks the bundle and hands out the confirmation token. Never cached. */
+export const usePrepareRestore = () => useMutation({ mutationFn: (id: string) => E.prepareRestore(id) })
+export const useStartRestore = () =>
+  useMutation({
+    mutationFn: ({ id, ...body }: { id: string; token: string; password: string; phrase: string }) =>
+      E.startRestore(id, body),
+  })
+
+/**
+ * Polls `GET /backups/restore-status` every 2 s while `enabled`. The server answers 503 `maintenance` on every
+ * other route and goes away for a moment at the end: a failed poll keeps the last answer (`data`) and the poll
+ * simply goes on (no retry of its own, the interval is the retry).
+ */
+export const useRestoreStatus = (enabled: boolean, intervalMs = 2_000) =>
+  useQuery({
+    queryKey: qk.restoreStatus(),
+    queryFn: ({ signal }) => E.getRestoreStatus({ signal }),
+    enabled,
+    refetchInterval: intervalMs,
+    refetchIntervalInBackground: true,
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  })
+
+export const useBackupProjects = (id: string | null) =>
+  useQuery({
+    queryKey: qk.backupProjects(id ?? ''),
+    queryFn: ({ signal }) => E.listBackupProjects(id as string, { signal }),
+    enabled: !!id,
+  })
+
+export function useRestoreBackupProject(backupId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projectId, ...body }: { projectId: string } & ProjectRestoreRequest) =>
+      E.restoreBackupProject(backupId, projectId, body),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: qk.projects() })
+      void qc.invalidateQueries({ queryKey: qk.backupProjects(backupId) })
+      if (r.mode === 'overwrite') {
+        void qc.invalidateQueries({ queryKey: qk.project(r.project.slug) })
+        invalidateItemScope(qc, r.project.slug, { counts: true })
+        void qc.invalidateQueries({ queryKey: qk.audit(r.project.slug) })
+      }
+    },
+  })
+}
+
+/** Open (queued or running) tasks are polled every 5 s (`EXPORT_TASK_POLL_MS`), a list without any is not. */
+const hasOpenTask = (items: ExportTaskJson[] | undefined) =>
+  items?.some((t) => t.status === 'queued' || t.status === 'running') ?? false
+
+export const useProjectExports = (slug: string) =>
+  useQuery({
+    queryKey: qk.exportTasks(slug),
+    queryFn: ({ signal }) => E.listProjectExports(slug, { signal }),
+    refetchInterval: (q) => (hasOpenTask(q.state.data?.items) ? 5_000 : false),
+  })
+
+export function useCreateProjectExport(slug: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => E.createProjectExport(slug),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.exportTasks(slug) }),
+  })
+}
+export function useDeleteExportTask(slug: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => E.deleteExportTask(id),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.exportTasks(slug) }),
+  })
+}
+/** "Download Markdown" from a backup: queues a task; the result is the same download link of the task list. */
+export const useCreateBackupExport = (backupId: string) =>
+  useMutation({
+    mutationFn: (projectId: string) => E.createBackupProjectExport(backupId, projectId),
+  })
+
+/** One task (a Markdown zip made from a backup): polled every 5 s until it is ready, failed or expired. */
+export const useExportTask = (id: string | null) =>
+  useQuery({
+    queryKey: qk.exportTask(id ?? ''),
+    queryFn: ({ signal }) => E.getExportTask(id as string, { signal }),
+    enabled: !!id,
+    refetchInterval: (q) => (q.state.data && !hasOpenTask([q.state.data.task]) ? false : 5_000),
+  })

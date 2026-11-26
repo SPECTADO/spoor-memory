@@ -484,6 +484,15 @@ export interface InstanceStatusJson {
   }
   /** The newest release from the server's update check; null while the check is off or has no answer. */
   update: UpdateInfoJson | null
+  /** Scheduled backups at a glance (api.md §10.4); null when the backup module is absent or failed. */
+  backups?: {
+    enabled: boolean
+    available: boolean
+    reason: string | null
+    last_good_at: string | null
+    next_due_at: string | null
+    overdue: boolean
+  } | null
 }
 /** `GET /api/v1/status/update` and `update` of the status page (operations.md "Update check"). */
 export interface UpdateInfoJson {
@@ -512,3 +521,39 @@ export interface RunJobResult {
   started: boolean
   reason?: 'disabled' | 'running' | 'stopped'
 }
+
+// ---- backups, restore, export tasks (api.md §13, shared/src/api/backups.ts) --------------------------
+
+export type {
+  BackupItemJson,
+  BackupKind,
+  BackupListResponse,
+  BackupProjectJson,
+  BackupProjectsResponse,
+  BackupSettings,
+  BackupSettingsResponse,
+  BackupStartedResponse,
+  BackupStatusJson,
+  BackupTier,
+  BackupTierEvery,
+  BackupVerifyResponse,
+  ExportTaskJson,
+  ExportTaskListResponse,
+  ExportTaskResponse,
+  ProjectRestoreMode,
+  ProjectRestoreRequest,
+  ProjectRestoreResponse,
+  RestoredFromJson,
+  RestorePrepareResponse,
+  RestoreStartedResponse,
+  RestoreStatusJson,
+  RestoreWarningJson,
+} from '@spoor/shared'
+export {
+  BACKUP_TIER_EVERY,
+  BACKUP_TIER_KEEP_MAX,
+  BACKUP_TIERS_MAX,
+  DEFAULT_BACKUP_TIERS,
+  EXPORT_TASK_POLL_MS,
+  isOpenExportTask,
+} from '@spoor/shared'

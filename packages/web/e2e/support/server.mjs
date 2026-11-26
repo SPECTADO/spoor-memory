@@ -4,8 +4,10 @@
 //
 // Env (set by playwright.config.ts): DATABASE_URL (the e2e database, dropped and created here),
 // SPOOR_E2E_ADMIN_DATABASE_URL (a database on the same server to run DROP/CREATE from), SPOOR_PORT,
-// SPOOR_PUBLIC_URL, SPOOR_ADMIN_EMAIL, SPOOR_ADMIN_PASSWORD, SPOOR_WEB_DIR and the other SPOOR_* settings.
-import { existsSync } from 'node:fs'
+// SPOOR_PUBLIC_URL, SPOOR_ADMIN_EMAIL, SPOOR_ADMIN_PASSWORD, SPOOR_WEB_DIR, SPOOR_BACKUP_DIR (emptied and
+// created here; pg tools come from SPOOR_PG_BIN_DIR or PATH, else backups report 'unavailable') and the
+// other SPOOR_* settings.
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -45,6 +47,13 @@ try {
 await admin.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`)
 await admin.query(`CREATE DATABASE "${dbName}"`)
 await admin.end()
+
+// ---- a fresh backup directory (bundles, export task files) ----------------------------------------------
+
+if (process.env.SPOOR_BACKUP_DIR) {
+  rmSync(process.env.SPOOR_BACKUP_DIR, { recursive: true, force: true })
+  mkdirSync(process.env.SPOOR_BACKUP_DIR, { recursive: true, mode: 0o700 })
+}
 
 // ---- the fake embedding model -------------------------------------------------------------------------
 
@@ -119,4 +128,5 @@ serve({ fetch: app.fetch, port: config.SPOOR_PORT, hostname: config.SPOOR_HOST }
 await startup(rt, state, {
   migrate: () => runMigrations({ databaseUrl: config.DATABASE_URL, migrateUrl: config.DATABASE_URL }),
 }).catch((err) => fail(`startup failed: ${err?.stack ?? err}`))
+await modules.backup.restore.resolveAtBoot()
 console.log(`[e2e server] ready on ${config.SPOOR_PUBLIC_URL}`)

@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { projectSettingsPatch } from '../settings.js'
 import { isValidProjectSlug } from '../slug.js'
 import { emailSchema, nameSchema, PROJECT_ROLES, type ProjectRole } from './auth.js'
+import type { RestoredFromJson } from './backups.js'
 import type { ItemSummary } from './items.js'
 import type { LastRequestJson, RequestKind, RequestSurface } from './requests.js'
 import type { ReviewSection } from './review.js'
@@ -80,6 +81,8 @@ export interface ProjectJson {
   can_edit_library: boolean
   embedding: { model: string; target: string | null; remaining: number }
   created_at: string
+  /** Set on a copy restored from a backup (0.8, ADR-0038); always sent by 0.8 servers. */
+  restored_from?: RestoredFromJson | null
 }
 
 /** Items per lifecycle in one space (`GET …/dashboard`). */

@@ -21,6 +21,8 @@ export const ERROR_STATUS = {
   forbidden_origin: 403,
   read_only_space: 403,
   token_project_mismatch: 403,
+  /** Restore confirmation: wrong password or a phrase / slug that does not match (0.8). */
+  confirmation_failed: 403,
   // 404
   not_found: 404,
   user_not_found: 404,
@@ -37,6 +39,12 @@ export const ERROR_STATUS = {
   project_not_empty: 409,
   id_collision: 409,
   already_exists: 409,
+  /** The backup has more migrations than this server knows (0.8). */
+  backup_too_new: 409,
+  /** A full restore while other Spoor app instances are connected to the database (0.8). */
+  other_instances: 409,
+  /** Backups are not available on this instance (no `SPOOR_BACKUP_DIR`, no pg tools, version mismatch). */
+  backups_unavailable: 409,
   /** MCP edit of a repo-mirrored ADR or doc (mcp.md section 7); never raised by REST. */
   mirrored_item: 409,
   // 413
@@ -50,6 +58,8 @@ export const ERROR_STATUS = {
   busy: 503,
   too_many_pending: 503,
   starting: 503,
+  /** A full restore is running: every route except /healthz and the restore status (0.8). */
+  maintenance: 503,
   // 500
   internal: 500,
 } as const

@@ -47,6 +47,22 @@ export interface ImportOptions {
   target: ImportTarget
   remapIds: boolean
   importer: UserContext
+  /**
+   * Run inside this transaction instead of opening one (a project restore from a backup: it deletes the
+   * project's items first and commits both together). The caller commits or rolls back; the chunk rows are
+   * written into it all the same.
+   */
+  tx?: Tx
+  /**
+   * Overwrite restore (lossless only): the project's audit rows were never deleted, so the archive's audit rows
+   * and the `project.import` row are not written (the caller writes `project.restore`).
+   */
+  keepAudit?: boolean
+  /**
+   * A restored copy of the shared space (lossless only, target `new`): the `_shared` archive becomes an
+   * ordinary project instead of being refused.
+   */
+  sharedAsProject?: boolean
 }
 
 /** What the chunk step at the end of the import transaction needs for one item. */
@@ -118,25 +134,26 @@ function mapDbError(err: unknown): unknown {
 }
 
 export async function importArchive(deps: ServerDeps, o: ImportOptions): Promise<ImportOutcome> {
+  const run = async (tx: Tx) => {
+    const outcome =
+      o.parsed.kind === 'lossless'
+        ? await importLossless(tx, deps, o, o.parsed)
+        : await importFiles(tx, deps, o, o.parsed)
+    // step 8: chunk rows with NULL embeddings for every model of the locked set, in THIS transaction, so
+    // full-text search works at once and nothing depends on a background task surviving; the
+    // embed-pending job fills the embeddings (review D-import-chunks)
+    for (const j of outcome.toIndex) {
+      const source = { projectId: j.projectId, space: j.space, title: j.title, tags: j.tags, body: j.body }
+      await deps.ports.search.indexItemChunks(
+        tx,
+        { id: j.id, projectId: j.projectId, space: j.space, revision: j.revision },
+        { source, models: [], chunks: [], pending: true },
+      )
+    }
+    return outcome
+  }
   try {
-    return await withTx(deps.db, async (tx) => {
-      const outcome =
-        o.parsed.kind === 'lossless'
-          ? await importLossless(tx, deps, o, o.parsed)
-          : await importFiles(tx, deps, o, o.parsed)
-      // step 8: chunk rows with NULL embeddings for every model of the locked set, in THIS transaction, so
-      // full-text search works at once and nothing depends on a background task surviving; the
-      // embed-pending job fills the embeddings (review D-import-chunks)
-      for (const j of outcome.toIndex) {
-        const source = { projectId: j.projectId, space: j.space, title: j.title, tags: j.tags, body: j.body }
-        await deps.ports.search.indexItemChunks(
-          tx,
-          { id: j.id, projectId: j.projectId, space: j.space, revision: j.revision },
-          { source, models: [], chunks: [], pending: true },
-        )
-      }
-      return outcome
-    })
+    return o.tx ? await run(o.tx) : await withTx(deps.db, run)
   } catch (err) {
     throw mapDbError(err)
   }
@@ -396,7 +413,8 @@ async function importLossless(
 ): Promise<ImportOutcome> {
   await takeTransferLock(tx)
   const { manifest } = a
-  const targetKind = manifest.project.kind
+  // a restored copy of `_shared` is an ordinary project (target `new` only; resolveTarget refuses the rest)
+  const targetKind = o.sharedAsProject && o.target.kind === 'new' ? 'project' : manifest.project.kind
 
   // ids: kept unless something in the instance already has them
   const itemIds = a.items.map((i) => i.m.id)
@@ -530,6 +548,8 @@ async function importLossless(
   const shared = needsShared ? new RefIndex(await sharedRows(tx)) : null
   const dangling: { from: string; dst_ref: string }[] = []
   const dropped: string[] = []
+  // a copy of `_shared` (sharedAsProject): its `[[shared:...]]` wikilinks keep meaning the live shared space
+  let sharedLinksOfCopy = 0
   const edgeRows = a.edges.flatMap((e) => {
     const src = byOldId.get(e.src_id) as PlannedItem
     const from = itemHandle(
@@ -543,6 +563,7 @@ async function importLossless(
     // `<space>` of a `shared:<space>/<slug>` ref (so a dangling typed edge is classified too)
     let dstSpace: Space | null = null
     const viaShared = e.dst_ref.startsWith('shared:') && !targetShared
+    if (viaShared && isWiki && manifest.project.kind === 'shared') sharedLinksOfCopy++
     if (viaShared) {
       const rest = e.dst_ref.slice('shared:'.length)
       // `supersedes` / `drafted_from` stay inside a project: an edge into `_shared` would mark a shared
@@ -592,13 +613,19 @@ async function importLossless(
     ]
   })
   notes.push(...dropped)
+  if (sharedLinksOfCopy > 0) {
+    notes.push(
+      `${sharedLinksOfCopy} link(s) written [[shared:...]] in this copy point at the live shared space, not at the copy's own items.`,
+    )
+  }
   const one = oneSuperseder(edgeRows)
   if (one.changed) notes.push(supersederNote(one.changed))
   await batched(one.rows, (chunk) => tx.insert(edges).values(chunk))
 
-  // audit: original timestamps, marked
+  // audit: original timestamps, marked (an overwrite restore keeps the project's own rows instead)
+  const archiveAudit = o.keepAudit ? [] : a.audit
   await batched(
-    a.audit,
+    archiveAudit,
     (chunk) =>
       tx.insert(auditLog).values(
         chunk.map((l) => ({
@@ -625,14 +652,16 @@ async function importLossless(
     items: a.items.length,
     revisions: revisionRows.length,
     edges: edgeRows.length,
-    audit: a.audit.length,
+    audit: archiveAudit.length,
   }
-  await writeAudit(tx, webActor(o.importer), {
-    projectId: project.id,
-    action: 'project.import',
-    summary: `${o.importer.user.email} imported an archive into ${project.slug}`,
-    data: { counts, remapped: o.remapIds, history: manifest.history, source_slug: manifest.project.slug },
-  })
+  if (!o.keepAudit) {
+    await writeAudit(tx, webActor(o.importer), {
+      projectId: project.id,
+      action: 'project.import',
+      summary: `${o.importer.user.email} imported an archive into ${project.slug}`,
+      data: { counts, remapped: o.remapIds, history: manifest.history, source_slug: manifest.project.slug },
+    })
+  }
 
   const appended = a.items
     .filter((i) => i.appended)

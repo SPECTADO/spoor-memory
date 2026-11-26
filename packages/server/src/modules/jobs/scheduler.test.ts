@@ -160,6 +160,25 @@ describe('tick loop', () => {
     await scheduler.stop()
   })
 
+  it('resume() starts ticking again after stop() (a full restore pauses the scheduler)', async () => {
+    const c = counter()
+    const { clock, scheduler } = harness([job('purge-ephemeral', c.handler, { everyMs: MIN })])
+    expect(scheduler.active).toBe(false)
+    await scheduler.resume() // not stopped: nothing happens
+    expect(scheduler.active).toBe(false)
+    await scheduler.start()
+    expect(scheduler.active).toBe(true)
+    await scheduler.stop()
+    expect(scheduler.active).toBe(false)
+    expect(clock.pending()).toEqual([])
+    await scheduler.resume()
+    expect(scheduler.active).toBe(true)
+    clock.advance(30_000)
+    await settle()
+    expect(c.calls).toHaveLength(1)
+    await scheduler.stop()
+  })
+
   it('runs a job only when it is due (last_run_at <= now - every)', async () => {
     const c = counter()
     const { clock, scheduler } = harness([job('cleanup', c.handler)])

@@ -112,4 +112,24 @@ describe('loadConfig', () => {
     )
     expect(loadConfig({ ...base, SPOOR_PUBLIC_URL: 'https://x.example' }).cookieSecure).toBe(true)
   })
+
+  it('backups: SPOOR_BACKUP_DIR and SPOOR_PG_BIN_DIR are optional absolute paths', () => {
+    const c = loadConfig(base)
+    expect(c.SPOOR_BACKUP_DIR).toBeUndefined()
+    expect(c.SPOOR_PG_BIN_DIR).toBeUndefined()
+    expect(
+      loadConfig({ ...base, SPOOR_BACKUP_DIR: '', SPOOR_PG_BIN_DIR: '' }).SPOOR_BACKUP_DIR,
+    ).toBeUndefined()
+    const set = loadConfig({
+      ...base,
+      SPOOR_BACKUP_DIR: '/var/lib/spoor/backups',
+      SPOOR_PG_BIN_DIR: '/usr/lib/postgresql/17/bin',
+    })
+    expect(set).toMatchObject({
+      SPOOR_BACKUP_DIR: '/var/lib/spoor/backups',
+      SPOOR_PG_BIN_DIR: '/usr/lib/postgresql/17/bin',
+    })
+    expect(() => loadConfig({ ...base, SPOOR_BACKUP_DIR: 'backups' })).toThrow(/SPOOR_BACKUP_DIR/)
+    expect(() => loadConfig({ ...base, SPOOR_PG_BIN_DIR: './bin' })).toThrow(/SPOOR_PG_BIN_DIR/)
+  })
 })

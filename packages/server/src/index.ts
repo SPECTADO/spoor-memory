@@ -56,11 +56,22 @@ async function connectedStartup() {
   }
 }
 
-connectedStartup().catch((err) => {
-  state.db = state.db === 'ok' ? 'ok' : 'failed'
-  logger.fatal({ err }, 'startup failed')
-  process.exit(1)
-})
+connectedStartup()
+  .then(async () => {
+    // a full restore a previous process left open: its restore-state.json and the nonce decide (ADR-0039)
+    const restore = await modules.backup.restore.resolveAtBoot().catch((err) => {
+      logger.warn({ err }, 'restore state unreadable')
+      return null
+    })
+    // Markdown zips a restart put back in the queue (ADR-0041): picked up now, also with SPOOR_JOBS=off;
+    // not while another process is still restoring the database
+    if (restore?.state !== 'running') modules.transfer.exportTasks.kick()
+  })
+  .catch((err) => {
+    state.db = state.db === 'ok' ? 'ok' : 'failed'
+    logger.fatal({ err }, 'startup failed')
+    process.exit(1)
+  })
 
 let stopping = false
 function onSignal(signal: string) {
@@ -72,6 +83,8 @@ function onSignal(signal: string) {
   modules.mcp.close() // stop the MCP session sweep, close every session
   shutdown(rt, {
     closeServer: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    // a running Markdown zip goes back to `queued` (ADR-0041) before the pool closes
+    drain: () => modules.transfer.exportTasks.stop(),
     endPool: () => pool.end(),
   })
     .then(() => process.exit(0))

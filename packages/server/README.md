@@ -39,6 +39,17 @@ src/
     deps.ts           ServerDeps: { config, logger, db, ports }
   modules/<name>/     one folder per domain module:
     auth/             passwords, sessions, cookie guards, bearer guards (bearer.ts), the permission matrix (permissions.ts), invites, users
+    backup/           0.8 backups (ADR-0038 to ADR-0041): pgtools.ts runs pg_dump / pg_restore / psql (connection only in
+                      PG* env vars, data only through pipes); catalog.ts (the directory is the catalog), bundle.ts
+                      (write .tmp -> verify -> rename), retention.ts (pure schedule + tiered pruning), lock.ts (one heavy
+                      operation across containers), settings.ts (instance_settings 'backup'), service.ts, routes.ts;
+                      project-restore.ts + project-routes.ts (one project from a backup: restore as a copy or
+                      overwrite through the transfer importer, the `backup` source of export tasks; needs the
+                      transfer module, `createBackupModule(deps, opts, { transfer })`); restore.ts +
+                      restore-routes.ts (full restore: prepare, confirm, the psql transaction prelude + pg_restore
+                      script + epilogue, restore-state.json) and maintenance.ts (the gate src/app.ts mounts after
+                      /healthz); src/app.ts gives it its host (`backup.restore.setHost`: scheduler, export tasks, MCP
+                      sessions, `startupStepsAfterRestore` of src/runtime.ts)
     projects/         projects + settings, memberships, project visibility (access.ts: loadProjectAccess), the `_shared` seed
     tokens/           API tokens (create, list, revoke, mintToken) and `GET /p/:slug/api/whoami`
     audit/            reading the audit log (project and instance level)
@@ -65,7 +76,10 @@ src/
                       run SearchJobs and noopSearchJobs
     transfer/         export zip, lossless and Markdown-folder import (chunk rows written in the import
                       transaction), zip reader with hard caps; file content goes through @spoor/shared and the
-                      items module's cleaners
+                      items module's cleaners. 0.8: markdown.ts (the Markdown zip of a parsed archive, README.md
+                      index) and tasks.ts (ExportTaskService: export_tasks store, in-process runner with
+                      SKIP LOCKED claims and heartbeats, the `exports` job handler; `setSourceLoader('backup', …)`
+                      for the backup module). testApp's `exports` option sets its dir, timings and `autoRun`
     device/           RFC 8628 device login: public `code`/`token` (publicRoutes, `/p/:slug/device`), cookie
                       `device/lookup|approve|deny` (routes); user codes, client-name cleaning, the in-memory miss
                       lock (limiter.ts), the instance-wide row cap; mints through the tokens module's `mintToken`;
@@ -196,12 +210,17 @@ Harness (`test/`):
   creates and drops indexes and `TRUNCATE` does not undo that. The harness refuses a database whose name
   does not end in `_test` (override: `SPOOR_TEST_ALLOW_ANY_DB=1`).
 - `db.ts`: `testDb()` / `testPool()`; `hnsw.ts`: the default index name and an index listing.
+- `pg-tools.ts`: `resolveTestPgTools()` for the backup tests: `SPOOR_PG_BIN_DIR` or pg tools on PATH (major 17 or
+  newer), else `pg-shim/` (pg_dump, pg_restore, psql run through `docker exec -i spoor-test-db`, the container of
+  `pnpm test:db:up`; `SPOOR_PG_SHIM_CONTAINER` overrides the name), else `{available:false, reason}` and the tests skip.
 - `factories.ts`: `createUser`, `createAdmin`, `createProject`, `createSharedProject`, `addMember`,
   `createToken` (returns the plaintext `secret`), `createItem` (revision 1, real number counters). The
   default password `DEFAULT_PASSWORD` is hashed once per file.
 - `http.ts`: `testApp({ env?, ports? })` builds the real app (`createApp` with `createAppModules`) on the
   test database and returns `{ app, ports, modules }`; `Client` is a small browser (cookie jar, same-origin
-  `Origin`, JSON bodies); `loginAs(app, email, password)`.
+  `Origin`, JSON bodies); `loginAs(app, email, password)`. Backup tests pass
+  `testApp({ env: { SPOOR_BACKUP_DIR }, backup: { tools: pg.tools, now?, busyDelayMs? } })` and reach the service
+  as `modules.backup.service` (`idle()` waits for a manual backup started by `POST /backups`).
 - `ports.ts`: the in-memory port fakes (above).
 - `cli-surface-app.ts`: `cliSurfaceApp()` = `testApp()` plus handles on the device, install, mirror and mcp
   modules (`testApp` takes the device overrides and the install version too).

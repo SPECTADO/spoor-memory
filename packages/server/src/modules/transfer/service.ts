@@ -13,7 +13,7 @@ import type { ServerDeps } from '../../lib/deps.js'
 import { ApiError } from '../../lib/errors.js'
 import { VERSION } from '../../version.js'
 import { assertCan, type UserContext, webPrincipal } from '../auth/index.js'
-import type { ProjectAccess } from '../projects/index.js'
+import type { ProjectAccess, ProjectRow } from '../projects/index.js'
 import { entryAllowed, parseArchive } from './archive.js'
 import { buildExport, type ExportResult } from './export.js'
 import { type ImportResponse, type ImportTarget, importArchive } from './import.js'
@@ -50,6 +50,24 @@ export class TransferService {
     return this.#exclusive(() =>
       buildExport(this.deps.db, access.project, { history: opts.history, version: VERSION }),
     )
+  }
+
+  /**
+   * The archive an export task (tasks.ts) turns into a Markdown zip: without history, under the same
+   * one-at-a-time rule as the synchronous export. The flag is held only while `buildExport` reads; the
+   * caller zips afterwards. No permission check here: the task runner checks that the requester still has
+   * `project.transfer` right before it calls this (tasks.ts).
+   */
+  exportForTask(project: ProjectRow): Promise<ExportResult> {
+    return this.#exclusive(() => buildExport(this.deps.db, project, { history: false, version: VERSION }))
+  }
+
+  /**
+   * Run `fn` under the one-import-or-export-at-a-time flag (503 `busy` when taken). The project restore from a
+   * backup (backup/project-restore.ts) uses it; its transaction also takes the transfer advisory lock.
+   */
+  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.#exclusive(fn)
   }
 
   /** `POST /projects/import`: a new project from an archive. Instance admins only. */

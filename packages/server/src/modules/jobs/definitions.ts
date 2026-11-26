@@ -6,7 +6,7 @@ import type { JobName } from '../../ports.js'
 import { runCleanup } from './cleanup.js'
 import { runPurgeEphemeral } from './purge.js'
 import { embedPendingHandler, noopSearchJobs, reembedHandler, type SearchJobs } from './search-jobs.js'
-import type { JobDefinition, JobStats } from './types.js'
+import type { JobDefinition, JobHandler, JobStats } from './types.js'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -17,6 +17,9 @@ export const JOB_SCHEDULE: Record<JobName, { everyMs: number; leaseMs: number; b
   reembed: { everyMs: MIN, leaseMs: 5 * MIN },
   'purge-ephemeral': { everyMs: HOUR, leaseMs: 5 * MIN },
   'resource-sample': { everyMs: 5 * MIN, leaseMs: 2 * MIN },
+  // 0.8: the handler decides whether a scheduled backup is due (ADR-0040); the lease is renewed while working
+  backup: { everyMs: 15 * MIN, leaseMs: 10 * MIN },
+  exports: { everyMs: MIN, leaseMs: 2 * MIN },
 }
 
 export function jobDefinitions(opts: { searchJobs?: SearchJobs } = {}): JobDefinition[] {
@@ -48,3 +51,24 @@ export function resourceSampleJob(sample: () => Promise<JobStats>): JobDefinitio
     handler: () => sample(),
   }
 }
+
+/**
+ * `backup` (ADR-0038, ADR-0040): every 15 minutes the handler checks whether a scheduled backup is due and
+ * makes it (then prunes). Registered by app.ts with the backup module's handler; a `job_runs` row only when a
+ * backup was made (`markWork`) or the run failed.
+ */
+export function backupJob(handler: JobHandler): JobDefinition {
+  return { name: 'backup', ...JOB_SCHEDULE.backup, recordOnlyWithWork: true, handler }
+}
+
+/**
+ * `exports` (ADR-0041): picks up queued export tasks left after a restart, fails running tasks whose heartbeat
+ * is older than 5 minutes, expires ready files after 24 hours and deletes old safety archives. Registered by
+ * app.ts with the transfer module's handler; a `job_runs` row only when it did something or failed.
+ */
+export function exportsJob(handler: JobHandler): JobDefinition {
+  return { name: 'exports', ...JOB_SCHEDULE.exports, recordOnlyWithWork: true, handler }
+}
+
+/** A handler that does nothing: the placeholder until a module supplies the real one. */
+export const noopJobHandler: JobHandler = async () => ({})

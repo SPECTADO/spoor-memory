@@ -58,7 +58,7 @@ describe.skipIf(!url)('migrations against a real Postgres', () => {
     )
     const have = new Set(res.rows.map((r) => r.table_name))
     const expected = Object.values(TABLES).map((t) => getTableName(t))
-    expect(expected).toHaveLength(17)
+    expect(expected).toHaveLength(19)
     for (const t of expected) expect(have, t).toContain(t)
   })
 
@@ -84,7 +84,21 @@ describe.skipIf(!url)('migrations against a real Postgres', () => {
     ) as { entries: { tag: string }[] }
     expect(journal.entries.map((e) => e.tag)).toContain('0007_edges_one_superseder')
     expect(journal.entries.map((e) => e.tag)).toContain('0008_duplicate_pairs')
-    expect(journal.entries.at(-1)?.tag).toBe('0009_usage_and_resource_samples')
+    expect(journal.entries.map((e) => e.tag)).toContain('0009_usage_and_resource_samples')
+    expect(journal.entries.at(-1)?.tag).toBe('0010_backups')
+    // 0010 (0.8 backups): the restored-copy marker and the two new tables' checks
+    const restoredFrom = await client.query<{ data_type: string; is_nullable: string }>(
+      `SELECT data_type, is_nullable FROM information_schema.columns
+        WHERE table_name = 'projects' AND column_name = 'restored_from'`,
+    )
+    expect(restoredFrom.rows).toEqual([{ data_type: 'jsonb', is_nullable: 'YES' }])
+    const checks = await client.query<{ conname: string }>(
+      `SELECT conname FROM pg_constraint WHERE conname LIKE 'export_tasks_%_check' ORDER BY 1`,
+    )
+    expect(checks.rows.map((r) => r.conname)).toEqual([
+      'export_tasks_format_check',
+      'export_tasks_status_check',
+    ])
     const usageIdx = await client.query<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes
         WHERE indexname IN ('item_revisions_created_idx', 'items_created_idx', 'resource_samples_at_idx') ORDER BY 1`,

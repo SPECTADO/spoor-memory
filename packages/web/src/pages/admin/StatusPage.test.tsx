@@ -130,6 +130,31 @@ describe('AdminStatusPage', () => {
     expect(plain).not.toHaveTextContent('latest')
   })
 
+  it('warns when scheduled backups are on and the last good one is overdue', async () => {
+    const backups = (overdue: boolean, enabled: boolean) => ({
+      status: { available: true, overdue, last_good_at: '2026-11-01T03:00:00Z', running: null },
+      settings: { enabled },
+      items: [],
+    })
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({ is_admin: true })],
+      'GET /api/v1/status': [200, status],
+      'GET /api/v1/backups': [200, backups(true, true)],
+    })
+    const { unmount } = renderApp('/admin/status')
+    expect(await screen.findByText('Backups need attention')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open Backups' })).toHaveAttribute('href', '/admin/backups')
+    unmount()
+    mockApi({
+      'GET /api/v1/me': [200, meFixture({ is_admin: true })],
+      'GET /api/v1/status': [200, status],
+      'GET /api/v1/backups': [200, backups(true, false)],
+    })
+    renderApp('/admin/status')
+    await screen.findByRole('region', { name: 'Installation' })
+    expect(screen.queryByText('Backups need attention')).not.toBeInTheDocument()
+  })
+
   it('formats byte counts', () => {
     expect(bytes(512)).toBe('512 B')
     expect(bytes(1536)).toBe('1.5 KB')

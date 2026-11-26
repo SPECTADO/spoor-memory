@@ -15,7 +15,7 @@ import type { Space } from '../../ports.js'
 import { itemHandle } from '../items/index.js'
 import type { ProjectRow } from '../projects/index.js'
 import { sha256Hex } from './canonical.js'
-import { exportFrontmatter } from './content.js'
+import { type ExportFrontmatterInput, exportFrontmatter } from './content.js'
 import { takeTransferLock } from './import.js'
 import { FORMAT } from './schemas.js'
 import { writeZip, ZIP_LIMITS } from './zip.js'
@@ -42,6 +42,59 @@ const iso = (d: Date | null) => (d === null ? null : d.toISOString())
 const pad4 = (n: number) => String(n).padStart(4, '0')
 const lines = (rows: unknown[]) =>
   rows.length === 0 ? '' : `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`
+
+export interface EdgeFmItem {
+  id: string
+  space: Space
+  number: number
+  adrNumber: number | null
+}
+
+export interface EdgeFmEdge {
+  srcId: string
+  kind: string
+  dstRef: string
+  dstId: string | null
+}
+
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
+/**
+ * The edge-derived frontmatter of every item of one project (`relations`, `supersedes`, `superseded_by`,
+ * `drafted_from`), as the export writes it. Shared by `buildExport` and the Markdown zip (markdown.ts), so both
+ * produce the same files. `superseded_by` is the handle of the lowest-numbered superseding item.
+ */
+export function edgeFrontmatter(
+  itemList: readonly EdgeFmItem[],
+  edgeList: readonly EdgeFmEdge[],
+): (id: string) => Pick<ExportFrontmatterInput, 'relations' | 'supersedes' | 'supersededBy' | 'draftedFrom'> {
+  const byId = new Map(itemList.map((i) => [i.id, i]))
+  // typed edges per source, supersede chain per target
+  const typed = new Map<string, { kind: string; to: string }[]>()
+  const supersedes = new Map<string, string>()
+  const drafted = new Map<string, string[]>()
+  const supersededBy = new Map<string, EdgeFmItem>()
+  for (const e of edgeList) {
+    if (TYPED.has(e.kind)) typed.set(e.srcId, [...(typed.get(e.srcId) ?? []), { kind: e.kind, to: e.dstRef }])
+    else if (e.kind === 'supersedes') {
+      supersedes.set(e.srcId, e.dstRef)
+      const src = byId.get(e.srcId)
+      if (e.dstId && src) {
+        const cur = supersededBy.get(e.dstId)
+        if (!cur || src.number < cur.number) supersededBy.set(e.dstId, src)
+      }
+    } else if (e.kind === 'drafted_from') drafted.set(e.srcId, [...(drafted.get(e.srcId) ?? []), e.dstRef])
+  }
+  return (id) => {
+    const sb = supersededBy.get(id)
+    return {
+      relations: [...(typed.get(id) ?? [])].sort((a, b) => cmp(a.kind, b.kind) || cmp(a.to, b.to)),
+      supersedes: supersedes.get(id) ?? null,
+      supersededBy: sb ? itemHandle(sb) : null,
+      draftedFrom: [...(drafted.get(id) ?? [])].sort(cmp),
+    }
+  }
+}
 
 export async function buildExport(
   db: Db,
@@ -92,27 +145,15 @@ export async function buildExport(
     'repeatable read',
   )
 
-  const byId = new Map(data.itemRows.map((i) => [i.id, i]))
-  const handleOf = (i: (typeof data.itemRows)[number]) =>
-    itemHandle({ space: i.space as Space, number: i.number, adrNumber: i.adrNumber })
-
-  // typed edges per source, supersede chain per target
-  const typed = new Map<string, { kind: string; to: string }[]>()
-  const supersedes = new Map<string, string>()
-  const drafted = new Map<string, string[]>()
-  const supersededBy = new Map<string, (typeof data.itemRows)[number]>()
-  for (const e of data.edgeRows) {
-    if (TYPED.has(e.kind)) typed.set(e.srcId, [...(typed.get(e.srcId) ?? []), { kind: e.kind, to: e.dstRef }])
-    else if (e.kind === 'supersedes') {
-      supersedes.set(e.srcId, e.dstRef)
-      const src = byId.get(e.srcId)
-      if (e.dstId && src) {
-        const cur = supersededBy.get(e.dstId)
-        if (!cur || src.number < cur.number) supersededBy.set(e.dstId, src)
-      }
-    } else if (e.kind === 'drafted_from') drafted.set(e.srcId, [...(drafted.get(e.srcId) ?? []), e.dstRef])
-  }
-  const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+  const edgeFm = edgeFrontmatter(
+    data.itemRows.map((i) => ({
+      id: i.id,
+      space: i.space as Space,
+      number: i.number,
+      adrNumber: i.adrNumber,
+    })),
+    data.edgeRows,
+  )
 
   const files: Record<string, Uint8Array> = {}
   let total = 0
@@ -128,7 +169,6 @@ export async function buildExport(
     const space = i.space as Space
     const path =
       space === 'decisions' ? `decisions/${pad4(i.adrNumber ?? 0)}-${i.slug}.md` : `${space}/${i.slug}.md`
-    const sb = supersededBy.get(i.id)
     const fm = exportFrontmatter({
       id: i.id,
       space,
@@ -144,10 +184,7 @@ export async function buildExport(
       adrNumber: i.adrNumber,
       decidedOn: i.decidedOn,
       extras: i.frontmatter,
-      relations: [...(typed.get(i.id) ?? [])].sort((a, b) => cmp(a.kind, b.kind) || cmp(a.to, b.to)),
-      supersedes: supersedes.get(i.id) ?? null,
-      supersededBy: sb ? handleOf(sb) : null,
-      draftedFrom: [...(drafted.get(i.id) ?? [])].sort(cmp),
+      ...edgeFm(i.id),
     })
     const bytes = strToU8(serializeMarkdown(fm, i.body))
     put(path, bytes, ZIP_LIMITS.maxEntryBytes)

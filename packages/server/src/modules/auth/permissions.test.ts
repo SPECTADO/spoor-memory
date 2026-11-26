@@ -176,6 +176,14 @@ const MATRIX: Row[] = [
   { row: '_shared: jobs', action: 'jobs.read', target: { shared: true }, web: ['IA'], rest: [], mcp: [] },
   // ADR-0018: the agent request log; `_shared` has none (tokens never target it)
   { row: 'agent request log', action: 'requests.read', web: ['IA', 'PA'], rest: [], mcp: [] },
+  // 0.8 (ADR-0038 to ADR-0041): backups, restore and projects from a backup; instance-level, IA only
+  {
+    row: 'backups, restore, projects from a backup',
+    action: 'backups.manage',
+    web: ['IA'],
+    rest: [],
+    mcp: [],
+  },
   {
     row: '_shared: agent request log',
     action: 'requests.read',

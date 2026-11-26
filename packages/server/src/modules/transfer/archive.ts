@@ -25,9 +25,16 @@ import {
   revisionLine,
 } from './schemas.js'
 
+/**
+ * A root `README.md` is the index of a Markdown zip (markdown.ts, ADR-0041): accepted and skipped by both
+ * parsers, never imported as an item.
+ */
+export const README_ENTRY = 'README.md'
+
 /** Names an import accepts (data-model.md section 8). */
 export const ENTRY_ALLOWLIST: RegExp[] = [
   /^manifest\.json$/,
+  /^README\.md$/,
   /^audit\.jsonl$/,
   /^(?:memories|docs|library)\/[a-z0-9-]{1,80}\.md$/,
   /^decisions\/\d{4,5}-[a-z0-9-]{1,80}\.md$/,
@@ -304,7 +311,7 @@ function parseLossless(entries: Map<string, Uint8Array>): LosslessArchive {
 
   // entries must be exactly the ones the manifest names
   for (const name of entries.keys()) {
-    if (name === 'manifest.json') continue
+    if (name === 'manifest.json' || name === README_ENTRY) continue
     if (name === 'audit.jsonl') {
       if (!manifest.history)
         throw invalidArchive('audit.jsonl present but the manifest says history is false.')
@@ -544,6 +551,7 @@ function parseFiles(entries: Map<string, Uint8Array>): FilesArchive {
   const files: FileItem[] = []
   const notes: string[] = []
   for (const name of [...entries.keys()].sort()) {
+    if (name === README_ENTRY) continue
     if (name.startsWith('revisions/') || name === 'audit.jsonl') {
       throw invalidArchive('Revisions and audit rows need a manifest.json.', [
         { path: shortName(name), message: 'no manifest' },

@@ -205,7 +205,7 @@ services:
       retries: 20
 
   app:
-    image: ghcr.io/spectado/spoor-memory:latest # pin a version such as :0.7.5 in production
+    image: ghcr.io/spectado/spoor-memory:latest # pin a version such as :0.8.0 in production
     restart: unless-stopped
     init: true
     stop_grace_period: 40s
@@ -218,6 +218,9 @@ services:
       SPOOR_PUBLIC_URL: ${SPOOR_PUBLIC_URL:-http://localhost:3000}
       SPOOR_ADMIN_EMAIL: ${SPOOR_ADMIN_EMAIL:?set SPOOR_ADMIN_EMAIL in .env}
       SPOOR_ADMIN_PASSWORD: ${SPOOR_ADMIN_PASSWORD:?set SPOOR_ADMIN_PASSWORD in .env}
+      SPOOR_BACKUP_DIR: /var/lib/spoor/backups # backups from /admin/backups (0.8)
+    volumes:
+      - spoor-backups:/var/lib/spoor/backups
     ports:
       - "3000:3000"
 
@@ -232,6 +235,7 @@ configs:
 
 volumes:
   spoor-pgdata:
+  spoor-backups:
 ```
 
 **2. Put a `.env` next to it:**
@@ -263,7 +267,7 @@ HTTPS. To use it, or to build the image yourself:
 
 ```sh
 git clone https://github.com/SPECTADO/spoor-memory.git && cd spoor-memory
-cp .env.example .env             # fill it in; set SPOOR_IMAGE=ghcr.io/spectado/spoor-memory:0.7.5 to pull
+cp .env.example .env             # fill it in; set SPOOR_IMAGE=ghcr.io/spectado/spoor-memory:0.8.0 to pull
 docker compose pull && docker compose up -d
 # or build from the checkout: leave SPOOR_IMAGE at its default and run
 docker compose up -d --build
@@ -273,7 +277,7 @@ docker compose up -d --build
 
 | tag | what it is |
 |---|---|
-| `x.y.z`, `x.y` (e.g. `0.7.5`, `0.7`) | a release. Use this in production |
+| `x.y.z`, `x.y` (e.g. `0.8.0`, `0.8`) | a release. Use this in production |
 | `latest` | the highest release |
 | `develop` | the newest commit on `main` that passed CI |
 | `sha-<short>` | one specific `main` build, for pinning or rolling back |
@@ -307,7 +311,7 @@ For nginx, Traefik or a load balancer of your own, see [docs/operations.md](docs
 The `spoor` CLI connects a repository to a project. Every developer installs it once (Node 22 or later):
 
 ```sh
-npm i -g spoor-memory@0.7.5        # use the version of your server
+npm i -g spoor-memory@0.8.0        # use the version of your server
 ```
 
 Then, in the root of the repository:
@@ -387,6 +391,7 @@ Read by the app:
 | `SPOOR_PUSH_CONCURRENCY` | `3` | repo pushes and imports in flight per project (1 to 64). More get `503 busy` |
 | `SPOOR_JOBS` | `on` | `off` disables the background scheduler (cleanup, embeddings, usage samples) |
 | `SPOOR_DB_POOL_MAX` | `10` | maximum Postgres connections (1 to 500) |
+| `SPOOR_BACKUP_DIR` | compose: `/var/lib/spoor/backups` (the `spoor-backups` volume) | where backups, Markdown zips and safety archives are written (0.8). Unset = backups unavailable. A bind mount must be writable by uid 1000 |
 
 Set by Compose or the image. Change these only when you run the app without the compose file:
 
@@ -396,6 +401,7 @@ Set by Compose or the image. Change these only when you run the app without the 
 | `DATABASE_MIGRATE_URL` | unset | superuser URL, used once at startup for `CREATE EXTENSION`. Unset: the `vector` and `unaccent` extensions must exist already |
 | `SPOOR_PORT`, `SPOOR_HOST` | `3000`, `0.0.0.0` | listen port and address inside the container |
 | `SPOOR_MODEL_DIR` | `/opt/spoor/models` | where the local embedding model lives |
+| `SPOOR_PG_BIN_DIR` | `/usr/lib/postgresql/17/bin` in the image | where pg_dump, pg_restore and psql live (major 17, as the database); unset = PATH |
 | `SPOOR_WEB_DIR`, `SPOOR_MIGRATIONS_DIR` | set by the image | paths of the built web UI and the migrations |
 | `NODE_ENV` | `production` in the image | do not change |
 
@@ -532,8 +538,12 @@ Details and other models: [docs/operations.md](docs/operations.md), section 7.
 
 ## Operating it
 
-- **Backup.** `docker compose exec -T db pg_dump -U spoor -Fc spoor > spoor-$(date +%F).dump`. The file holds password
-  and token hashes, so treat it as a secret. A project can also be exported as a zip from its Settings page.
+- **Backup.** Instance admins make, schedule and restore backups on `/admin/backups` (0.8): a verified bundle with a
+  `pg_dump` of the database plus one export zip per project, in `SPOOR_BACKUP_DIR` (the `spoor-backups` volume in the
+  compose file). Scheduled backups are off until you enable them. The bundles sit next to the database, so copy them off
+  the machine; the dump holds password and token hashes, so treat it as a secret (the web UI never offers it for download).
+  A manual `docker compose exec -T db pg_dump -U spoor -Fc spoor > spoor-$(date +%F).dump` still works as a fallback, and
+  a project can be exported as a zip or a Markdown zip from its Settings page. Details: [docs/operations.md](docs/operations.md), sections 5 and 6.
 - **Upgrade.** Back up, set the new image version (in `docker-compose.yml`, or `SPOOR_IMAGE` with the repository's file), then `docker compose pull && docker compose up -d`.
   Migrations run at startup and are forward-only; to roll back, restore the dump and start the older image.
 - **Health.** `GET /healthz` reports the database, migrations and the embedding model. Instance admins see status, usage
@@ -548,7 +558,7 @@ TLS, proxies, restore, troubleshooting and releasing: [docs/operations.md](docs/
 
 | read | for |
 |---|---|
-| [docs/operations.md](docs/operations.md) | deploying and running it: env vars, TLS, proxies, backup, restore, upgrades, troubleshooting |
+| [docs/operations.md](docs/operations.md) | deploying and running it: env vars, TLS, proxies, backups, restore, upgrades, troubleshooting |
 | [docs/user-guide.md](docs/user-guide.md) | the web UI: projects, spaces, the map and suggested links, item lifecycle, editing, tokens, admin |
 | [docs/agent-guide.md](docs/agent-guide.md) | what agents get: digest, tools, links, hooks, drafting, mirror rules, token costs |
 | [packages/cli/README.md](packages/cli/README.md) | the CLI: commands, configuration, imports |

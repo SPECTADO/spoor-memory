@@ -125,6 +125,7 @@ CREATE TABLE projects (
   embedding_target text,                          -- non-null while a re-embed is running
   created_by       uuid REFERENCES users(id) ON DELETE SET NULL,
   created_at       timestamptz NOT NULL DEFAULT now(),
+  restored_from    jsonb,                         -- {backup_id, source_slug, restored_at}: a copy restored from a backup (0.8, migration 0010)
   CHECK ((kind = 'shared' AND slug = '_shared')
       OR (kind = 'project' AND slug ~ '^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$'))
 );
@@ -614,6 +615,38 @@ CREATE INDEX resource_samples_at_idx ON resource_samples (at);
 ```
 The `resource-sample` job writes one row every 5 minutes (cleanup-and-jobs.md §4) and `purge-ephemeral` deletes
 rows older than 14 days. Rows are not append-only and have no project.
+```sql
+CREATE TABLE instance_settings (        -- instance-wide settings edited in the web UI (ADR-0040, migration 0010)
+  key        text PRIMARY KEY,          -- 'backup': BackupSettings of packages/shared/src/api/backups.ts
+  value      jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE export_tasks (             -- async Markdown zips (ADR-0041, migration 0010)
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id        uuid REFERENCES projects(id) ON DELETE SET NULL,  -- live source; NULL for a backup source or once deleted
+  backup_id         text,               -- backup source: the bundle id
+  source_project_id uuid,               -- backup source: the project's id inside the bundle
+  format            text NOT NULL CHECK (format IN ('markdown')),
+  requested_by      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status            text NOT NULL DEFAULT 'queued'
+                    CHECK (status IN ('queued','running','ready','failed','expired')),
+  file_name         text,               -- spoor-<slug>-markdown-<YYYYMMDD>.zip, set when the task is created
+  size_bytes        bigint,
+  sha256            text,
+  error             text,               -- safe one-line message
+  heartbeat_at      timestamptz,        -- the runner's; a running row older than 5 min is failed by the exports job
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  finished_at       timestamptz,
+  expires_at        timestamptz         -- ready + 24 h; then the file is deleted and the row is 'expired'
+);                                      -- the exports job drops failed and expired rows after 30 days
+CREATE INDEX export_tasks_status_idx ON export_tasks (status, created_at);
+CREATE INDEX export_tasks_requested_by_idx ON export_tasks (requested_by, created_at DESC);
+CREATE INDEX export_tasks_project_idx ON export_tasks (project_id, created_at DESC);
+```
+Backups themselves have no table: the backup directory is the catalog (ADR-0038). A full restore keeps the live
+`instance_settings` `backup` value (ADR-0039).
 Project deletion (instance admin, UI only) sets `spoor.allow_purge` and cascades everything.
 `audit_log` rows of the project are kept (no FK) and are purged only by that same transaction.
 
@@ -787,10 +820,16 @@ library/<slug>.md
 revisions/<item-uuid>.jsonl     -- one JSON object per revision, ascending
 audit.jsonl                     -- project audit_log rows, ascending id
 ```
-Entry-name allowlist (import): `^manifest\.json$`, `^audit\.jsonl$`,
+Entry-name allowlist (import): `^manifest\.json$`, `^README\.md$`, `^audit\.jsonl$`,
 `^(memories|docs|library)/[a-z0-9-]{1,80}\.md$`, `^decisions/\d{4,5}-[a-z0-9-]{1,80}\.md$`,
 `^revisions/[0-9a-f-]{36}\.jsonl$`. Markdown files = canonical frontmatter (§5, plus `spoor_id`) +
-body of the current revision; they are for humans and for manifest-less imports.
+body of the current revision; they are for humans and for manifest-less imports. A root `README.md` (the index of
+a Markdown zip, ADR-0041) is accepted and skipped by both the lossless and the manifest-less import.
+
+The **Markdown zip** (0.8, async export task, api.md §13.4) is the manifest-less form of the same archive:
+`README.md` (index: project, source, date, counts, tables per space and memory type with handle, title, status and
+a relative link; inactive items, i.e. archived, superseded or deprecated, in a table of their own) and the item files
+above, byte-equal to an export's. No manifest, revisions or audit, so it re-imports as a folder of Markdown files.
 
 `manifest.json` (zod-validated, ≤20 MB):
 ```json

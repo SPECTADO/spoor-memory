@@ -173,6 +173,8 @@ export const JOB_NAMES = [
   'reembed',
   'purge-ephemeral',
   'resource-sample',
+  'backup',
+  'exports',
 ] as const
 export type JobName = (typeof JOB_NAMES)[number]
 

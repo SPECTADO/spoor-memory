@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { ADMIN, BASE_URL, E2E_DATABASE_URL, PORT, TEST_DATABASE_URL } from './e2e/support/env'
@@ -44,6 +45,9 @@ export default defineConfig({
       SPOOR_VOYAGE_API_KEY: '',
       SPOOR_OLLAMA_URL: '',
       SPOOR_TRUST_PROXY: '',
+      // a backup directory of this run (server.mjs empties it); pg tools only where installed (CI)
+      SPOOR_BACKUP_DIR: resolve(tmpdir(), `spoor-web-e2e-${PORT}`),
+      SPOOR_PG_BIN_DIR: process.env.SPOOR_PG_BIN_DIR ?? '',
     },
   },
 })
